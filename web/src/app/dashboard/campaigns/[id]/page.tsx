@@ -1,0 +1,61 @@
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { CampaignDetails } from './campaign-details'
+
+export default async function CampaignPage({ params }: { params: { id: string } }) {
+  const supabase = await createClient()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    redirect('/auth/login')
+  }
+
+  // Get campaign
+  const { data: campaign } = await supabase
+    .from('campaigns')
+    .select('*, templates(name, body), campaign_jobs(status, created_at)')
+    .eq('id', params.id)
+    .single()
+
+  if (!campaign) {
+    redirect('/dashboard/campaigns')
+  }
+
+  // Get messages stats
+  const { data: messages } = await supabase
+    .from('messages')
+    .select('status')
+    .eq('campaign_id', params.id)
+
+  const stats = {
+    total: messages?.length || 0,
+    queued: messages?.filter((m) => m.status === 'queued').length || 0,
+    sending: messages?.filter((m) => m.status === 'sending').length || 0,
+    sent: messages?.filter((m) => m.status === 'sent').length || 0,
+    failed: messages?.filter((m) => m.status === 'failed').length || 0,
+    skipped_optout: messages?.filter((m) => m.status === 'skipped_optout').length || 0,
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <nav className="border-b border-border bg-card">
+        <div className="container mx-auto px-4 py-4">
+          <a href="/dashboard" className="text-xl font-bold text-primary">
+            SMS Gateway
+          </a>
+        </div>
+      </nav>
+
+      <main className="container mx-auto px-4 py-8">
+        <CampaignDetails campaign={campaign} stats={stats} />
+      </main>
+    </div>
+  )
+}
+
+
+
+

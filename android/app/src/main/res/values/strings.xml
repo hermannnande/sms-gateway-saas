@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">SMS Gateway</string>
+    <string name="notification_channel_name">SMS Gateway Service</string>
+    <string name="notification_channel_description">Service d\'envoi de SMS en arrière-plan</string>
+    <string name="notification_title">Gateway actif</string>
+    <string name="notification_text">Prêt à envoyer des SMS</string>
+</resources>
+
+
+
+

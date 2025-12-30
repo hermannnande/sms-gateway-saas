@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+*.log
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Environment
+.env
+.env*.local
+.env.production
+
+# Supabase
+.supabase/
+supabase/.branches/
+supabase/.temp/
+
+# Android
+*.iml
+.gradle
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+
+# Misc
+.vscode/
+*.swp
+*.swo
+*~
+.thumbs.db
+
+
+
+
