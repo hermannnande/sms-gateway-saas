@@ -190,9 +190,11 @@ export function DevicesList({ devices }: { devices: Device[] }) {
 
       {/* Liste des appareils */}
       {devices.map((device) => {
-        const isOnline = device.status === 'online' && 
-          device.last_seen_at && 
-          (Date.now() - new Date(device.last_seen_at).getTime()) < 5 * 60 * 1000 // 5 min
+        // Plus robuste: on considère "en ligne" si on a vu l’appareil récemment,
+        // même si le champ status n’a pas encore été mis à jour.
+        const isOnline =
+          !!device.last_seen_at &&
+          Date.now() - new Date(device.last_seen_at).getTime() < 5 * 60 * 1000 // 5 min
         
         const isConfirmingDelete = confirmDeleteId === device.id
         const isDeviceDeleting = deletingIds.has(device.id)

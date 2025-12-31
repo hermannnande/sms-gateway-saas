@@ -105,6 +105,10 @@ class AppNotifier extends Notifier<AppState> {
   @override
   AppState build() => AppState.initial();
 
+  void setLastStatus(String? message) {
+    state = state.copyWith(lastStatus: message);
+  }
+
   Future<void> init() async {
     final token = await ref.read(tokenStorageProvider).load();
     // Vérifier s'il existe déjà une session supabase (auth)
@@ -1518,11 +1522,22 @@ class _HomePageState extends ConsumerState<HomePage>
     
     if (deviceToken != null && deviceToken.isNotEmpty) {
       try {
-        await ref.read(deviceServiceProvider).sendHeartbeat(
-          deviceToken: deviceToken,
-        );
+        final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
+              deviceToken: deviceToken,
+            );
+        ref.read(appProvider.notifier).setLastStatus(
+              'Heartbeat OK • ${payload['device_name'] ?? ''}',
+            );
       } catch (e) {
-        // Ignore heartbeat errors (non-critical)
+        ref.read(appProvider.notifier).setLastStatus('Heartbeat ÉCHEC: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Heartbeat échoué: $e'),
+              backgroundColor: Colors.red.shade700,
+            ),
+          );
+        }
       }
     }
   }

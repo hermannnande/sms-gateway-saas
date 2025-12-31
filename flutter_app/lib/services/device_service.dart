@@ -60,6 +60,27 @@ class DeviceService {
     }
   }
 
+  Future<Map<String, dynamic>> sendHeartbeatVerbose({required String deviceToken}) async {
+    final response = await client.functions.invoke(
+      'heartbeat',
+      body: {
+        'device_token': deviceToken,
+      },
+    );
+
+    if (response.status >= 400) {
+      throw Exception('heartbeat a échoué (${response.status}): ${response.data}');
+    }
+
+    final data = response.data;
+    final payload = data is String ? jsonDecode(data) : data;
+    if (payload is! Map<String, dynamic>) {
+      throw Exception('heartbeat: réponse inattendue');
+    }
+
+    return payload;
+  }
+
   /// Send heartbeat to keep device status "online"
   Future<void> sendHeartbeat({required String deviceToken}) async {
     try {
