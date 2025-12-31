@@ -148,12 +148,15 @@ class AppNotifier extends Notifier<AppState> {
     state = state.copyWith(authenticated: true);
   }
 
-  Future<void> setSessionFromQr({
-    required String accessToken,
-    required String refreshToken,
+  Future<void> recoverSessionFromQrJson({
+    required String sessionJson,
   }) async {
     final supabase = ref.read(supabaseClientProvider);
-    await supabase.auth.recoverSession('$accessToken:$refreshToken');
+    final res = await supabase.auth.recoverSession(sessionJson);
+    if (res.session == null) {
+      throw Exception('Session invalide (QR expiré ou incomplet). Régénérez le QR sur le web.')
+;
+    }
     state = state.copyWith(authenticated: true);
   }
 
@@ -710,14 +713,28 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
 
     try {
       final decoded = jsonDecode(result);
-      final access = decoded['access_token'] as String?;
-      final refresh = decoded['refresh_token'] as String?;
-      if (access == null || refresh == null) {
-        throw Exception('QR invalide (tokens manquants)');
+      if (decoded is! Map) {
+        throw Exception('Format inattendu');
       }
-      await ref.read(appProvider.notifier).setSessionFromQr(
-            accessToken: access,
-            refreshToken: refresh,
+
+      // Nouveau format (web): { type: "session", session: { ...session Supabase... } }
+      // Ancien format (legacy): { access_token, refresh_token, ... }  (NE SUFFIT PAS)
+      final dynamic sessionObj = decoded['session'] ?? decoded;
+      if (sessionObj is! Map) {
+        throw Exception('Session manquante');
+      }
+
+      // Validation minimale requise par gotrue Session.fromJson
+      final hasAccess = sessionObj['access_token'] != null;
+      final hasTokenType = sessionObj['token_type'] != null;
+      final hasUser = sessionObj['user'] != null;
+      if (!hasAccess || !hasTokenType || !hasUser) {
+        throw Exception('QR incomplet. Régénérez le QR depuis le Profil (web).');
+      }
+
+      final sessionJson = jsonEncode(sessionObj);
+      await ref.read(appProvider.notifier).recoverSessionFromQrJson(
+            sessionJson: sessionJson,
           );
     } catch (e) {
       setState(() => _error = 'QR session invalide: $e');
