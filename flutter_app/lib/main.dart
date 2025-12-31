@@ -1487,6 +1487,7 @@ class _HomePageState extends ConsumerState<HomePage>
     with SingleTickerProviderStateMixin {
   late AnimationController _fabAnimController;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+  Timer? _heartbeatTimer;
 
   @override
   void initState() {
@@ -1496,10 +1497,39 @@ class _HomePageState extends ConsumerState<HomePage>
       duration: const Duration(milliseconds: 300),
     );
     _fabAnimController.forward();
+    
+    // Start heartbeat timer to keep device "online"
+    _startHeartbeat();
+  }
+
+  void _startHeartbeat() {
+    // Send heartbeat immediately
+    _sendHeartbeat();
+    
+    // Then send every 2 minutes
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (timer) {
+      _sendHeartbeat();
+    });
+  }
+
+  Future<void> _sendHeartbeat() async {
+    final appState = ref.read(appProvider);
+    final deviceToken = appState.deviceToken;
+    
+    if (deviceToken != null && deviceToken.isNotEmpty) {
+      try {
+        await ref.read(deviceServiceProvider).sendHeartbeat(
+          deviceToken: deviceToken,
+        );
+      } catch (e) {
+        // Ignore heartbeat errors (non-critical)
+      }
+    }
   }
 
   @override
   void dispose() {
+    _heartbeatTimer?.cancel();
     _fabAnimController.dispose();
     super.dispose();
   }

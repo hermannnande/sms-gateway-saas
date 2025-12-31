@@ -59,5 +59,26 @@ class DeviceService {
       throw Exception('update_message_status a échoué (${response.status})');
     }
   }
+
+  /// Send heartbeat to keep device status "online"
+  Future<void> sendHeartbeat({required String deviceToken}) async {
+    try {
+      final response = await client.functions.invoke(
+        'heartbeat',
+        body: {
+          'device_token': deviceToken,
+        },
+      );
+
+      if (response.status >= 400) {
+        _logger.w('heartbeat failed: ${response.status} / ${response.data}');
+      } else {
+        _logger.d('Heartbeat sent successfully');
+      }
+    } catch (e) {
+      _logger.w('Heartbeat error (ignored): $e');
+      // Ignore heartbeat errors (non-critical)
+    }
+  }
 }
 

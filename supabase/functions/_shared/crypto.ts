@@ -18,4 +18,8 @@ export function randomHex(bytesLen = 32): string {
   return toHex(bytes)
 }
 
+// Alias for sha256Hex (used in Edge Functions)
+export async function hashToken(token: string): Promise<string> {
+  return sha256Hex(token)
+}
 
