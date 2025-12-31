@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Trash2, AlertCircle } from 'lucide-react'
+import { Trash2, AlertCircle, CheckSquare, Square } from 'lucide-react'
 
 type Device = {
   id: string
@@ -14,16 +14,41 @@ type Device = {
 }
 
 export function DevicesList({ devices }: { devices: Device[] }) {
-  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [confirmDeleteMultiple, setConfirmDeleteMultiple] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
 
-  const handleDelete = async (deviceId: string, deviceName: string) => {
+  // Toggle selection d'un device
+  const toggleSelection = (deviceId: string) => {
+    const newSelected = new Set(selectedIds)
+    if (newSelected.has(deviceId)) {
+      newSelected.delete(deviceId)
+    } else {
+      newSelected.add(deviceId)
+    }
+    setSelectedIds(newSelected)
+  }
+
+  // Sélectionner tous
+  const selectAll = () => {
+    if (selectedIds.size === devices.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(devices.map((d) => d.id)))
+    }
+  }
+
+  // Supprimer un seul device
+  const handleDeleteSingle = async (deviceId: string) => {
     if (confirmDeleteId !== deviceId) {
       setConfirmDeleteId(deviceId)
       return
     }
 
-    setDeletingId(deviceId)
+    setDeletingIds(new Set([deviceId]))
+    setIsDeleting(true)
     try {
       const supabase = createClient()
       const { error } = await supabase.from('devices').delete().eq('id', deviceId)
@@ -32,15 +57,45 @@ export function DevicesList({ devices }: { devices: Device[] }) {
         console.error('Error deleting device:', error)
         alert('Erreur lors de la suppression: ' + error.message)
       } else {
-        // Refresh page to show updated list
         window.location.reload()
       }
     } catch (err) {
       console.error('Error:', err)
       alert('Erreur lors de la suppression')
     } finally {
-      setDeletingId(null)
+      setDeletingIds(new Set())
       setConfirmDeleteId(null)
+      setIsDeleting(false)
+    }
+  }
+
+  // Supprimer plusieurs devices
+  const handleDeleteMultiple = async () => {
+    if (!confirmDeleteMultiple) {
+      setConfirmDeleteMultiple(true)
+      return
+    }
+
+    setDeletingIds(new Set(selectedIds))
+    setIsDeleting(true)
+    try {
+      const supabase = createClient()
+      const { error } = await supabase.from('devices').delete().in('id', Array.from(selectedIds))
+
+      if (error) {
+        console.error('Error deleting devices:', error)
+        alert('Erreur lors de la suppression: ' + error.message)
+      } else {
+        window.location.reload()
+      }
+    } catch (err) {
+      console.error('Error:', err)
+      alert('Erreur lors de la suppression')
+    } finally {
+      setDeletingIds(new Set())
+      setConfirmDeleteMultiple(false)
+      setSelectedIds(new Set())
+      setIsDeleting(false)
     }
   }
   if (devices.length === 0) {
@@ -53,22 +108,95 @@ export function DevicesList({ devices }: { devices: Device[] }) {
         </p>
         <div className="inline-block px-6 py-3 bg-primary/10 border-2 border-primary/30 rounded-xl">
           <p className="text-sm font-semibold text-primary">
-            💡 Cliquez sur "Ajouter un appareil" pour scanner le QR code
+            💡 Cliquez sur &quot;Ajouter un appareil&quot; pour scanner le QR code
           </p>
         </div>
       </div>
     )
   }
 
+  const allSelected = selectedIds.size === devices.length && devices.length > 0
+
   return (
     <div className="space-y-4">
+      {/* Barre d'actions en haut */}
+      {devices.length > 0 && (
+        <div className="flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-xl">
+          <div className="flex items-center gap-4">
+            {/* Sélectionner tout */}
+            <button
+              onClick={selectAll}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-white border border-gray-300 rounded-lg transition-all"
+            >
+              {allSelected ? (
+                <>
+                  <CheckSquare className="w-4 h-4 text-primary" />
+                  Tout désélectionner
+                </>
+              ) : (
+                <>
+                  <Square className="w-4 h-4" />
+                  Tout sélectionner
+                </>
+              )}
+            </button>
+
+            {/* Compteur de sélection */}
+            {selectedIds.size > 0 && (
+              <span className="text-sm font-semibold text-gray-600">
+                {selectedIds.size} appareil{selectedIds.size > 1 ? 's' : ''} sélectionné
+                {selectedIds.size > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+
+          {/* Bouton supprimer sélectionnés */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-2">
+              {confirmDeleteMultiple ? (
+                <>
+                  <div className="flex items-center gap-2 text-sm text-red-600 font-semibold">
+                    <AlertCircle className="w-4 h-4" />
+                    Supprimer {selectedIds.size} appareil{selectedIds.size > 1 ? 's' : ''} ?
+                  </div>
+                  <button
+                    onClick={handleDeleteMultiple}
+                    disabled={isDeleting}
+                    className="px-4 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeleting ? 'Suppression...' : 'Oui, supprimer'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteMultiple(false)}
+                    disabled={isDeleting}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-300 disabled:opacity-50 transition-all"
+                  >
+                    Annuler
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleDeleteMultiple}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-all"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Supprimer la sélection
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Liste des appareils */}
       {devices.map((device) => {
         const isOnline = device.status === 'online' && 
           device.last_seen_at && 
           (Date.now() - new Date(device.last_seen_at).getTime()) < 5 * 60 * 1000 // 5 min
         
         const isConfirmingDelete = confirmDeleteId === device.id
-        const isDeleting = deletingId === device.id
+        const isDeviceDeleting = deletingIds.has(device.id)
+        const isSelected = selectedIds.has(device.id)
 
         return (
           <div
@@ -77,11 +205,25 @@ export function DevicesList({ devices }: { devices: Device[] }) {
               isOnline 
                 ? 'border-green-500/30 bg-green-500/5' 
                 : 'border-gray-200 hover:border-gray-300'
-            } ${isConfirmingDelete ? 'ring-2 ring-red-500 border-red-300' : ''}`}
+            } ${isConfirmingDelete ? 'ring-2 ring-red-500 border-red-300' : ''} ${
+              isSelected ? 'ring-2 ring-primary border-primary/50 bg-primary/5' : ''
+            }`}
           >
             <div className="flex items-center justify-between">
-              {/* Left: Icon + Info */}
+              {/* Left: Checkbox + Icon + Info */}
               <div className="flex items-center gap-4 flex-1">
+                {/* Checkbox */}
+                <button
+                  onClick={() => toggleSelection(device.id)}
+                  className="flex-shrink-0 p-2 hover:bg-gray-100 rounded-lg transition-all"
+                  disabled={isDeviceDeleting}
+                >
+                  {isSelected ? (
+                    <CheckSquare className="w-5 h-5 text-primary" />
+                  ) : (
+                    <Square className="w-5 h-5 text-gray-400" />
+                  )}
+                </button>
                 <div className="relative">
                   <span className="text-5xl">📱</span>
                   {isOnline && (
@@ -141,15 +283,15 @@ export function DevicesList({ devices }: { devices: Device[] }) {
                       Confirmer ?
                     </div>
                     <button
-                      onClick={() => handleDelete(device.id, device.name)}
-                      disabled={isDeleting}
+                      onClick={() => handleDeleteSingle(device.id)}
+                      disabled={isDeviceDeleting}
                       className="px-4 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                     >
-                      {isDeleting ? 'Suppression...' : 'Oui, supprimer'}
+                      {isDeviceDeleting ? 'Suppression...' : 'Oui, supprimer'}
                     </button>
                     <button
                       onClick={() => setConfirmDeleteId(null)}
-                      disabled={isDeleting}
+                      disabled={isDeviceDeleting}
                       className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-300 disabled:opacity-50 transition-all"
                     >
                       Annuler
@@ -157,8 +299,9 @@ export function DevicesList({ devices }: { devices: Device[] }) {
                   </div>
                 ) : (
                   <button
-                    onClick={() => handleDelete(device.id, device.name)}
-                    className="p-3 text-red-600 hover:bg-red-50 rounded-lg transition-all group/delete"
+                    onClick={() => handleDeleteSingle(device.id)}
+                    disabled={isDeviceDeleting}
+                    className="p-3 text-red-600 hover:bg-red-50 rounded-lg transition-all group/delete disabled:opacity-50"
                     title="Supprimer cet appareil"
                   >
                     <Trash2 className="w-5 h-5 group-hover/delete:scale-110 transition-transform" />
