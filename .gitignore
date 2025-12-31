@@ -36,6 +36,11 @@ captures/
 *.apk
 *.aab
 
+# Keystore (IMPORTANT: ne jamais commit la clé de signature)
+*.jks
+*.keystore
+key.properties
+
 # Misc
 .vscode/
 *.swp
