@@ -16,12 +16,17 @@ export default async function DevicesPage() {
     redirect('/auth/login')
   }
 
-  // Get user's org_id
-  const { data: orgMembers } = await supabase
+  // Get user's org_id (all orgs, oldest first to be consistent)
+  const { data: orgMembers, error: orgError } = await supabase
     .from('org_members')
     .select('org_id, created_at')
     .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
+    .order('created_at', { ascending: true })
+
+  // Debug: log if there's an error
+  if (orgError) {
+    console.error('Error fetching org_members:', orgError)
+  }
 
   let orgIds = (orgMembers ?? []).map((m) => m.org_id)
 
