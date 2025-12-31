@@ -67,8 +67,7 @@ export function AddDeviceModal({ onClose }: { onClose: () => void }) {
       setQrCodeUrl(qrUrl)
       setDeviceData(data)
       setStep('qr')
-
-      // Rafraîchir la page pour faire apparaître l'appareil dans la liste
+      // Rafraîchir la page pour recharger la liste des appareils (SSR)
       router.refresh()
     } catch (err: any) {
       setError(err.message)
