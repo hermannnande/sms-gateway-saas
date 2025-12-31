@@ -17,24 +17,23 @@ export default async function DevicesPage() {
   // Get user's org_id
   const { data: orgMembers } = await supabase
     .from('org_members')
-    .select('org_id')
+    .select('org_id, created_at')
     .eq('user_id', user.id)
-    .limit(1)
+    .order('created_at', { ascending: false })
 
-  const org_id = orgMembers?.[0]?.org_id
+  const orgIds = (orgMembers ?? []).map((m) => m.org_id)
 
   // Get devices
-  const { data: devices } = org_id ? await supabase
-    .from('devices')
-    .select('*')
-    .eq('org_id', org_id)
-    .order('created_at', { ascending: false }) : { data: [] }
+  const { data: devices } =
+    orgIds.length > 0
+      ? await supabase.from('devices').select('*').in('org_id', orgIds).order('created_at', { ascending: false })
+      : { data: [] }
 
   // Get subscription (for max_devices check)
-  const { data: subscription } = org_id ? await supabase
+  const { data: subscription } = orgIds.length > 0 ? await supabase
     .from('subscriptions')
     .select('*, plans(*)')
-    .eq('org_id', org_id)
+    .eq('org_id', orgIds[0])
     .eq('status', 'active')
     .single() : { data: null }
 
