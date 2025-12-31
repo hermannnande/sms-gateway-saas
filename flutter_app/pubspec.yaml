@@ -36,6 +36,9 @@ dependencies:
   shared_preferences: ^2.3.2
   permission_handler: ^11.3.0
   flutter_riverpod: ^2.5.1
+  package_info_plus: ^8.0.3
+  url_launcher: ^6.3.0
+  http: ^1.2.2
 
   # Device features
   mobile_scanner: ^5.1.1

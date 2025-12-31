@@ -10,6 +10,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 import 'package:smsgateway_flutter/services/device_service.dart';
+import 'package:smsgateway_flutter/services/app_update_service.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:supabase/supabase.dart';
@@ -36,6 +37,8 @@ final deviceServiceProvider = Provider<DeviceService>(
 final smsSenderProvider = Provider<SmsSender>(
   (ref) => SmsSender(ref.watch(loggerProvider)),
 );
+
+final appUpdateServiceProvider = Provider<AppUpdateService>((_) => AppUpdateService());
 
 /// Etat applicatif
 class AppState {
@@ -241,6 +244,8 @@ class MyApp extends ConsumerStatefulWidget {
 }
 
 class _MyAppState extends ConsumerState<MyApp> {
+  bool _checkedUpdate = false;
+
   @override
   void initState() {
     super.initState();
@@ -364,6 +369,74 @@ class _MyAppState extends ConsumerState<MyApp> {
                 : const HomePage(key: ValueKey('home')),
       ),
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Check update once (after first build)
+    if (_checkedUpdate) return;
+    _checkedUpdate = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkUpdateIfNeeded());
+  }
+
+  Future<void> _checkUpdateIfNeeded() async {
+    try {
+      final update = await ref.read(appUpdateServiceProvider).checkForUpdate();
+      if (!mounted || update == null) return;
+
+      // Ne pas spammer si un dialogue est déjà ouvert
+      if (!mounted) return;
+      // ignore: use_build_context_synchronously
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) {
+          return AlertDialog(
+            title: Text('Mise à jour disponible (${update.latestVersion})'),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Une nouvelle version de l’app est disponible.',
+                  ),
+                  const SizedBox(height: 12),
+                  if (update.notes != null && update.notes!.isNotEmpty) ...[
+                    const Text('Notes de version :', style: TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Text(update.notes!),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await ref.read(appUpdateServiceProvider).ignoreVersion(update.latestVersion);
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                },
+                child: const Text('Ignorer'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await ref.read(appUpdateServiceProvider).openReleasePage(update.releaseUrl);
+                },
+                child: const Text('Détails'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  await ref.read(appUpdateServiceProvider).openApkDownload(update.apkUrl);
+                },
+                child: const Text('Télécharger'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (e, st) {
+      ref.read(loggerProvider).w('Update check failed', error: e, stackTrace: st);
+    }
   }
 }
 
