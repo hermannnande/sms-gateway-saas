@@ -11,6 +11,14 @@ Deno.serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  // Simple GET for connectivity testing (open in browser)
+  if (req.method === 'GET') {
+    return new Response(
+      JSON.stringify({ ok: true, service: 'heartbeat', ts: new Date().toISOString() }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 },
+    )
+  }
+
   try {
     const { device_token } = await req.json()
 
