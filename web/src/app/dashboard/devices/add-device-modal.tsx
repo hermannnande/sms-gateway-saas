@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import QRCode from 'qrcode'
 
 export function AddDeviceModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter()
   const [step, setStep] = useState<'name' | 'qr'>('name')
   const [deviceName, setDeviceName] = useState('')
   const [loading, setLoading] = useState(false)
@@ -65,6 +67,9 @@ export function AddDeviceModal({ onClose }: { onClose: () => void }) {
       setQrCodeUrl(qrUrl)
       setDeviceData(data)
       setStep('qr')
+
+      // Rafraîchir la page pour faire apparaître l'appareil dans la liste
+      router.refresh()
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -147,7 +152,10 @@ export function AddDeviceModal({ onClose }: { onClose: () => void }) {
             </div>
 
             <button
-              onClick={() => window.location.reload()}
+              onClick={() => {
+                router.refresh()
+                onClose()
+              }}
               className="w-full bg-primary text-primary-foreground py-2 rounded-lg hover:opacity-90"
             >
               Terminé
