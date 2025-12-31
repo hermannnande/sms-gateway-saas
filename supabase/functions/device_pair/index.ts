@@ -36,14 +36,14 @@ Deno.serve(async (req) => {
       throw new Error('Non authentifié')
     }
 
-    // Get user's org_id
-    const { data: orgMember, error: orgError } = await supabaseClient
+    // Get user's org_id (take the first membership to avoid `.single()` errors when multiple rows exist)
+    const { data: orgMembers, error: orgError } = await supabaseClient
       .from('org_members')
       .select('org_id')
       .eq('user_id', user.id)
-      .single()
+      .limit(1)
 
-    let org_id: string | null = orgMember?.org_id ?? null
+    let org_id: string | null = orgMembers?.[0]?.org_id ?? null
 
     // Auto-heal: si l'utilisateur n'a pas d'org, créer une org par défaut + membership
     if (!org_id) {
