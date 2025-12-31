@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { DevicesList } from './devices-list'
 import { AddDeviceButton } from './add-device-button'
 
+export const dynamic = 'force-dynamic'
+
 export default async function DevicesPage() {
   const supabase = await createClient()
 
@@ -21,7 +23,15 @@ export default async function DevicesPage() {
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
 
-  const orgIds = (orgMembers ?? []).map((m) => m.org_id)
+  let orgIds = (orgMembers ?? []).map((m) => m.org_id)
+
+  // Auto-heal: if user has no org, create one so devices can be attached & visible
+  if (orgIds.length === 0) {
+    const orgId = crypto.randomUUID()
+    await supabase.from('organizations').insert({ id: orgId, name: 'Mon organisation' })
+    await supabase.from('org_members').insert({ org_id: orgId, user_id: user.id, role: 'ORG_ADMIN' })
+    orgIds = [orgId]
+  }
 
   // Get devices
   const { data: devices } =
