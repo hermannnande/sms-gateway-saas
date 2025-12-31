@@ -157,14 +157,15 @@ export function ProfileForm({
         throw new Error('Session introuvable. Reconnectez-vous.')
       }
 
-      // IMPORTANT: l'app Flutter (package `supabase` / gotrue) attend un JSON de Session complet
-      // avec au minimum: access_token, refresh_token, token_type, expires_in, user.
-      // On envoie donc la session complète.
+      // IMPORTANT: QR "compact" (plus fiable à scanner sur mobile).
+      // L'app Flutter se connecte en appelant `refreshSession(refresh_token)`.
       const payload = JSON.stringify({
         type: 'session',
-        session,
+        session: {
+          refresh_token: session.refresh_token,
+        },
         issued_at: new Date().toISOString(),
-        v: 1,
+        v: 2,
       })
 
       const url = await QRCode.toDataURL(payload, {

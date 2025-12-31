@@ -160,6 +160,17 @@ class AppNotifier extends Notifier<AppState> {
     state = state.copyWith(authenticated: true);
   }
 
+  Future<void> signInWithRefreshToken({
+    required String refreshToken,
+  }) async {
+    final supabase = ref.read(supabaseClientProvider);
+    final res = await supabase.auth.refreshSession(refreshToken);
+    if (res.session == null) {
+      throw Exception('Session invalide. Régénérez le QR sur le web et réessayez.');
+    }
+    state = state.copyWith(authenticated: true);
+  }
+
   Future<void> syncOnce() async {
     final token = state.deviceToken;
     if (token == null || token.isEmpty) {
@@ -722,6 +733,16 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
       final dynamic sessionObj = decoded['session'] ?? decoded;
       if (sessionObj is! Map) {
         throw Exception('Session manquante');
+      }
+
+      // Si on a un refresh_token, on préfère un login "compact" via refreshSession()
+      // (QR beaucoup plus petit, plus fiable à scanner).
+      final dynamic refreshToken = sessionObj['refresh_token'];
+      if (refreshToken is String && refreshToken.isNotEmpty) {
+        await ref.read(appProvider.notifier).signInWithRefreshToken(
+              refreshToken: refreshToken,
+            );
+        return;
       }
 
       // Validation minimale requise par gotrue Session.fromJson
