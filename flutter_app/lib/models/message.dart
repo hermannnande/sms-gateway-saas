@@ -22,7 +22,8 @@ class Message {
               json['to'] ??
               '')
           .toString(),
-      content: (json['content'] ?? json['body'] ?? json['message'] ?? '')
+      // Supabase renvoie généralement `body_final` depuis claim_messages_atomic
+      content: (json['body_final'] ?? json['content'] ?? json['body'] ?? json['message'] ?? '')
           .toString(),
       tryCount: (json['try_count'] ?? 0) is int
           ? json['try_count'] as int

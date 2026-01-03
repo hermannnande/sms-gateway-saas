@@ -219,7 +219,9 @@ export function NewCampaignForm({
           org_id: orgMember.org_id,
           name,
           template_id: templateId || null,
-          status: 'queued',
+          // IMPORTANT: claim_messages_atomic ne claim que les campagnes en 'running'
+          // Donc on démarre immédiatement la campagne (le pause/resume reste possible).
+          status: 'running',
           created_by: userData.user.id,
           total_count: contactsToProcess.length,
           sent_count: 0,
