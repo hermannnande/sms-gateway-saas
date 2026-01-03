@@ -165,6 +165,16 @@ class AppNotifier extends Notifier<AppState> {
     );
   }
 
+  Future<void> signOutAccount() async {
+    final supabase = ref.read(supabaseClientProvider);
+    await supabase.auth.signOut();
+    // IMPORTANT: on garde le deviceToken pour éviter de devoir re-scanner l’appareil.
+    state = state.copyWith(
+      authenticated: false,
+      lastStatus: 'Compte déconnecté (appareil conservé)',
+    );
+  }
+
   Future<void> signInWithEmail({
     required String email,
     required String password,
@@ -210,7 +220,7 @@ class AppNotifier extends Notifier<AppState> {
       return;
     }
 
-    state = state.copyWith(syncing: true);
+    state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
 
     try {
       final permissionsOk = await ref.read(smsSenderProvider).ensurePermissions();
@@ -1579,7 +1589,7 @@ class _HomePageState extends ConsumerState<HomePage>
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Déconnecter l\'appareil ?'),
+        title: const Text('Désappairer l\'appareil ?'),
         content: const Text(
           'Voulez-vous vraiment effacer le token de cet appareil ?',
         ),
@@ -1598,6 +1608,33 @@ class _HomePageState extends ConsumerState<HomePage>
               backgroundColor: Colors.red.shade600,
             ),
             child: const Text('Déconnecter'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAccountLogoutDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Se déconnecter du compte ?'),
+        content: const Text(
+          'Vous serez déconnecté du compte, mais l’appareil restera pairé (pas besoin de rescanner).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              HapticFeedback.mediumImpact();
+              await ref.read(appProvider.notifier).signOutAccount();
+            },
+            child: const Text('Se déconnecter'),
           ),
         ],
       ),
@@ -1654,8 +1691,8 @@ class _HomePageState extends ConsumerState<HomePage>
         actions: [
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: Colors.white),
-            onPressed: _showLogoutDialog,
-            tooltip: 'Déconnecter',
+            onPressed: _showAccountLogoutDialog,
+            tooltip: 'Se déconnecter (compte)',
           ),
         ],
       ),

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:logger/logger.dart';
 import 'package:smsgateway_flutter/models/message.dart';
@@ -15,14 +16,29 @@ class DeviceService {
     int limit = 10,
     int? simSubscriptionId,
   }) async {
-    final response = await client.functions.invoke(
-      'claim_messages',
-      body: {
-        'device_token': deviceToken,
-        'limit': limit,
-        'sim_subscription_id': simSubscriptionId,
-      },
-    );
+    Future<FunctionResponse> call() {
+      return client.functions.invoke(
+        'claim_messages',
+        body: {
+          'device_token': deviceToken,
+          'limit': limit,
+          'sim_subscription_id': simSubscriptionId,
+        },
+      );
+    }
+
+    FunctionResponse response;
+    try {
+      response = await call();
+    } on FunctionException catch (e) {
+      // Mitigation: BOOT_ERROR peut arriver pendant un cold start / propagation.
+      if (e.status == 503 && (e.details?['code'] == 'BOOT_ERROR')) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        response = await call();
+      } else {
+        rethrow;
+      }
+    }
 
     if (response.status >= 400) {
       throw Exception('claim_messages a échoué (${response.status})');
