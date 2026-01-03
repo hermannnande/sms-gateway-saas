@@ -3,6 +3,9 @@ class AppConfig {
   /// URL Supabase (projet `gamumybcoxxanhjakpde`).
   static const supabaseUrl = 'https://gamumybcoxxanhjakpde.supabase.co';
 
+  /// URL API Web (Vercel) - utilisée comme proxy pour éviter les soucis DNS Supabase côté clients.
+  static const webApiBaseUrl = 'https://sms-gateway-saas.vercel.app';
+
   /// Clef publique (anon) Supabase. **Ne pas mettre la service_role ici.**
   static const supabaseAnonKey =
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbXVteWJjb3h4YW5oamFrcGRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcxMDA1MzAsImV4cCI6MjA4MjY3NjUzMH0.0SLKPBAO5AaYguxnqUjb2nDVIGvZiK8N-3FQCREKk6w';
