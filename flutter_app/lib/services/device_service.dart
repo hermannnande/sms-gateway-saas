@@ -11,6 +11,16 @@ class DeviceService {
   final SupabaseClient client;
   final Logger _logger;
 
+  Exception _humanizeNetworkError(Object e) {
+    final s = e.toString();
+    if (s.contains('Failed host lookup') || s.contains('No address associated with hostname')) {
+      return Exception(
+        'Problème réseau/DNS: impossible de résoudre Supabase. Désactive VPN/DNS privé et change de réseau (Wi‑Fi/4G).',
+      );
+    }
+    return Exception(s);
+  }
+
   Future<List<Message>> claimMessages({
     required String deviceToken,
     int limit = 10,
@@ -36,8 +46,10 @@ class DeviceService {
         await Future<void>.delayed(const Duration(seconds: 2));
         response = await call();
       } else {
-        rethrow;
+        throw _humanizeNetworkError(e);
       }
+    } catch (e) {
+      throw _humanizeNetworkError(e);
     }
 
     if (response.status >= 400) {
@@ -60,15 +72,20 @@ class DeviceService {
     required bool success,
     String? error,
   }) async {
-    final response = await client.functions.invoke(
-      'update_message_status',
-      body: {
-        'device_token': deviceToken,
-        'message_id': message.id,
-        'status': success ? 'sent' : 'failed',
-        'error': error,
-      },
-    );
+    FunctionResponse response;
+    try {
+      response = await client.functions.invoke(
+        'update_message_status',
+        body: {
+          'device_token': deviceToken,
+          'message_id': message.id,
+          'status': success ? 'sent' : 'failed',
+          'error': error,
+        },
+      );
+    } catch (e) {
+      throw _humanizeNetworkError(e);
+    }
 
     if (response.status >= 400) {
       _logger.w('update_message_status failed: ${response.status} / ${response.data}');
@@ -77,12 +94,17 @@ class DeviceService {
   }
 
   Future<Map<String, dynamic>> sendHeartbeatVerbose({required String deviceToken}) async {
-    final response = await client.functions.invoke(
-      'heartbeat',
-      body: {
-        'device_token': deviceToken,
-      },
-    );
+    FunctionResponse response;
+    try {
+      response = await client.functions.invoke(
+        'heartbeat',
+        body: {
+          'device_token': deviceToken,
+        },
+      );
+    } catch (e) {
+      throw _humanizeNetworkError(e);
+    }
 
     if (response.status >= 400) {
       throw Exception('heartbeat a échoué (${response.status}): ${response.data}');

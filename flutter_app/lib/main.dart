@@ -237,7 +237,7 @@ class AppNotifier extends Notifier<AppState> {
     state = state.copyWith(authenticated: true);
   }
 
-  Future<void> syncOnce() async {
+  Future<void> syncOnce({bool silentIfEmpty = false}) async {
     final token = state.deviceToken;
     if (token == null || token.isEmpty) {
       state = state.copyWith(lastStatus: 'Aucun token enregistré');
@@ -259,10 +259,12 @@ class AppNotifier extends Notifier<AppState> {
           );
 
       if (messages.isEmpty) {
-        state = state.copyWith(
-          lastStatus: 'Aucun message à envoyer',
-          lastMessages: const [],
-        );
+        if (!silentIfEmpty) {
+          state = state.copyWith(
+            lastStatus: 'Aucun message à envoyer',
+            lastMessages: const [],
+          );
+        }
         return;
       }
 
@@ -1586,6 +1588,8 @@ class _HomePageState extends ConsumerState<HomePage>
   late AnimationController _fabAnimController;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   Timer? _heartbeatTimer;
+  Timer? _autoSyncTimer;
+  DateTime? _lastHeartbeatSnackAt;
 
   @override
   void initState() {
@@ -1598,6 +1602,66 @@ class _HomePageState extends ConsumerState<HomePage>
     
     // Start heartbeat timer to keep device "online"
     _startHeartbeat();
+
+    // Demander les permissions dès l’arrivée sur le dashboard (sans refresh).
+    scheduleMicrotask(_requestSmsPermissionsOnStart);
+
+    // Auto-sync: permet de réagir quand une campagne démarre côté web.
+    _startAutoSync();
+  }
+
+  Future<void> _requestSmsPermissionsOnStart() async {
+    final ok = await ref.read(smsSenderProvider).ensurePermissions();
+    if (!ok) {
+      ref.read(appProvider.notifier).setLastStatus(
+            'Permissions SMS/Téléphone refusées. Active-les pour envoyer les SMS.',
+          );
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Permissions requises'),
+          content: const Text(
+            'Pour envoyer des SMS, l’app a besoin des permissions SMS et Téléphone. '
+            'Accepte-les pour que les campagnes puissent démarrer.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Plus tard'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await ref.read(smsSenderProvider).ensurePermissions();
+              },
+              child: const Text('Autoriser'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  void _startAutoSync() {
+    // Premier check après 5s
+    Future<void>.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      final appState = ref.read(appProvider);
+      if (appState.authenticated && (appState.deviceToken?.isNotEmpty ?? false)) {
+        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      }
+    });
+
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      final appState = ref.read(appProvider);
+      if (!appState.authenticated) return;
+      if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
+      if (appState.syncing) return;
+      ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+    });
   }
 
   void _startHeartbeat() {
@@ -1624,7 +1688,11 @@ class _HomePageState extends ConsumerState<HomePage>
             );
       } catch (e) {
         ref.read(appProvider.notifier).setLastStatus('Heartbeat ÉCHEC: $e');
-        if (mounted) {
+        final now = DateTime.now();
+        final shouldShow = _lastHeartbeatSnackAt == null ||
+            now.difference(_lastHeartbeatSnackAt!) > const Duration(minutes: 2);
+        if (mounted && shouldShow) {
+          _lastHeartbeatSnackAt = now;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Heartbeat échoué: $e'),
@@ -1639,6 +1707,7 @@ class _HomePageState extends ConsumerState<HomePage>
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
+    _autoSyncTimer?.cancel();
     _fabAnimController.dispose();
     super.dispose();
   }
