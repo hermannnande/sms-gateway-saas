@@ -116,9 +116,19 @@ class AppNotifier extends Notifier<AppState> {
     if (token != null && token.startsWith('{') && token.endsWith('}')) {
       try {
         final data = jsonDecode(token);
-        if (data is Map && data.containsKey('device_token')) {
-          token = data['device_token'].toString();
-          await ref.read(tokenStorageProvider).save(token);
+        if (data is Map) {
+          // Cas OK: QR appareil -> extraire device_token
+          if (data.containsKey('device_token')) {
+            token = data['device_token'].toString();
+            await ref.read(tokenStorageProvider).save(token);
+          } else if (data['type'] == 'session' || data.containsKey('refresh_token')) {
+            // Cas erreur: QR session scanné dans la page Pairing
+            await ref.read(tokenStorageProvider).clear();
+            token = null;
+            setLastStatus(
+              'Token appareil invalide (QR session détecté). Scanne le QR depuis Web > Appareils.',
+            );
+          }
         }
       } catch (_) {}
     }
@@ -141,11 +151,25 @@ class AppNotifier extends Notifier<AppState> {
     if (normalized.startsWith('{') && normalized.endsWith('}')) {
       try {
         final data = jsonDecode(normalized);
-        if (data is Map && data.containsKey('device_token')) {
-          normalized = data['device_token'].toString();
+        if (data is Map) {
+          if (data.containsKey('device_token')) {
+            normalized = data['device_token'].toString();
+          } else if (data['type'] == 'session' || data.containsKey('refresh_token')) {
+            setLastStatus(
+              'QR de session détecté. Pour l’appareil, scanne le QR depuis Web > Appareils.',
+            );
+            throw Exception(
+              'QR de session détecté (mauvais QR). Va sur Web > Appareils > Ajouter un appareil.',
+            );
+          }
         }
       } catch (e) {
-        // Pas du JSON valide ou format différent, on garde tel quel
+        // Si c'est notre erreur de QR session, on la propage
+        if (e is Exception &&
+            e.toString().contains('QR de session détecté')) {
+          rethrow;
+        }
+        // Sinon: pas du JSON valide ou format différent, on garde tel quel
       }
     }
 
@@ -273,6 +297,28 @@ class AppNotifier extends Notifier<AppState> {
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const ProviderScope(child: MyApp()));
+}
+
+String _formatDeviceTokenForUi(String? token) {
+  if (token == null || token.trim().isEmpty) return 'non défini';
+  String t = token.trim();
+
+  if (t.startsWith('{') && t.endsWith('}')) {
+    try {
+      final data = jsonDecode(t);
+      if (data is Map) {
+        if (data['type'] == 'session' || data.containsKey('refresh_token')) {
+          return 'Token invalide (QR session) - rescanner QR appareil';
+        }
+        if (data.containsKey('device_token')) {
+          t = data['device_token'].toString();
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (t.length <= 14) return t;
+  return '${t.substring(0, 6)}…${t.substring(t.length - 4)}';
 }
 
 class MyApp extends ConsumerStatefulWidget {
@@ -567,9 +613,22 @@ class _PairingPageState extends ConsumerState<PairingPage>
 
     setState(() => _saving = true);
     HapticFeedback.mediumImpact();
-    await ref.read(appProvider.notifier).saveToken(token);
+    try {
+      await ref.read(appProvider.notifier).saveToken(token);
+      HapticFeedback.lightImpact();
+    } catch (e) {
+      HapticFeedback.heavyImpact();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    }
     setState(() => _saving = false);
-    HapticFeedback.lightImpact();
   }
 
   @override
@@ -2226,11 +2285,11 @@ class _AppDrawer extends StatelessWidget {
                 ),
                 child: ListTile(
                   leading: Icon(
-                    Icons.logout_rounded,
+                    Icons.link_off_rounded,
                     color: Colors.red.shade600,
                   ),
                   title: Text(
-                    'Déconnecter',
+                    'Désappairer l’appareil',
                     style: TextStyle(
                       color: Colors.red.shade600,
                       fontWeight: FontWeight.w600,
@@ -2418,7 +2477,7 @@ class _StatusCardDashboard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    appState.deviceToken ?? 'non défini',
+                    _formatDeviceTokenForUi(appState.deviceToken),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 12,
