@@ -66,15 +66,62 @@ Deno.serve(async (req) => {
       .eq('id', device_id)
 
     // Check active subscription
-    const { data: subscription, error: subError } = await supabaseClient
+    let subscription: any = null
+    const { data: subRow, error: subError } = await supabaseClient
       .from('subscriptions')
       .select('*, plans(*)')
       .eq('org_id', org_id)
       .eq('status', 'active')
       .single()
 
-    if (subError || !subscription) {
-      throw new Error('Aucun abonnement actif')
+    if (!subError && subRow) {
+      subscription = subRow
+    } else {
+      // Auto-heal: create a TRIAL plan + active subscription if missing
+      // This avoids blocking first-time users (billing can be configured later).
+      const trialPlanId = 'trial'
+
+      // Ensure plan exists
+      const { data: existingPlan } = await supabaseClient
+        .from('plans')
+        .select('id')
+        .eq('id', trialPlanId)
+        .maybeSingle()
+
+      if (!existingPlan) {
+        await supabaseClient.from('plans').insert({
+          id: trialPlanId,
+          name: 'Essai (TRIAL)',
+          price_xof: 0,
+          sms_quota_month: 10000,
+          max_devices: 3,
+          rate_limit_per_min: 120,
+        })
+      }
+
+      const nowIso = new Date().toISOString()
+      const end = new Date()
+      end.setDate(end.getDate() + 14)
+
+      const { data: createdSub, error: createSubErr } = await supabaseClient
+        .from('subscriptions')
+        .insert({
+          org_id,
+          plan_id: trialPlanId,
+          status: 'active',
+          current_period_start: nowIso,
+          current_period_end: end.toISOString(),
+          provider: 'trial',
+        })
+        .select('*, plans(*)')
+        .single()
+
+      if (createSubErr || !createdSub) {
+        throw new Error('Aucun abonnement actif')
+      }
+
+      subscription = createdSub
+      console.log('Auto-created trial subscription for org:', org_id)
     }
 
     // Check subscription not expired
