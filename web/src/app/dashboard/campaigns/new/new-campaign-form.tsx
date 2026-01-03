@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { parsePhoneNumberFromString } from 'libphonenumber-js'
@@ -30,6 +30,7 @@ export function NewCampaignForm({
   const [fileContacts, setFileContacts] = useState<
     { phone_e164: string; name?: string }[]
   >([])
+  const [fileInvalidPhones, setFileInvalidPhones] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
@@ -49,6 +50,7 @@ export function NewCampaignForm({
 
     setError(null)
     setFileContacts([])
+    setFileInvalidPhones([])
 
     try {
       const reader = new FileReader()
@@ -56,6 +58,7 @@ export function NewCampaignForm({
         const data = event.target?.result
 
         let parsedContacts: { phone_e164: string; name?: string }[] = []
+        const invalidPhones: string[] = []
 
         if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
           const text = data as string
@@ -82,7 +85,7 @@ export function NewCampaignForm({
                   name,
                 })
               } else {
-                console.warn(`Numéro invalide ignoré: ${phone}`)
+                invalidPhones.push(phone)
               }
             }
           }
@@ -109,7 +112,7 @@ export function NewCampaignForm({
                   name,
                 })
               } else {
-                console.warn(`Numéro invalide ignoré: ${phone}`)
+                invalidPhones.push(phone)
               }
             }
           }
@@ -118,6 +121,7 @@ export function NewCampaignForm({
           return
         }
 
+        setFileInvalidPhones(invalidPhones)
         if (parsedContacts.length === 0) {
           setError('Aucun contact valide trouvé dans le fichier.')
         }
@@ -129,29 +133,43 @@ export function NewCampaignForm({
     }
   }
 
+  const manualParse = useMemo(() => {
+    const phones = manualContacts
+      .split(/[,;\n]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+
+    const valid: { phone_e164: string }[] = []
+    const invalid: string[] = []
+
+    for (const phone of phones) {
+      const phoneNumber = parsePhoneNumberFromString(phone)
+      if (phoneNumber?.isValid()) {
+        valid.push({ phone_e164: phoneNumber.format('E.164') })
+      } else {
+        invalid.push(phone)
+      }
+    }
+
+    return { valid, invalid, total: phones.length }
+  }, [manualContacts])
+
   const getContactsForCampaign = useCallback(() => {
     if (contactInputMode === 'manual') {
-      const phones = manualContacts
-        .split(/[,;\n]+/)
-        .map((p) => p.trim())
-        .filter(Boolean)
-      return phones.map((phone) => {
-        const phoneNumber = parsePhoneNumberFromString(phone)
-        if (phoneNumber?.isValid()) {
-          return { phone_e164: phoneNumber.format('E.164') }
-        }
-        console.warn(`Numéro manuel invalide ignoré: ${phone}`)
-        return null
-      }).filter(Boolean) as { phone_e164: string }[]
+      return manualParse.valid
     } else if (contactInputMode === 'file') {
       return fileContacts
     } else {
       return []
     }
-  }, [contactInputMode, manualContacts, fileContacts])
+  }, [contactInputMode, manualParse.valid, fileContacts])
 
   const totalContactsToSend =
-    contactInputMode === 'database' ? dbContactsCount : getContactsForCampaign().length
+    contactInputMode === 'database'
+      ? dbContactsCount
+      : contactInputMode === 'manual'
+        ? manualParse.valid.length
+        : getContactsForCampaign().length
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -326,6 +344,21 @@ export function NewCampaignForm({
                 className="w-full px-4 py-3 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-background font-mono text-sm transition"
                 placeholder="Saisissez les numéros au format international E.164 :&#10;+2250708090001,+33612345678,+12025551234"
               />
+              {manualParse.invalid.length > 0 && (
+                <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-3 text-sm">
+                  <p className="font-semibold">
+                    {manualParse.invalid.length} numéro(s) invalide(s) ignoré(s)
+                    {manualParse.valid.length > 0 ? ` • ${manualParse.valid.length} valide(s)` : ''}
+                  </p>
+                  <p className="text-xs mt-1">
+                    Exemple CI (Côte d’Ivoire) : <code className="bg-amber-100 px-1 rounded">+225</code> suivi de <b>10 chiffres</b>.
+                  </p>
+                  <p className="text-xs mt-2 font-mono break-all">
+                    {manualParse.invalid.slice(0, 5).join(', ')}
+                    {manualParse.invalid.length > 5 ? '…' : ''}
+                  </p>
+                </div>
+              )}
               <div className="flex items-start gap-2 mt-2 text-xs text-muted-foreground bg-blue-50 border border-blue-200 rounded p-3">
                 <span className="text-blue-600">💡</span>
                 <div>
@@ -357,6 +390,17 @@ export function NewCampaignForm({
                 <div className="bg-green-50 border border-green-200 text-green-800 p-3 rounded-lg flex items-center gap-2">
                   <span className="text-lg">✅</span>
                   <span className="font-semibold">{fileContacts.length} contacts valides détectés</span>
+                </div>
+              )}
+              {fileInvalidPhones.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-lg">
+                  <p className="font-semibold">
+                    {fileInvalidPhones.length} numéro(s) invalide(s) ignoré(s)
+                  </p>
+                  <p className="text-xs mt-1 font-mono break-all">
+                    {fileInvalidPhones.slice(0, 5).join(', ')}
+                    {fileInvalidPhones.length > 5 ? '…' : ''}
+                  </p>
                 </div>
               )}
             </div>
