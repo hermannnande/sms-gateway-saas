@@ -2,24 +2,12 @@
 // Claim messages atomiquement pour un device
 // CRITIQUE: anti-doublon, vérif subscription, quota
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { encodeHex } from 'https://deno.land/std@0.168.0/encoding/hex.ts'
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import { corsHeaders } from '../_shared/cors.ts'
+import { hashToken } from '../_shared/crypto.ts'
 import { normalizeDeviceToken } from '../_shared/device_token.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-device-token',
-}
-
-async function hashToken(token: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(token)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  return encodeHex(new Uint8Array(hashBuffer))
-}
-
-serve(async (req) => {
+Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
