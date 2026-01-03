@@ -29,6 +29,8 @@ Deno.serve(async (req) => {
     // Hash token to find device
     const token_hash = await hashToken(device_token)
 
+    console.log(`Checking heartbeat for token hash: ${token_hash.slice(0, 8)}...`)
+
     // Create Supabase client with service role (bypass RLS)
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',

@@ -110,7 +110,19 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> init() async {
-    final token = await ref.read(tokenStorageProvider).load();
+    String? token = await ref.read(tokenStorageProvider).load();
+
+    // Auto-fix: si le token est un JSON (erreur de pairing précédente)
+    if (token != null && token.startsWith('{') && token.endsWith('}')) {
+      try {
+        final data = jsonDecode(token);
+        if (data is Map && data.containsKey('device_token')) {
+          token = data['device_token'].toString();
+          await ref.read(tokenStorageProvider).save(token);
+        }
+      } catch (_) {}
+    }
+
     // Vérifier s'il existe déjà une session supabase (auth)
     final supabase = ref.read(supabaseClientProvider);
     final session = supabase.auth.currentSession;
@@ -123,7 +135,20 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> saveToken(String token) async {
-    final normalized = token.trim();
+    String normalized = token.trim();
+
+    // Tenter de parser si c'est du JSON (cas du QR code complet)
+    if (normalized.startsWith('{') && normalized.endsWith('}')) {
+      try {
+        final data = jsonDecode(normalized);
+        if (data is Map && data.containsKey('device_token')) {
+          normalized = data['device_token'].toString();
+        }
+      } catch (e) {
+        // Pas du JSON valide ou format différent, on garde tel quel
+      }
+    }
+
     await ref.read(tokenStorageProvider).save(normalized);
     state = state.copyWith(
       deviceToken: normalized,
