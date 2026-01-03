@@ -4,6 +4,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
 import { hashToken } from '../_shared/crypto.ts'
+import { normalizeDeviceToken } from '../_shared/device_token.ts'
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -20,7 +21,8 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { device_token } = await req.json()
+    const body = await req.json()
+    const device_token = normalizeDeviceToken(body?.device_token)
 
     if (!device_token) {
       throw new Error('device_token requis')

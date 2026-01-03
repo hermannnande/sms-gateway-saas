@@ -5,6 +5,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { encodeHex } from 'https://deno.land/std@0.168.0/encoding/hex.ts'
+import { normalizeDeviceToken } from '../_shared/device_token.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,7 +26,11 @@ serve(async (req) => {
   }
 
   try {
-    const { device_token, message_id, status, error: errorMsg } = await req.json()
+    const body = await req.json()
+    const device_token = normalizeDeviceToken(body?.device_token)
+    const message_id = body?.message_id
+    const status = body?.status
+    const errorMsg = body?.error
 
     if (!device_token || !message_id || !status) {
       throw new Error('device_token, message_id, status requis')
