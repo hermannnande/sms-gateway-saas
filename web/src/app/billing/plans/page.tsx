@@ -17,6 +17,7 @@ export default async function PlansPage() {
   const { data: plans } = await supabase
     .from('plans')
     .select('*')
+    .eq('is_visible', true)
     .order('price_xof', { ascending: true })
 
   // Get user's current subscription
@@ -77,7 +78,13 @@ export default async function PlansPage() {
           <div className="mb-8 max-w-4xl mx-auto animate-fade-in">
             <div className="glass-card rounded-2xl p-4 border-2 border-green-500/20 bg-green-500/5 text-center">
               <p className="text-sm">
-                <span className="text-xl">✅</span> Abonnement <span className="font-bold text-green-700 dark:text-green-400">{currentSubscription.plans?.name}</span> actif jusqu'au <span className="font-bold">{new Date(currentSubscription.current_period_end).toLocaleDateString('fr-FR')}</span>
+                <span className="text-xl">✅</span> Abonnement{' '}
+                <span className="font-bold text-green-700 dark:text-green-400">
+                  {currentSubscription.plans?.name}
+                </span>{' '}
+                {currentSubscription.current_period_end
+                  ? <>actif jusqu&apos;au <span className="font-bold">{new Date(currentSubscription.current_period_end).toLocaleDateString('fr-FR')}</span></>
+                  : <>actif</>}
               </p>
             </div>
           </div>

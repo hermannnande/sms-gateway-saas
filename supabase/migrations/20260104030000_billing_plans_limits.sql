@@ -16,12 +16,15 @@ ALTER TABLE public.plans
 ALTER TABLE public.plans
   ADD COLUMN IF NOT EXISTS highlight BOOLEAN NOT NULL DEFAULT false;
 
+ALTER TABLE public.plans
+  ADD COLUMN IF NOT EXISTS is_visible BOOLEAN NOT NULL DEFAULT true;
+
 -- Convention:
 --  - sms_quota_month = 0 => illimité
 --  - sms_quota_month > 0 => quota mensuel (mois calendaire en cours)
 
 -- 2) Upsert des plans
-INSERT INTO public.plans (id, name, price_xof, sms_quota_month, max_devices, rate_limit_per_min, features, highlight)
+INSERT INTO public.plans (id, name, price_xof, sms_quota_month, max_devices, rate_limit_per_min, features, highlight, is_visible)
 VALUES
   (
     'free',
@@ -34,7 +37,8 @@ VALUES
       "100 SMS offerts",
       "1 appareil"
     ]'::jsonb,
-    false
+    false,
+    true
   ),
   (
     'monthly_1',
@@ -58,6 +62,7 @@ VALUES
       "Annulation possible à tout moment",
       "Soutien prioritaire"
     ]'::jsonb,
+    true,
     true
   ),
   (
@@ -82,7 +87,8 @@ VALUES
       "Annulation possible à tout moment",
       "Soutien prioritaire"
     ]'::jsonb,
-    false
+    false,
+    true
   ),
   (
     'monthly_5',
@@ -106,7 +112,8 @@ VALUES
       "Annulation possible à tout moment",
       "Soutien prioritaire"
     ]'::jsonb,
-    false
+    false,
+    true
   )
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
@@ -115,7 +122,12 @@ ON CONFLICT (id) DO UPDATE SET
   max_devices = EXCLUDED.max_devices,
   rate_limit_per_min = EXCLUDED.rate_limit_per_min,
   features = EXCLUDED.features,
-  highlight = EXCLUDED.highlight;
+  highlight = EXCLUDED.highlight,
+  is_visible = EXCLUDED.is_visible;
+
+-- 2ter) Masquer les anciens plans (TRIAL/BASIC/etc.) sans casser les FK
+UPDATE public.plans
+SET is_visible = (id IN ('free', 'monthly_1', 'monthly_3', 'monthly_5'));
 
 -- 2bis) Backfill: pour les organisations existantes sans abonnement actif => activer le plan gratuit
 INSERT INTO public.subscriptions (org_id, plan_id, status, current_period_start, current_period_end, provider)
