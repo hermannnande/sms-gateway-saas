@@ -217,7 +217,8 @@ BEGIN
   WHERE d.org_id = NEW.org_id;
 
   IF v_current_devices >= v_plan.max_devices THEN
-    RAISE EXCEPTION 'Limite d''appareils atteinte (%/%). Passez à un plan supérieur.'
+    RAISE EXCEPTION 'Limite d''appareils atteinte (%/%). Passez à un plan supérieur.',
+      v_current_devices, v_plan.max_devices
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -259,7 +260,8 @@ BEGIN
     AND m.created_at >= v_month_start;
 
   IF v_used >= v_quota THEN
-    RAISE EXCEPTION 'Quota SMS atteint (%/%). Souscrivez à un abonnement mensuel pour continuer.'
+    RAISE EXCEPTION 'Quota SMS atteint (%/%). Souscrivez à un abonnement mensuel pour continuer.',
+      v_used, v_quota
       USING ERRCODE = 'P0001';
   END IF;
 
