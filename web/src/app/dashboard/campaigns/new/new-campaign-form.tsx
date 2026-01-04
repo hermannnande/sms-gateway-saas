@@ -27,6 +27,7 @@ export function NewCampaignForm({
   const [messageBody, setMessageBody] = useState('')
   const [contactInputMode, setContactInputMode] = useState<ContactInputMode>('manual')
   const [manualContacts, setManualContacts] = useState('')
+  const [simSlotIndex, setSimSlotIndex] = useState<number | null>(null) // null = Auto, 0 = SIM1, 1 = SIM2
   const [fileContacts, setFileContacts] = useState<
     { phone_e164: string; name?: string }[]
   >([])
@@ -219,6 +220,7 @@ export function NewCampaignForm({
           org_id: orgMember.org_id,
           name,
           template_id: templateId || null,
+          sim_slot_index: simSlotIndex,
           // IMPORTANT: claim_messages_atomic ne claim que les campagnes en 'running'
           // Donc on démarre immédiatement la campagne (le pause/resume reste possible).
           status: 'running',
@@ -419,6 +421,29 @@ export function NewCampaignForm({
           )}
         </div>
 
+        {/* SIM */}
+        <div>
+          <label htmlFor="sim-slot" className="block text-sm font-semibold mb-2 text-foreground">
+            📲 SIM utilisée pour l’envoi (optionnel)
+          </label>
+          <select
+            id="sim-slot"
+            value={simSlotIndex === null ? '' : String(simSlotIndex)}
+            onChange={(e) => {
+              const v = e.target.value
+              setSimSlotIndex(v === '' ? null : Number(v))
+            }}
+            className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-background transition"
+          >
+            <option value="">Auto (SIM par défaut du téléphone)</option>
+            <option value="0">SIM 1</option>
+            <option value="1">SIM 2</option>
+          </select>
+          <p className="text-xs text-muted-foreground mt-1">
+            Le téléphone enverra automatiquement via la SIM choisie pour cette campagne (sans action dans l’app).
+          </p>
+        </div>
+
         {/* Template */}
         <div>
           <label htmlFor="template" className="block text-sm font-semibold mb-3 text-foreground">
@@ -482,6 +507,9 @@ export function NewCampaignForm({
               <h3 className="font-semibold text-blue-900 mb-1">Prêt à lancer ?</h3>
               <p className="text-sm text-blue-700">
                 Cette campagne enverra <span className="font-bold">{totalContactsToSend} SMS</span> {totalContactsToSend > 1 ? 'aux contacts' : 'au contact'} sélectionné{totalContactsToSend > 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-blue-700 mt-1">
+                SIM: <span className="font-semibold">{simSlotIndex === null ? 'Auto' : simSlotIndex === 0 ? 'SIM 1' : 'SIM 2'}</span>
               </p>
               <p className="text-xs text-blue-600 mt-1">
                 Estimation : ~{smsCount * totalContactsToSend} SMS au total ({smsCount} SMS par contact)

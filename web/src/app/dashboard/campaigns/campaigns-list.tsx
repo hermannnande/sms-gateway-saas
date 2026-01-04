@@ -9,6 +9,7 @@ type Campaign = {
   created_at: string
   total_count?: number
   sent_count?: number
+  sim_slot_index?: number | null
   campaign_jobs?: { status: string; created_at: string }[] | null
   templates: { name: string } | null
 }
@@ -126,6 +127,16 @@ export function CampaignsList({ campaigns }: { campaigns: Campaign[] }) {
                     </span>
                   </span>
                 )}
+                <span className="flex items-center gap-1.5">
+                  <span className="text-lg">📲</span>
+                  <span>
+                    {campaign.sim_slot_index === null || campaign.sim_slot_index === undefined
+                      ? 'SIM Auto'
+                      : campaign.sim_slot_index === 0
+                        ? 'SIM 1'
+                        : 'SIM 2'}
+                  </span>
+                </span>
                 {campaign.campaign_jobs && campaign.campaign_jobs.length > 0 && (
                   <span className="flex items-center gap-1.5">
                     <span className="text-lg">🗂️</span>

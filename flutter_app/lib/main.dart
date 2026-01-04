@@ -11,7 +11,6 @@ import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 import 'package:smsgateway_flutter/services/device_service.dart';
 import 'package:smsgateway_flutter/services/app_update_service.dart';
-import 'package:smsgateway_flutter/services/sim_storage.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:supabase/supabase.dart';
@@ -27,7 +26,6 @@ final supabaseClientProvider = Provider<SupabaseClient>(
 );
 
 final tokenStorageProvider = Provider<TokenStorage>((_) => TokenStorage());
-final simStorageProvider = Provider<SimStorage>((_) => SimStorage());
 
 final deviceServiceProvider = Provider<DeviceService>(
   (ref) => DeviceService(
@@ -52,7 +50,6 @@ class AppState {
     required this.lastMessages,
     required this.authenticated,
     required this.availableSims,
-    required this.selectedSimSubscriptionId,
   });
 
   factory AppState.initial() => const AppState(
@@ -63,7 +60,6 @@ class AppState {
         lastMessages: [],
         authenticated: false,
         availableSims: [],
-        selectedSimSubscriptionId: null,
       );
 
   final bool loading;
@@ -73,7 +69,6 @@ class AppState {
   final List<Message> lastMessages;
   final bool authenticated;
   final List<SimCard> availableSims;
-  final int? selectedSimSubscriptionId;
 
   AppState copyWith({
     bool? loading,
@@ -83,7 +78,6 @@ class AppState {
     List<Message>? lastMessages,
     bool? authenticated,
     List<SimCard>? availableSims,
-    int? selectedSimSubscriptionId,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -93,8 +87,6 @@ class AppState {
       lastMessages: lastMessages ?? this.lastMessages,
       authenticated: authenticated ?? this.authenticated,
       availableSims: availableSims ?? this.availableSims,
-      selectedSimSubscriptionId:
-          selectedSimSubscriptionId ?? this.selectedSimSubscriptionId,
     );
   }
 }
@@ -124,7 +116,6 @@ class AppNotifier extends Notifier<AppState> {
 
   Future<void> init() async {
     String? token = await ref.read(tokenStorageProvider).load();
-    final savedSim = await ref.read(simStorageProvider).loadSelectedSimId();
 
     // Auto-fix: si le token est un JSON (erreur de pairing précédente)
     if (token != null && token.startsWith('{') && token.endsWith('}')) {
@@ -155,7 +146,6 @@ class AppNotifier extends Notifier<AppState> {
       loading: false,
       deviceToken: token,
       authenticated: hasSession,
-      selectedSimSubscriptionId: savedSim,
     );
   }
 
@@ -163,22 +153,11 @@ class AppNotifier extends Notifier<AppState> {
     try {
       final sims = await ref.read(smsSenderProvider).getSimCards();
       state = state.copyWith(availableSims: sims);
-
-      // Si la SIM choisie n'existe plus, revenir sur Auto.
-      final selected = state.selectedSimSubscriptionId;
-      if (selected != null && !sims.any((s) => s.subscriptionId == selected)) {
-        await setSelectedSim(null);
-      }
     } catch (e) {
       if (!silent) {
         setLastStatus('Impossible de lire les SIMs: $e');
       }
     }
-  }
-
-  Future<void> setSelectedSim(int? subscriptionId) async {
-    await ref.read(simStorageProvider).saveSelectedSimId(subscriptionId);
-    state = state.copyWith(selectedSimSubscriptionId: subscriptionId);
   }
 
   Future<void> saveToken(String token) async {
@@ -290,11 +269,17 @@ class AppNotifier extends Notifier<AppState> {
         return;
       }
 
-      final simId = state.selectedSimSubscriptionId;
+      // Charger les SIMs une fois si vide (pour router les campagnes SIM1/SIM2).
+      if (state.availableSims.isEmpty) {
+        await refreshSimCards();
+      }
+
       final messages = await ref.read(deviceServiceProvider).claimMessages(
             deviceToken: token,
             limit: AppConfig.claimBatchSize,
-            simSubscriptionId: simId,
+            // La SIM est décidée côté campagne web (via sim_slot_index),
+            // claim_messages_atomic renvoie ensuite sim_subscription_id = "slot:X".
+            simSubscriptionId: null,
           );
 
       if (messages.isEmpty) {
@@ -310,9 +295,21 @@ class AppNotifier extends Notifier<AppState> {
       final results = <String>[];
 
       for (final msg in messages) {
-        final sendResult = await ref
-            .read(smsSenderProvider)
-            .send(msg, subscriptionIdOverride: simId);
+        int? subscriptionId;
+        if (msg.simSubscriptionId != null) {
+          subscriptionId = msg.simSubscriptionId;
+        } else if (msg.simSlotIndex != null) {
+          final match = state.availableSims.firstWhere(
+            (s) => s.simSlotIndex == msg.simSlotIndex,
+            orElse: () => const SimCard(subscriptionId: -1, simSlotIndex: -1, displayName: '', carrierName: ''),
+          );
+          subscriptionId = match.subscriptionId >= 0 ? match.subscriptionId : null;
+        }
+
+        final sendResult = await ref.read(smsSenderProvider).send(
+              msg,
+              subscriptionIdOverride: subscriptionId,
+            );
         await ref.read(deviceServiceProvider).updateMessageStatus(
               deviceToken: token,
               message: msg,
@@ -2615,12 +2612,6 @@ class _SyncCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sims = appState.availableSims.where((s) => s.subscriptionId >= 0).toList();
-    final selected = appState.selectedSimSubscriptionId;
-    final currentValue = (selected != null && sims.any((s) => s.subscriptionId == selected))
-        ? selected
-        : null;
-
     return _ModernCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2634,48 +2625,6 @@ class _SyncCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              const Icon(Icons.sim_card_rounded, size: 18, color: Colors.black54),
-              const SizedBox(width: 8),
-              Expanded(
-                child: DropdownButtonFormField<int?>(
-                  value: currentValue,
-                  decoration: InputDecoration(
-                    labelText: 'SIM pour l’envoi',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  ),
-                  items: [
-                    const DropdownMenuItem<int?>(
-                      value: null,
-                      child: Text('Auto (SIM par défaut)'),
-                    ),
-                    ...sims.map(
-                      (s) => DropdownMenuItem<int?>(
-                        value: s.subscriptionId,
-                        child: Text(s.label()),
-                      ),
-                    ),
-                  ],
-                  onChanged: (v) async {
-                    HapticFeedback.selectionClick();
-                    await notifier.setSelectedSim(v);
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              IconButton(
-                tooltip: 'Rafraîchir SIM',
-                onPressed: () {
-                  HapticFeedback.lightImpact();
-                  notifier.refreshSimCards(silent: false);
-                },
-                icon: const Icon(Icons.refresh_rounded),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(

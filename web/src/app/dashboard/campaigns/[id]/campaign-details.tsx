@@ -10,6 +10,7 @@ type Campaign = {
   created_at: string
   total_count?: number
   sent_count?: number
+  sim_slot_index?: number | null
   campaign_jobs?: { status: string; created_at: string }[] | null
   templates: { name: string; body: string } | null
 }
@@ -172,6 +173,15 @@ export function CampaignDetails({
           </p>
           <p className="text-sm text-muted-foreground">
             {campaign.total_count ?? 0} messages prévus • {campaign.sent_count ?? 0} envoyés
+          </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            SIM: <span className="font-semibold text-foreground">
+              {campaign.sim_slot_index === null || campaign.sim_slot_index === undefined
+                ? 'Auto'
+                : campaign.sim_slot_index === 0
+                  ? 'SIM 1'
+                  : 'SIM 2'}
+            </span>
           </p>
           <div className="mt-2">
             <span

@@ -4,6 +4,7 @@ class Message {
   final String content;
   final int tryCount;
   final int? simSubscriptionId;
+  final int? simSlotIndex;
 
   Message({
     required this.id,
@@ -11,9 +12,12 @@ class Message {
     required this.content,
     this.tryCount = 0,
     this.simSubscriptionId,
+    this.simSlotIndex,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) {
+    final simRaw = json['sim_subscription_id'];
+    final simParsed = _parseSim(simRaw);
     return Message(
       id: json['id'].toString(),
       to: (json['to_phone_e164'] ??
@@ -25,13 +29,29 @@ class Message {
       // Supabase renvoie généralement `body_final` depuis claim_messages_atomic
       content: (json['body_final'] ?? json['content'] ?? json['body'] ?? json['message'] ?? '')
           .toString(),
-      tryCount: (json['try_count'] ?? 0) is int
-          ? json['try_count'] as int
-          : int.tryParse(json['try_count']?.toString() ?? '0') ?? 0,
-      simSubscriptionId: json['sim_subscription_id'] == null
-          ? null
-          : int.tryParse(json['sim_subscription_id'].toString()),
+      tryCount: _safeParseInt(json['try_count'], defaultValue: 0),
+      simSubscriptionId: simParsed.subscriptionId,
+      simSlotIndex: simParsed.slotIndex,
     );
+  }
+
+  static ({int? subscriptionId, int? slotIndex}) _parseSim(dynamic value) {
+    if (value == null) return (subscriptionId: null, slotIndex: null);
+    final s = value.toString().trim();
+    if (s.startsWith('slot:')) {
+      final idx = int.tryParse(s.substring(5));
+      return (subscriptionId: null, slotIndex: idx);
+    }
+    final sub = int.tryParse(s);
+    return (subscriptionId: sub, slotIndex: null);
+  }
+
+  static int _safeParseInt(dynamic value, {int? defaultValue}) {
+    if (value == null) return defaultValue ?? 0;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? defaultValue ?? 0;
+    return defaultValue ?? 0;
   }
 
   Map<String, dynamic> toJson() {
@@ -40,7 +60,7 @@ class Message {
       'to': to,
       'content': content,
       'try_count': tryCount,
-      'sim_subscription_id': simSubscriptionId,
+      'sim_subscription_id': simSubscriptionId ?? (simSlotIndex == null ? null : 'slot:$simSlotIndex'),
     };
   }
 }

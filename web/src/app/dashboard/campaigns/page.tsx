@@ -23,7 +23,7 @@ export default async function CampaignsPage() {
   // Get campaigns with stats + jobs (file d'attente)
   const { data: campaigns } = orgMember ? await supabase
     .from('campaigns')
-    .select('id, name, status, created_at, total_count, sent_count, templates(name), campaign_jobs(status, created_at)')
+    .select('id, name, status, created_at, total_count, sent_count, sim_slot_index, templates(name), campaign_jobs(status, created_at)')
     .eq('org_id', orgMember.org_id)
     .order('created_at', { ascending: false }) : { data: [] }
 
