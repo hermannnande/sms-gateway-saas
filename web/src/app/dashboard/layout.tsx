@@ -129,6 +129,16 @@ export default function DashboardLayout({
                 🔔
                 <span className="absolute top-1 right-1 w-2 h-2 bg-destructive rounded-full" />
               </button>
+
+              {/* Logout (visible desktop + mobile) */}
+              <a
+                href="/auth/logout"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all text-sm font-medium"
+                title="Déconnexion"
+              >
+                <span className="text-base">🚪</span>
+                <span className="hidden sm:inline">Déconnexion</span>
+              </a>
             </div>
           </div>
         </header>
