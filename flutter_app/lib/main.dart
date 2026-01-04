@@ -7,8 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:smsgateway_flutter/config.dart';
+import 'package:smsgateway_flutter/models/inbox_message.dart';
 import 'package:smsgateway_flutter/models/message.dart';
+import 'package:smsgateway_flutter/models/outbox_message.dart';
 import 'package:smsgateway_flutter/services/device_service.dart';
 import 'package:smsgateway_flutter/services/app_update_service.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
@@ -50,6 +54,19 @@ class AppState {
     required this.lastMessages,
     required this.authenticated,
     required this.availableSims,
+    required this.userEmail,
+    required this.orgId,
+    required this.orgName,
+    required this.memberSince,
+    required this.appVersion,
+    required this.inboxMessages,
+    required this.outboxHistory,
+    required this.deviceName,
+    required this.lastHeartbeatAt,
+    required this.planName,
+    required this.planSmsQuotaMonth,
+    required this.planMaxDevices,
+    required this.subscriptionPeriodEnd,
   });
 
   factory AppState.initial() => const AppState(
@@ -60,6 +77,19 @@ class AppState {
         lastMessages: [],
         authenticated: false,
         availableSims: [],
+        userEmail: null,
+        orgId: null,
+        orgName: null,
+        memberSince: null,
+        appVersion: null,
+        inboxMessages: [],
+        outboxHistory: [],
+        deviceName: null,
+        lastHeartbeatAt: null,
+        planName: null,
+        planSmsQuotaMonth: null,
+        planMaxDevices: null,
+        subscriptionPeriodEnd: null,
       );
 
   final bool loading;
@@ -69,6 +99,19 @@ class AppState {
   final List<Message> lastMessages;
   final bool authenticated;
   final List<SimCard> availableSims;
+  final String? userEmail;
+  final String? orgId;
+  final String? orgName;
+  final DateTime? memberSince;
+  final String? appVersion;
+  final List<InboxMessage> inboxMessages;
+  final List<OutboxMessage> outboxHistory;
+  final String? deviceName;
+  final DateTime? lastHeartbeatAt;
+  final String? planName;
+  final int? planSmsQuotaMonth;
+  final int? planMaxDevices;
+  final DateTime? subscriptionPeriodEnd;
 
   AppState copyWith({
     bool? loading,
@@ -78,6 +121,19 @@ class AppState {
     List<Message>? lastMessages,
     bool? authenticated,
     List<SimCard>? availableSims,
+    String? userEmail,
+    String? orgId,
+    String? orgName,
+    DateTime? memberSince,
+    String? appVersion,
+    List<InboxMessage>? inboxMessages,
+    List<OutboxMessage>? outboxHistory,
+    String? deviceName,
+    DateTime? lastHeartbeatAt,
+    String? planName,
+    int? planSmsQuotaMonth,
+    int? planMaxDevices,
+    DateTime? subscriptionPeriodEnd,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -87,6 +143,19 @@ class AppState {
       lastMessages: lastMessages ?? this.lastMessages,
       authenticated: authenticated ?? this.authenticated,
       availableSims: availableSims ?? this.availableSims,
+      userEmail: userEmail ?? this.userEmail,
+      orgId: orgId ?? this.orgId,
+      orgName: orgName ?? this.orgName,
+      memberSince: memberSince ?? this.memberSince,
+      appVersion: appVersion ?? this.appVersion,
+      inboxMessages: inboxMessages ?? this.inboxMessages,
+      outboxHistory: outboxHistory ?? this.outboxHistory,
+      deviceName: deviceName ?? this.deviceName,
+      lastHeartbeatAt: lastHeartbeatAt ?? this.lastHeartbeatAt,
+      planName: planName ?? this.planName,
+      planSmsQuotaMonth: planSmsQuotaMonth ?? this.planSmsQuotaMonth,
+      planMaxDevices: planMaxDevices ?? this.planMaxDevices,
+      subscriptionPeriodEnd: subscriptionPeriodEnd ?? this.subscriptionPeriodEnd,
     );
   }
 }
@@ -147,6 +216,178 @@ class AppNotifier extends Notifier<AppState> {
       deviceToken: token,
       authenticated: hasSession,
     );
+
+    // Charger infos réelles (profil / org / version / inbox / historique)
+    await _loadAppVersion();
+    if (hasSession) {
+      await refreshAccountInfo();
+      await refreshInboxMessages(silent: true);
+      await refreshOutboxHistory(silent: true);
+      await refreshSubscription(silent: true);
+    }
+  }
+
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      state = state.copyWith(appVersion: '${info.version}+${info.buildNumber}');
+    } catch (_) {}
+  }
+
+  Future<void> refreshAccountInfo() async {
+    final supabase = ref.read(supabaseClientProvider);
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    String? orgId;
+    String? orgName;
+    DateTime? memberSince;
+
+    final res = await supabase
+        .from('org_members')
+        .select('org_id, created_at, organizations(name)')
+        .eq('user_id', user.id)
+        .order('created_at', ascending: true)
+        .limit(1)
+        .maybeSingle();
+
+    if (res != null) {
+      orgId = res['org_id']?.toString();
+      final created = res['created_at']?.toString();
+      memberSince = created == null ? null : DateTime.tryParse(created);
+      final org = res['organizations'];
+      if (org is Map && org['name'] != null) {
+        orgName = org['name'].toString();
+      }
+    }
+
+    state = state.copyWith(
+      userEmail: user.email,
+      orgId: orgId,
+      orgName: orgName,
+      memberSince: memberSince,
+    );
+  }
+
+  Future<void> refreshInboxMessages({bool silent = true}) async {
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      final rows = await supabase
+          .from('inbox_messages')
+          .select('id, from_phone_e164, body, received_at, read, created_at')
+          .order('received_at', ascending: false)
+          .limit(50);
+
+      final list = (rows as List? ?? const [])
+          .whereType<Map>()
+          .map((e) => InboxMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+
+      state = state.copyWith(inboxMessages: list);
+    } catch (e) {
+      if (!silent) setLastStatus('Erreur inbox: $e');
+    }
+  }
+
+  Future<void> refreshOutboxHistory({bool silent = true}) async {
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      // Assurer org_id
+      if (state.orgId == null) {
+        await refreshAccountInfo();
+      }
+      final orgId = state.orgId;
+      if (orgId == null) return;
+
+      final rows = await supabase
+          .from('messages')
+          .select(
+            'id,to_phone_e164,body_final,status,created_at,sent_at,try_count,last_error,sim_subscription_id',
+          )
+          .eq('org_id', orgId)
+          .order('created_at', ascending: false)
+          .limit(50);
+
+      final list = (rows as List? ?? const [])
+          .whereType<Map>()
+          .map((e) => OutboxMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+
+      state = state.copyWith(outboxHistory: list);
+    } catch (e) {
+      if (!silent) setLastStatus('Erreur historique: $e');
+    }
+  }
+
+  Future<void> refreshSubscription({bool silent = true}) async {
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      if (supabase.auth.currentUser == null) return;
+      if (state.orgId == null) {
+        await refreshAccountInfo();
+      }
+      final orgId = state.orgId;
+      if (orgId == null) return;
+
+      final row = await supabase
+          .from('subscriptions')
+          .select('current_period_end, plans(name, sms_quota_month, max_devices)')
+          .eq('org_id', orgId)
+          .eq('status', 'active')
+          .order('current_period_end', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (row == null) {
+        state = state.copyWith(
+          planName: null,
+          planSmsQuotaMonth: null,
+          planMaxDevices: null,
+          subscriptionPeriodEnd: null,
+        );
+        return;
+      }
+
+      final plans = row['plans'];
+      final endStr = row['current_period_end']?.toString();
+      state = state.copyWith(
+        planName: (plans is Map ? plans['name']?.toString() : null),
+        planSmsQuotaMonth: _safeParseInt(plans is Map ? plans['sms_quota_month'] : null),
+        planMaxDevices: _safeParseInt(plans is Map ? plans['max_devices'] : null),
+        subscriptionPeriodEnd: endStr == null ? null : DateTime.tryParse(endStr),
+      );
+    } catch (e) {
+      if (!silent) setLastStatus('Erreur abonnement: $e');
+    }
+  }
+
+  Future<void> refreshDeviceStatus({bool silent = true}) async {
+    final token = state.deviceToken;
+    if (token == null || token.isEmpty) return;
+    try {
+      final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(deviceToken: token);
+      final name = payload['device_name']?.toString();
+      final ts = payload['timestamp']?.toString();
+      state = state.copyWith(
+        deviceName: name,
+        lastHeartbeatAt: ts == null ? DateTime.now() : (DateTime.tryParse(ts) ?? DateTime.now()),
+      );
+    } catch (e) {
+      if (!silent) setLastStatus('Statut appareil: $e');
+    }
+  }
+
+  static int? _safeParseInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    return int.tryParse(value.toString());
   }
 
   Future<void> refreshSimCards({bool silent = true}) async {
@@ -212,6 +453,12 @@ class AppNotifier extends Notifier<AppState> {
     state = state.copyWith(
       authenticated: false,
       lastStatus: 'Compte déconnecté (appareil conservé)',
+      userEmail: null,
+      orgId: null,
+      orgName: null,
+      memberSince: null,
+      inboxMessages: const [],
+      outboxHistory: const [],
     );
   }
 
@@ -228,6 +475,10 @@ class AppNotifier extends Notifier<AppState> {
       throw Exception('Connexion impossible');
     }
     state = state.copyWith(authenticated: true);
+    await refreshAccountInfo();
+    await refreshSubscription(silent: true);
+    await refreshInboxMessages(silent: true);
+    await refreshOutboxHistory(silent: true);
   }
 
   Future<void> recoverSessionFromQrJson({
@@ -240,6 +491,10 @@ class AppNotifier extends Notifier<AppState> {
 ;
     }
     state = state.copyWith(authenticated: true);
+    await refreshAccountInfo();
+    await refreshSubscription(silent: true);
+    await refreshInboxMessages(silent: true);
+    await refreshOutboxHistory(silent: true);
   }
 
   Future<void> signInWithRefreshToken({
@@ -251,6 +506,10 @@ class AppNotifier extends Notifier<AppState> {
       throw Exception('Session invalide. Régénérez le QR sur le web et réessayez.');
     }
     state = state.copyWith(authenticated: true);
+    await refreshAccountInfo();
+    await refreshSubscription(silent: true);
+    await refreshInboxMessages(silent: true);
+    await refreshOutboxHistory(silent: true);
   }
 
   Future<void> syncOnce({bool silentIfEmpty = false}) async {
@@ -359,6 +618,33 @@ String _formatDeviceTokenForUi(String? token) {
 
   if (t.length <= 14) return t;
   return '${t.substring(0, 6)}…${t.substring(t.length - 4)}';
+}
+
+String _formatDateFr(DateTime dt) {
+  const months = [
+    'janvier',
+    'février',
+    'mars',
+    'avril',
+    'mai',
+    'juin',
+    'juillet',
+    'août',
+    'septembre',
+    'octobre',
+    'novembre',
+    'décembre',
+  ];
+  final d = dt.toLocal();
+  final m = months[d.month - 1];
+  return '${d.day} $m ${d.year}';
+}
+
+String _formatDateTimeFr(DateTime dt) {
+  final d = dt.toLocal();
+  final hh = d.hour.toString().padLeft(2, '0');
+  final mm = d.minute.toString().padLeft(2, '0');
+  return '${_formatDateFr(d)} $hh:$mm';
 }
 
 class MyApp extends ConsumerStatefulWidget {
@@ -1723,8 +2009,10 @@ class _HomePageState extends ConsumerState<HomePage>
         final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
               deviceToken: deviceToken,
             );
+        await ref.read(appProvider.notifier).refreshDeviceStatus(silent: true);
+        // Message discret (évite de spammer l’utilisateur)
         ref.read(appProvider.notifier).setLastStatus(
-              'Heartbeat OK • ${payload['device_name'] ?? ''}',
+              'Appareil en ligne${payload['device_name'] != null ? ' • ${payload['device_name']}' : ''}',
             );
       } catch (e) {
         ref.read(appProvider.notifier).setLastStatus('Heartbeat ÉCHEC: $e');
@@ -1878,7 +2166,27 @@ class _HomePageState extends ConsumerState<HomePage>
         child: RefreshIndicator(
           onRefresh: () async {
             HapticFeedback.mediumImpact();
-            await notifier.syncOnce();
+            switch (section) {
+              case AppSection.dashboard:
+                await notifier.syncOnce();
+                break;
+              case AppSection.messages:
+                await notifier.refreshInboxMessages(silent: false);
+                break;
+              case AppSection.history:
+                await notifier.refreshOutboxHistory(silent: false);
+                break;
+              case AppSection.subscription:
+                await notifier.refreshSubscription(silent: false);
+                break;
+              case AppSection.devices:
+                await notifier.refreshDeviceStatus(silent: false);
+                break;
+              case AppSection.profile:
+                await notifier.refreshAccountInfo();
+                await notifier.refreshSubscription(silent: true);
+                break;
+            }
           },
           color: const Color(0xFF16A34A),
           child: _buildSectionContent(section, appState, notifier),
@@ -1913,15 +2221,15 @@ class _HomePageState extends ConsumerState<HomePage>
       case AppSection.dashboard:
         return _DashboardSection(appState: appState, notifier: notifier);
       case AppSection.messages:
-        return _MessagesSection(appState: appState);
+        return _MessagesSection(appState: appState, notifier: notifier);
       case AppSection.history:
-        return _HistorySection(appState: appState);
+        return _HistorySection(appState: appState, notifier: notifier);
       case AppSection.subscription:
-        return const _SubscriptionSection();
+        return _SubscriptionSection(appState: appState, notifier: notifier);
       case AppSection.devices:
-        return _DevicesSection(appState: appState);
+        return _DevicesSection(appState: appState, notifier: notifier);
       case AppSection.profile:
-        return const _ProfileSection();
+        return _ProfileSection(appState: appState, notifier: notifier);
     }
   }
 }
@@ -2772,7 +3080,7 @@ class _MessagesCard extends StatelessWidget {
                 message: message,
                 index: index,
               );
-            }).toList(),
+            }),
         ],
       ),
     );
@@ -2780,8 +3088,9 @@ class _MessagesCard extends StatelessWidget {
 }
 
 class _MessagesSection extends StatelessWidget {
-  const _MessagesSection({required this.appState});
+  const _MessagesSection({required this.appState, required this.notifier});
   final AppState appState;
+  final AppNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
@@ -2811,7 +3120,7 @@ class _MessagesSection extends StatelessWidget {
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      '${appState.lastMessages.length}',
+                      '${appState.inboxMessages.length}',
                       style: const TextStyle(
                         color: Color(0xFF16A34A),
                         fontWeight: FontWeight.bold,
@@ -2821,7 +3130,7 @@ class _MessagesSection extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              if (appState.lastMessages.isEmpty)
+              if (appState.inboxMessages.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: Text(
@@ -2830,12 +3139,52 @@ class _MessagesSection extends StatelessWidget {
                   ),
                 )
               else
-                ...appState.lastMessages.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final message = entry.value;
-                  return _MessageTile(
-                    message: message,
-                    index: index,
+                ...appState.inboxMessages.map((m) {
+                  final preview = m.body.length > 70 ? '${m.body.substring(0, 70)}…' : m.body;
+                  return Container(
+                    margin: const EdgeInsets.only(top: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          margin: const EdgeInsets.only(top: 6),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: m.read ? Colors.grey.shade400 : const Color(0xFF16A34A),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                m.fromPhoneE164,
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                preview,
+                                style: TextStyle(color: Colors.grey.shade700),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _formatDateTimeFr(m.receivedAt),
+                                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   );
                 }),
             ],
@@ -2847,8 +3196,9 @@ class _MessagesSection extends StatelessWidget {
 }
 
 class _HistorySection extends StatelessWidget {
-  const _HistorySection({required this.appState});
+  const _HistorySection({required this.appState, required this.notifier});
   final AppState appState;
+  final AppNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
@@ -2869,7 +3219,7 @@ class _HistorySection extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
-              if (appState.lastMessages.isEmpty)
+              if (appState.outboxHistory.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: Text(
@@ -2878,12 +3228,71 @@ class _HistorySection extends StatelessWidget {
                   ),
                 )
               else
-                ...appState.lastMessages.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final message = entry.value;
-                  return _MessageTile(
-                    message: message,
-                    index: index,
+                ...appState.outboxHistory.map((m) {
+                  Color badgeBg;
+                  Color badgeText;
+                  String label;
+                  switch (m.status) {
+                    case 'sent':
+                      badgeBg = Colors.green.shade50;
+                      badgeText = Colors.green.shade700;
+                      label = 'Envoyé';
+                      break;
+                    case 'failed':
+                      badgeBg = Colors.red.shade50;
+                      badgeText = Colors.red.shade700;
+                      label = 'Échec';
+                      break;
+                    case 'sending':
+                      badgeBg = Colors.orange.shade50;
+                      badgeText = Colors.orange.shade700;
+                      label = 'En cours';
+                      break;
+                    default:
+                      badgeBg = Colors.blue.shade50;
+                      badgeText = Colors.blue.shade700;
+                      label = 'En attente';
+                  }
+
+                  final preview = m.body.length > 70 ? '${m.body.substring(0, 70)}…' : m.body;
+                  return Container(
+                    margin: const EdgeInsets.only(top: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(m.toPhoneE164, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: badgeBg,
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Text(label, style: TextStyle(color: badgeText, fontWeight: FontWeight.w700, fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(preview, style: TextStyle(color: Colors.grey.shade700)),
+                        if (m.lastError != null && m.lastError!.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text('Erreur: ${m.lastError}', style: TextStyle(color: Colors.red.shade700, fontSize: 12)),
+                        ],
+                        const SizedBox(height: 8),
+                        Text(
+                          _formatDateTimeFr(m.sentAt ?? m.createdAt),
+                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                        ),
+                      ],
+                    ),
                   );
                 }),
             ],
@@ -2895,10 +3304,16 @@ class _HistorySection extends StatelessWidget {
 }
 
 class _SubscriptionSection extends StatelessWidget {
-  const _SubscriptionSection();
+  const _SubscriptionSection({required this.appState, required this.notifier});
+  final AppState appState;
+  final AppNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
+    final planName = appState.planName ?? 'Essai';
+    final quota = appState.planSmsQuotaMonth;
+    final maxDevices = appState.planMaxDevices;
+    final end = appState.subscriptionPeriodEnd;
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
@@ -2926,12 +3341,12 @@ class _SubscriptionSection extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 16),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Plan Professionnel',
+                          'Plan: $planName',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 20,
@@ -2940,7 +3355,7 @@ class _SubscriptionSection extends StatelessWidget {
                         ),
                         SizedBox(height: 4),
                         Text(
-                          'Actif jusqu\'au 30 janvier 2025',
+                          end == null ? 'Abonnement actif' : 'Actif jusqu’au ${_formatDateFr(end)}',
                           style: TextStyle(
                             color: Colors.white70,
                             fontSize: 13,
@@ -2961,17 +3376,17 @@ class _SubscriptionSection extends StatelessWidget {
                     color: Colors.white.withOpacity(0.3),
                   ),
                 ),
-                child: const Column(
+                child: Column(
                   children: [
                     _StatRow(
                       label: 'Quota SMS mensuel',
-                      value: '10 000 SMS',
+                      value: quota == null ? '—' : '${quota.toString()} SMS',
                       icon: Icons.sms_rounded,
                     ),
                     SizedBox(height: 12),
                     _StatRow(
                       label: 'Appareils autorisés',
-                      value: '10 appareils',
+                      value: maxDevices == null ? '—' : '$maxDevices appareils',
                       icon: Icons.devices_rounded,
                     ),
                     SizedBox(height: 12),
@@ -3053,12 +3468,13 @@ class _SubscriptionSection extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: () {
                     HapticFeedback.mediumImpact();
+                    notifier.refreshSubscription(silent: false);
                   },
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
                   icon: const Icon(Icons.upgrade_rounded),
-                  label: const Text('Gérer mon abonnement'),
+                  label: const Text('Actualiser mon abonnement'),
                 ),
               ),
             ],
@@ -3109,8 +3525,9 @@ class _StatRow extends StatelessWidget {
 }
 
 class _DevicesSection extends StatelessWidget {
-  const _DevicesSection({required this.appState});
+  const _DevicesSection({required this.appState, required this.notifier});
   final AppState appState;
+  final AppNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
@@ -3153,12 +3570,21 @@ class _DevicesSection extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Pixel 5 • Android',
+                            (appState.deviceName == null || appState.deviceName!.isEmpty)
+                                ? 'Android'
+                                : '${appState.deviceName} • Android',
                             style: TextStyle(
                               color: Colors.grey.shade600,
                               fontSize: 14,
                             ),
                           ),
+                          if (appState.lastHeartbeatAt != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Dernier ping: ${_formatDateTimeFr(appState.lastHeartbeatAt!)}',
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -3253,6 +3679,7 @@ class _DevicesSection extends StatelessWidget {
                       child: OutlinedButton.icon(
                         onPressed: () {
                           HapticFeedback.lightImpact();
+                          notifier.refreshDeviceStatus(silent: false);
                         },
                         icon: const Icon(Icons.refresh_rounded),
                         label: const Text('Actualiser'),
@@ -3263,6 +3690,10 @@ class _DevicesSection extends StatelessWidget {
                       child: OutlinedButton.icon(
                         onPressed: () {
                           HapticFeedback.lightImpact();
+                          final tokenUi = _formatDeviceTokenForUi(appState.deviceToken);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Token: $tokenUi')),
+                          );
                         },
                         icon: const Icon(Icons.info_outline_rounded),
                         label: const Text('Détails'),
@@ -3331,7 +3762,9 @@ class _DevicesSection extends StatelessWidget {
 }
 
 class _ProfileSection extends StatelessWidget {
-  const _ProfileSection();
+  const _ProfileSection({required this.appState, required this.notifier});
+  final AppState appState;
+  final AppNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
@@ -3366,17 +3799,17 @@ class _ProfileSection extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              const Text(
-                'Utilisateur',
-                style: TextStyle(
-                  fontSize: 20,
+              Text(
+                appState.userEmail ?? 'Utilisateur',
+                style: const TextStyle(
+                  fontSize: 18,
                   fontWeight: FontWeight.bold,
                   color: Colors.black87,
                 ),
               ),
               const SizedBox(height: 4),
               Text(
-                'Compte Supabase',
+                appState.orgName ?? 'Compte Supabase',
                 style: TextStyle(
                   fontSize: 14,
                   color: Colors.grey.shade600,
@@ -3387,19 +3820,19 @@ class _ProfileSection extends StatelessWidget {
               _ProfileInfoTile(
                 icon: Icons.email_rounded,
                 label: 'Email',
-                value: 'Connecté via Supabase',
+                value: appState.userEmail ?? '—',
               ),
               const SizedBox(height: 12),
               _ProfileInfoTile(
                 icon: Icons.business_rounded,
                 label: 'Organisation',
-                value: 'Voir dashboard web',
+                value: appState.orgName ?? '—',
               ),
               const SizedBox(height: 12),
               _ProfileInfoTile(
                 icon: Icons.calendar_today_rounded,
                 label: 'Membre depuis',
-                value: 'Décembre 2025',
+                value: appState.memberSince == null ? '—' : _formatDateFr(appState.memberSince!),
               ),
             ],
           ),
@@ -3445,6 +3878,16 @@ class _ProfileSection extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _ActionButton(
+                icon: Icons.open_in_new_rounded,
+                label: 'Ouvrir le dashboard web',
+                onTap: () async {
+                  HapticFeedback.mediumImpact();
+                  final uri = Uri.parse('${AppConfig.webApiBaseUrl}/dashboard');
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                },
+              ),
+              const SizedBox(height: 12),
+              _ActionButton(
                 icon: Icons.info_outline_rounded,
                 label: 'À propos',
                 onTap: () {
@@ -3459,15 +3902,25 @@ class _ProfileSection extends StatelessWidget {
                     color: const Color(0xFF16A34A).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Text(
-                    'v1.0.0',
-                    style: TextStyle(
+                  child: Text(
+                    'v${appState.appVersion ?? '—'}',
+                    style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFF16A34A),
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
+              ),
+              const SizedBox(height: 12),
+              _ActionButton(
+                icon: Icons.refresh_rounded,
+                label: 'Actualiser mes infos',
+                onTap: () async {
+                  HapticFeedback.mediumImpact();
+                  await notifier.refreshAccountInfo();
+                  await notifier.refreshSubscription(silent: true);
+                },
               ),
             ],
           ),
