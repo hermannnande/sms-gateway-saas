@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useEffect } from 'react'
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: '📊' },
@@ -23,6 +24,18 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // Tracking: ping une fois quand l'utilisateur ouvre le dashboard
+  useEffect(() => {
+    try {
+      fetch('/api/track/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        keepalive: true,
+      }).catch(() => {})
+    } catch (_) {}
+  }, [])
 
   return (
     <div className="min-h-screen bg-background">

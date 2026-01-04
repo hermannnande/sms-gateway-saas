@@ -1,6 +1,6 @@
 {
   "latestVersion": "1.0.1+4",
-  "apkUrl": "https://smsenvoie.com/sms-gateway.apk",
+  "apkUrl": "https://smsenvoie.com/app/download?source=update",
   "notes": "Amélioration: synchro réseau plus robuste (retry + timeout) et proxy sur smsenvoie.com. Correctif: l'app reste connectée après fermeture."
 }
 

@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+import { createServiceClient } from '@/lib/supabase/service'
+import { sha256Hex } from '@/lib/device-token'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,6 +32,25 @@ export async function POST(req: Request) {
     if (!device_token || !message_id || !status) {
       return NextResponse.json({ ok: false, error: 'device_token, message_id, status requis' }, { status: 400 })
     }
+
+    // Tracking (non-bloquant)
+    try {
+      const service = createServiceClient()
+      const tokenHash = sha256Hex(device_token)
+      const { data: device } = await service
+        .from('devices')
+        .select('id, org_id')
+        .eq('token_hash', tokenHash)
+        .maybeSingle()
+
+      await service.from('analytics_events').insert({
+        event_type: 'device_update_status',
+        platform: 'mobile',
+        org_id: device?.org_id ?? null,
+        device_id: device?.id ?? null,
+        meta: { token_hash: tokenHash, message_id, status },
+      })
+    } catch (_) {}
 
     const { url, anonKey } = getSupabaseEnv()
     const upstream = await fetch(`${url}/functions/v1/update_message_status`, {
