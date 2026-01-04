@@ -20,6 +20,7 @@ interface User {
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
@@ -32,6 +33,7 @@ export default function AdminUsersPage() {
 
   async function loadUsers() {
     setLoading(true)
+    setError(null)
     const qs = new URLSearchParams({
       search,
       status: statusFilter,
@@ -39,13 +41,14 @@ export default function AdminUsersPage() {
       pageSize: String(pageSize),
     })
     const res = await fetch(`/api/admin/users?${qs.toString()}`, { cache: 'no-store' })
-    const json = await res.json()
+    const json = await res.json().catch(() => ({}))
     if (json?.ok) {
       setUsers(json.items || [])
       setTotalCount(json.total || 0)
     } else {
       setUsers([])
       setTotalCount(0)
+      setError(json?.error || `Erreur API (${res.status})`)
     }
     setLoading(false)
   }
@@ -116,6 +119,12 @@ export default function AdminUsersPage() {
           },
         ]}
       />
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-800 text-sm">
+          {error}
+        </div>
+      )}
 
       <AdminTable data={users} columns={columns} loading={loading} emptyMessage="Aucun utilisateur trouvé" />
 

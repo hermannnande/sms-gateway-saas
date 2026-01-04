@@ -20,6 +20,7 @@ interface Subscription {
 export default function AdminSubscriptionsPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('active')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
@@ -31,19 +32,21 @@ export default function AdminSubscriptionsPage() {
 
   async function loadSubscriptions() {
     setLoading(true)
+    setError(null)
     const qs = new URLSearchParams({
       status: statusFilter,
       page: String(currentPage - 1),
       pageSize: String(pageSize),
     })
     const res = await fetch(`/api/admin/subscriptions?${qs.toString()}`, { cache: 'no-store' })
-    const json = await res.json()
+    const json = await res.json().catch(() => ({}))
     if (json?.ok) {
       setSubscriptions(json.items || [])
       setTotalCount(json.total || 0)
     } else {
       setSubscriptions([])
       setTotalCount(0)
+      setError(json?.error || `Erreur API (${res.status})`)
     }
     setLoading(false)
   }
@@ -104,6 +107,12 @@ export default function AdminSubscriptionsPage() {
           },
         ]}
       />
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-800 text-sm">
+          {error}
+        </div>
+      )}
 
       <AdminTable
         data={subscriptions}

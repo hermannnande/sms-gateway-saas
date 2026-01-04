@@ -18,6 +18,7 @@ interface Event {
 export default function AdminEventsPage() {
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
@@ -29,19 +30,21 @@ export default function AdminEventsPage() {
 
   async function loadEvents() {
     setLoading(true)
+    setError(null)
     const qs = new URLSearchParams({
       type: typeFilter,
       page: String(currentPage - 1),
       pageSize: String(pageSize),
     })
     const res = await fetch(`/api/admin/events?${qs.toString()}`, { cache: 'no-store' })
-    const json = await res.json()
+    const json = await res.json().catch(() => ({}))
     if (json?.ok) {
       setEvents(json.items || [])
       setTotalCount(json.total || 0)
     } else {
       setEvents([])
       setTotalCount(0)
+      setError(json?.error || `Erreur API (${res.status})`)
     }
     setLoading(false)
   }
@@ -98,6 +101,12 @@ export default function AdminEventsPage() {
           },
         ]}
       />
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-800 text-sm">
+          {error}
+        </div>
+      )}
 
       <AdminTable data={events} columns={columns} loading={loading} emptyMessage="Aucun événement trouvé" />
 

@@ -21,6 +21,7 @@ interface Org {
 export default function AdminOrgsPage() {
   const [orgs, setOrgs] = useState<Org[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
@@ -32,19 +33,21 @@ export default function AdminOrgsPage() {
 
   async function loadOrgs() {
     setLoading(true)
+    setError(null)
     const qs = new URLSearchParams({
       search,
       page: String(currentPage - 1),
       pageSize: String(pageSize),
     })
     const res = await fetch(`/api/admin/orgs?${qs.toString()}`, { cache: 'no-store' })
-    const json = await res.json()
+    const json = await res.json().catch(() => ({}))
     if (json?.ok) {
       setOrgs(json.items || [])
       setTotalCount(json.total || 0)
     } else {
       setOrgs([])
       setTotalCount(0)
+      setError(json?.error || `Erreur API (${res.status})`)
     }
     setLoading(false)
   }
@@ -82,6 +85,12 @@ export default function AdminOrgsPage() {
       <PageHeader title="Organisations" description={`${totalCount} organisations actives`} />
 
       <Filters searchValue={search} onSearchChange={setSearch} searchPlaceholder="Rechercher par nom..." />
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-800 text-sm">
+          {error}
+        </div>
+      )}
 
       <AdminTable data={orgs} columns={columns} loading={loading} emptyMessage="Aucune organisation trouvée" />
 
