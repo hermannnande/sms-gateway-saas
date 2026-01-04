@@ -144,6 +144,20 @@ export default async function OnboardingPage() {
                     </ol>
                   </div>
                 </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <a
+                    href="/dashboard/devices"
+                    className="inline-flex items-center gap-2 px-5 py-3 bg-background border border-border rounded-lg font-semibold hover:bg-muted transition-all shadow-sm"
+                  >
+                    Ouvrir Appareils (QR)
+                  </a>
+                  <a
+                    href="/app/pair/new"
+                    className="inline-flex items-center gap-2 px-5 py-3 bg-muted text-foreground rounded-lg font-semibold hover:bg-muted/80 transition-all shadow-sm"
+                  >
+                    🔗 Lier mon appareil (1 clic)
+                  </a>
+                </div>
                 <div className="mt-4 flex items-start gap-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
                   <svg className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

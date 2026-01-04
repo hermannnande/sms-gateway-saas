@@ -1085,6 +1085,66 @@ class _PairingPageState extends ConsumerState<PairingPage>
     setState(() => _saving = false);
   }
 
+  Future<void> _pairOneClick() async {
+    if (_saving) return;
+    HapticFeedback.mediumImpact();
+
+    final nameController = TextEditingController(text: 'Mon téléphone');
+    final deviceName = await showDialog<String?>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Nom de l’appareil'),
+          content: TextField(
+            controller: nameController,
+            decoration: const InputDecoration(
+              hintText: 'Ex: Samsung Galaxy A20',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(nameController.text.trim()),
+              child: const Text('Continuer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    final name = (deviceName ?? '').trim();
+    if (name.isEmpty) return;
+
+    setState(() => _saving = true);
+    try {
+      // 1) Créer le device côté serveur (Edge Function device_pair) via proxy web
+      final token = await ref.read(deviceServiceProvider).createDeviceToken(deviceName: name);
+      // 2) Sauver le token localement (déclenche l’affichage HomePage)
+      await ref.read(appProvider.notifier).saveToken(token);
+      // 3) Optionnel: heartbeat pour récupérer nom/plan tout de suite
+      await ref.read(appProvider.notifier).refreshDeviceStatus(silent: true);
+      ref.read(appProvider.notifier).setLastStatus('Appareil lié automatiquement ✅');
+      HapticFeedback.lightImpact();
+    } catch (e) {
+      HapticFeedback.heavyImpact();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appProvider);
@@ -1257,6 +1317,13 @@ class _PairingPageState extends ConsumerState<PairingPage>
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: TextButton(
+                        onPressed: _saving ? null : _pairOneClick,
+                        child: const Text('🔗 Lier automatiquement (1 clic)'),
+                      ),
                     ),
                     
                     // Status Message

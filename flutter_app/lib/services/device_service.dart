@@ -18,17 +18,25 @@ class DeviceService {
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
-  Future<Map<String, dynamic>> _postProxy(String path, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> _postProxy(
+    String path,
+    Map<String, dynamic> body, {
+    Map<String, String>? headers,
+  }) async {
     final uri = _proxyUri(path);
     const maxAttempts = 3;
     const baseTimeout = Duration(seconds: 12);
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        final mergedHeaders = <String, String>{
+          'Content-Type': 'application/json',
+          ...?headers,
+        };
         final res = await _http
             .post(
               uri,
-              headers: const {'Content-Type': 'application/json'},
+              headers: mergedHeaders,
               body: jsonEncode(body),
             )
             .timeout(baseTimeout);
@@ -130,6 +138,25 @@ class DeviceService {
       _logger.w('Proxy heartbeat failed: $e');
       throw _humanizeNetworkError(e);
     }
+  }
+
+  /// Crée un device côté serveur (Edge Function `device_pair`) et renvoie un `device_token`.
+  /// Utilise le proxy Web (smsenvoie.com) pour éviter les soucis DNS vers Supabase chez certains opérateurs.
+  Future<String> createDeviceToken({required String deviceName}) async {
+    final accessToken = client.auth.currentSession?.accessToken;
+    if (accessToken == null || accessToken.trim().isEmpty) {
+      throw Exception('Non authentifié. Connectez-vous d’abord.');
+    }
+    final payload = await _postProxy(
+      '/api/mobile/device-pair',
+      {'device_name': deviceName},
+      headers: {'Authorization': 'Bearer $accessToken'},
+    );
+    final token = payload['device_token']?.toString().trim() ?? '';
+    if (token.isEmpty) {
+      throw Exception(payload['error']?.toString() ?? 'device_token manquant');
+    }
+    return token;
   }
 
   /// Send heartbeat to keep device status "online"

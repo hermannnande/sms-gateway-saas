@@ -140,6 +140,12 @@ export default async function DashboardPage() {
                 >
                   Connecter un appareil
                 </a>
+                <a
+                  href="/app/pair/new"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-muted text-foreground rounded-lg text-sm font-semibold hover:bg-muted/80 transition-all"
+                >
+                  🔗 Lier mon appareil (1 clic)
+                </a>
               </div>
             </div>
           </div>
