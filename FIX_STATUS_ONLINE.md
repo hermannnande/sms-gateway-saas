@@ -246,3 +246,7 @@ N'envoyer le heartbeat que si l'app est au premier plan (utiliser `WidgetsBindin
 
 **DÉPLOIE LA EDGE FUNCTION ET REBUILD L'APK MAINTENANT ! 🚀**
 
+
+
+
+

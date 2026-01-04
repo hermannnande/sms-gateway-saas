@@ -17,6 +17,11 @@ BEGIN
   END IF;
 END $$;
 
+-- Postgres ne permet pas de changer le type de retour (RETURNS TABLE / OUT params)
+-- d'une fonction existante via CREATE OR REPLACE.
+-- Il faut donc DROP la fonction, puis la recréer.
+DROP FUNCTION IF EXISTS public.claim_messages_atomic(uuid, uuid, text, integer, text[]);
+
 -- Update claim_messages_atomic to apply campaign SIM choice:
 -- - If campaign.sim_slot_index is set, store "slot:<index>" into messages.sim_subscription_id.
 -- - Also return sim_subscription_id so the mobile app can route SMS to the right SIM.

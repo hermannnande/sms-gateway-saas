@@ -261,3 +261,7 @@ USING (
 
 **EXÉCUTE LE SQL MAINTENANT pour que la suppression fonctionne ! 🚀**
 
+
+
+
+

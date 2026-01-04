@@ -259,3 +259,7 @@ setDevices(devices.filter(d => d.id !== deviceId))
 
 **La page Appareils est maintenant complète et prête pour la production ! 🚀**
 
+
+
+
+

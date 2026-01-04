@@ -349,3 +349,4 @@ Si tu rencontres un problème, regarde les fichiers :
 
 **COMMENCE PAR L'ACTION 1 (SQL RLS Fix) - C'EST LA PLUS IMPORTANTE ! 🚀**
 
+

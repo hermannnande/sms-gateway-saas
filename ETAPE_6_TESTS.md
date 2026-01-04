@@ -281,3 +281,7 @@ Paramètres > Apps > SMS Gateway > Batterie > Non optimisé
 
 
 
+
+
+
+

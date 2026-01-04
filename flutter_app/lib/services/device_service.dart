@@ -56,42 +56,9 @@ class DeviceService {
       final rawList = (payload['messages'] as List?) ?? [];
       return rawList.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
     } catch (e) {
-      // Fallback Supabase direct (au cas où Vercel est inaccessible)
-      _logger.w('Proxy claim-messages failed, fallback to Supabase: $e');
-      Future<FunctionResponse> call() {
-        return client.functions.invoke(
-          'claim_messages',
-          body: {
-            'device_token': deviceToken,
-            'limit': limit,
-            'sim_subscription_id': simSubscriptionId,
-          },
-        );
-      }
-
-      FunctionResponse response;
-      try {
-        response = await call();
-      } on FunctionException catch (e) {
-        if (e.status == 503 && (e.details?['code'] == 'BOOT_ERROR')) {
-          await Future<void>.delayed(const Duration(seconds: 2));
-          response = await call();
-        } else {
-          throw _humanizeNetworkError(e);
-        }
-      } catch (e) {
-        throw _humanizeNetworkError(e);
-      }
-
-      if (response.status >= 400) {
-        throw Exception('claim_messages a échoué (${response.status})');
-      }
-
-      final data = response.data;
-      if (data == null) return [];
-      final payload2 = data is String ? jsonDecode(data) : data;
-      final rawList2 = (payload2['messages'] as List?) ?? [];
-      return rawList2.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
+      // Client-proof: on évite de retomber sur Supabase direct (souvent bloqué par DNS/VPN).
+      _logger.w('Proxy claim-messages failed: $e');
+      throw Exception('Problème réseau: impossible de contacter le serveur. Réessaie dans 10 secondes.');
     }
   }
 
@@ -110,24 +77,9 @@ class DeviceService {
       });
       return;
     } catch (e) {
-      _logger.w('Proxy update-message-status failed, fallback to Supabase: $e');
-      try {
-        final response = await client.functions.invoke(
-          'update_message_status',
-          body: {
-            'device_token': deviceToken,
-            'message_id': message.id,
-            'status': success ? 'sent' : 'failed',
-            'error': error,
-          },
-        );
-        if (response.status >= 400) {
-          _logger.w('update_message_status failed: ${response.status} / ${response.data}');
-          throw Exception('update_message_status a échoué (${response.status})');
-        }
-      } catch (e2) {
-        throw _humanizeNetworkError(e2);
-      }
+      _logger.w('Proxy update-message-status failed: $e');
+      // Non bloquant: on ne veut pas interrompre l'envoi local si juste le reporting échoue
+      return;
     }
   }
 
@@ -135,44 +87,16 @@ class DeviceService {
     try {
       return await _postProxy('/api/mobile/heartbeat', {'device_token': deviceToken});
     } catch (e) {
-      _logger.w('Proxy heartbeat failed, fallback to Supabase: $e');
-      try {
-        final response = await client.functions.invoke(
-          'heartbeat',
-          body: {
-            'device_token': deviceToken,
-          },
-        );
-        if (response.status >= 400) {
-          throw Exception('heartbeat a échoué (${response.status}): ${response.data}');
-        }
-        final data = response.data;
-        final payload = data is String ? jsonDecode(data) : data;
-        if (payload is! Map<String, dynamic>) {
-          throw Exception('heartbeat: réponse inattendue');
-        }
-        return payload;
-      } catch (e2) {
-        throw _humanizeNetworkError(e2);
-      }
+      _logger.w('Proxy heartbeat failed: $e');
+      throw Exception('Heartbeat échoué: problème réseau.');
     }
   }
 
   /// Send heartbeat to keep device status "online"
   Future<void> sendHeartbeat({required String deviceToken}) async {
     try {
-      final response = await client.functions.invoke(
-        'heartbeat',
-        body: {
-          'device_token': deviceToken,
-        },
-      );
-
-      if (response.status >= 400) {
-        _logger.w('heartbeat failed: ${response.status} / ${response.data}');
-      } else {
-        _logger.d('Heartbeat sent successfully');
-      }
+      // Toujours via proxy (client-proof).
+      await sendHeartbeatVerbose(deviceToken: deviceToken);
     } catch (e) {
       _logger.w('Heartbeat error (ignored): $e');
       // Ignore heartbeat errors (non-critical)

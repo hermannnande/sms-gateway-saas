@@ -325,3 +325,7 @@ _StatusCard(
 **Version**: 1.0.0  
 **Auteur**: Claude Sonnet 4.5 (Design) + GPT Codex Max (Code)
 
+
+
+
+

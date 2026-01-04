@@ -71,3 +71,7 @@ L'application vous demandera les permissions suivantes :
 
 **© 2025 SMS Gateway SaaS - Application officielle**
 
+
+
+
+
