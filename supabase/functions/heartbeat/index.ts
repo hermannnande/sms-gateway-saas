@@ -65,12 +65,31 @@ Deno.serve(async (req) => {
 
     console.log('Heartbeat from device:', device.id, device.name)
 
+    // Plan effectif (ignore anciens plans masqués)
+    const { data: plan } = await supabaseClient.rpc('get_effective_plan', { p_org_id: device.org_id })
+    const smsQuota = typeof plan?.sms_quota_month === 'number' ? plan.sms_quota_month : 0
+    const now = new Date()
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    const { count: usedCount } = await supabaseClient
+      .from('messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('org_id', device.org_id)
+      .eq('status', 'sent')
+      .gte('sent_at', monthStart)
+    const used = usedCount || 0
+    const quotaRemaining = smsQuota === 0 ? null : Math.max(smsQuota - used, 0)
+
     return new Response(
       JSON.stringify({
         success: true,
         device_id: device.id,
         device_name: device.name,
         timestamp: new Date().toISOString(),
+        plan: plan
+          ? { id: plan.id, name: plan.name, max_devices: plan.max_devices, sms_quota_month: plan.sms_quota_month }
+          : null,
+        sms_used_this_month: used,
+        quota_remaining: quotaRemaining,
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

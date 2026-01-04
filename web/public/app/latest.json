@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+6",
+  "latestVersion": "1.0.1+7",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Nouveau: envoi en arrière-plan avec notification (progression, pause/stop). + Connexion appareil en 1 clic depuis le Web."
+  "notes": "Fix: plan gratuit respecté (100 SMS) + affichage abonnement corrigé dans l’app. + Quota calculé sur les SMS réellement envoyés."
 }
 
 

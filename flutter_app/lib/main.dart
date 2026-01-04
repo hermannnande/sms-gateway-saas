@@ -377,22 +377,35 @@ class AppNotifier extends Notifier<AppState> {
       final orgId = state.orgId;
       if (orgId == null) return;
 
+      // Prefer heartbeat data (includes effective plan ignoring legacy hidden plans)
+      final token = state.deviceToken;
+      if (token != null && token.isNotEmpty) {
+        final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(deviceToken: token);
+        final plan = payload['plan'];
+        if (plan is Map) {
+          state = state.copyWith(
+            planName: plan['name']?.toString(),
+            planSmsQuotaMonth: _safeParseInt(plan['sms_quota_month']),
+            planMaxDevices: _safeParseInt(plan['max_devices']),
+            subscriptionPeriodEnd: null,
+          );
+          return;
+        }
+      }
+
+      // Fallback: use visible plan from subscriptions (may still miss if none)
       final row = await supabase
           .from('subscriptions')
-          .select('current_period_end, plans(name, sms_quota_month, max_devices)')
+          .select('current_period_end, plans(name, sms_quota_month, max_devices, is_visible)')
           .eq('org_id', orgId)
           .eq('status', 'active')
-          .order('current_period_end', ascending: false)
+          .eq('plans.is_visible', true)
+          .order('created_at', ascending: false)
           .limit(1)
           .maybeSingle();
 
       if (row == null) {
-        state = state.copyWith(
-          planName: null,
-          planSmsQuotaMonth: null,
-          planMaxDevices: null,
-          subscriptionPeriodEnd: null,
-        );
+        state = state.copyWith(planName: 'Gratuit', planSmsQuotaMonth: 100, planMaxDevices: 1, subscriptionPeriodEnd: null);
         return;
       }
 
@@ -416,9 +429,13 @@ class AppNotifier extends Notifier<AppState> {
       final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(deviceToken: token);
       final name = payload['device_name']?.toString();
       final ts = payload['timestamp']?.toString();
+      final plan = payload['plan'];
       state = state.copyWith(
         deviceName: name,
         lastHeartbeatAt: ts == null ? DateTime.now() : (DateTime.tryParse(ts) ?? DateTime.now()),
+        planName: plan is Map ? plan['name']?.toString() : state.planName,
+        planSmsQuotaMonth: plan is Map ? _safeParseInt(plan['sms_quota_month']) : state.planSmsQuotaMonth,
+        planMaxDevices: plan is Map ? _safeParseInt(plan['max_devices']) : state.planMaxDevices,
       );
     } catch (e) {
       if (!silent) setLastStatus('Statut appareil: $e');

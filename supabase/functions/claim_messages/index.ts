@@ -65,72 +65,25 @@ Deno.serve(async (req) => {
       })
       .eq('id', device_id)
 
-    // Abonnement effectif (actif, non expiré) sinon fallback plan gratuit.
-    // Convention: plans.sms_quota_month = 0 => illimité
-    let subscription: any = null
-    let plan: any = null
-
-    const { data: subRow } = await supabaseClient
-      .from('subscriptions')
-      .select('*, plans(*)')
-      .eq('org_id', org_id)
-      .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // Plan effectif (ignore anciens plans masqués). Convention: sms_quota_month = 0 => illimité
+    const { data: plan, error: planErr } = await supabaseClient.rpc('get_effective_plan', {
+      p_org_id: org_id,
+    })
+    if (planErr || !plan) {
+      throw new Error('Plan introuvable (migrations billing manquantes)')
+    }
 
     const now = new Date()
-    if (subRow) {
-      const end = subRow.current_period_end ? new Date(subRow.current_period_end) : null
-      if (end && now > end) {
-        await supabaseClient.from('subscriptions').update({ status: 'expired' }).eq('id', subRow.id)
-      } else {
-        subscription = subRow
-        plan = subRow.plans
-      }
-    }
-
-    // Auto-heal: si aucun abonnement actif => activer le plan gratuit (non expirant)
-    if (!subscription || !plan) {
-      const { data: freePlan } = await supabaseClient
-        .from('plans')
-        .select('*')
-        .eq('id', 'free')
-        .maybeSingle()
-
-      if (!freePlan) {
-        throw new Error('Plan gratuit manquant: exécutez les migrations billing')
-      }
-
-      const { data: createdSub, error: createSubErr } = await supabaseClient
-        .from('subscriptions')
-        .insert({
-          org_id,
-          plan_id: 'free',
-          status: 'active',
-          current_period_start: new Date().toISOString(),
-          current_period_end: null,
-          provider: 'free',
-        })
-        .select('*, plans(*)')
-        .single()
-
-      if (createSubErr || !createdSub) {
-        throw new Error('Impossible d’activer le plan gratuit')
-      }
-
-      subscription = createdSub
-      plan = createdSub.plans
-    }
-
     const smsQuota = typeof plan?.sms_quota_month === 'number' ? plan.sms_quota_month : 0
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 
+    // Quota basé sur les SMS réellement envoyés (sent_at) pour permettre de créer une campagne > 100
     const { count: usedCount } = await supabaseClient
       .from('messages')
       .select('*', { count: 'exact', head: true })
       .eq('org_id', org_id)
-      .gte('created_at', monthStart)
+      .eq('status', 'sent')
+      .gte('sent_at', monthStart)
 
     const used = usedCount || 0
     const quotaRemaining = smsQuota === 0 ? null : Math.max(smsQuota - used, 0)
