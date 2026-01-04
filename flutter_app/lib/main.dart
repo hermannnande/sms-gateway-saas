@@ -292,7 +292,13 @@ class AppNotifier extends Notifier<AppState> {
     }
   }
 
-  Future<void> refreshOutboxHistory({bool silent = true}) async {
+  Future<void> refreshOutboxHistory({
+    bool silent = true,
+    String? status,
+    String? phoneQuery,
+    int page = 0,
+    int pageSize = 20,
+  }) async {
     try {
       final supabase = ref.read(supabaseClientProvider);
       final user = supabase.auth.currentUser;
@@ -305,14 +311,23 @@ class AppNotifier extends Notifier<AppState> {
       final orgId = state.orgId;
       if (orgId == null) return;
 
-      final rows = await supabase
+      var q = supabase
           .from('messages')
           .select(
             'id,to_phone_e164,body_final,status,created_at,sent_at,try_count,last_error,sim_subscription_id',
           )
-          .eq('org_id', orgId)
-          .order('created_at', ascending: false)
-          .limit(50);
+          .eq('org_id', orgId);
+
+      if (status != null && status.isNotEmpty && status != 'all') {
+        q = q.eq('status', status);
+      }
+      if (phoneQuery != null && phoneQuery.trim().isNotEmpty) {
+        q = q.ilike('to_phone_e164', '%${phoneQuery.trim()}%');
+      }
+
+      final from = page * pageSize;
+      final to = from + pageSize - 1;
+      final rows = await q.order('created_at', ascending: false).range(from, to);
 
       final list = (rows as List? ?? const [])
           .whereType<Map>()
@@ -3195,13 +3210,53 @@ class _MessagesSection extends StatelessWidget {
   }
 }
 
-class _HistorySection extends StatelessWidget {
+class _HistorySection extends StatefulWidget {
   const _HistorySection({required this.appState, required this.notifier});
   final AppState appState;
   final AppNotifier notifier;
 
   @override
+  State<_HistorySection> createState() => _HistorySectionState();
+}
+
+class _HistorySectionState extends State<_HistorySection> {
+  String _status = 'all';
+  String _query = '';
+  int _page = 0;
+  static const int _pageSize = 20;
+  bool _loading = false;
+
+  Future<void> _load({bool resetPage = false}) async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      if (resetPage) _page = 0;
+    });
+    try {
+      await widget.notifier.refreshOutboxHistory(
+        silent: false,
+        status: _status,
+        phoneQuery: _query,
+        page: _page,
+        pageSize: _pageSize,
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Charger la page 1 si vide
+    if (widget.appState.outboxHistory.isEmpty) {
+      scheduleMicrotask(() => _load());
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final list = widget.appState.outboxHistory;
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
@@ -3219,7 +3274,65 @@ class _HistorySection extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
-              if (appState.outboxHistory.isEmpty)
+
+              // Filtres
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search_rounded),
+                        hintText: 'Rechercher un numéro (+225...)',
+                        isDense: true,
+                      ),
+                      onChanged: (v) {
+                        _query = v;
+                      },
+                      onSubmitted: (_) => _load(resetPage: true),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  DropdownButton<String>(
+                    value: _status,
+                    items: const [
+                      DropdownMenuItem(value: 'all', child: Text('Tous')),
+                      DropdownMenuItem(value: 'queued', child: Text('En attente')),
+                      DropdownMenuItem(value: 'sending', child: Text('En cours')),
+                      DropdownMenuItem(value: 'sent', child: Text('Envoyé')),
+                      DropdownMenuItem(value: 'failed', child: Text('Échec')),
+                      DropdownMenuItem(value: 'skipped_optout', child: Text('Opt-out')),
+                    ],
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _status = v);
+                      _load(resetPage: true);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _loading ? null : () => _load(resetPage: true),
+                      icon: _loading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh_rounded),
+                      label: Text(_loading ? 'Chargement…' : 'Actualiser'),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // Liste
+              if (list.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: Text(
@@ -3228,7 +3341,7 @@ class _HistorySection extends StatelessWidget {
                   ),
                 )
               else
-                ...appState.outboxHistory.map((m) {
+                ...list.map((m) {
                   Color badgeBg;
                   Color badgeText;
                   String label;
@@ -3276,7 +3389,10 @@ class _HistorySection extends StatelessWidget {
                                 color: badgeBg,
                                 borderRadius: BorderRadius.circular(18),
                               ),
-                              child: Text(label, style: TextStyle(color: badgeText, fontWeight: FontWeight.w700, fontSize: 12)),
+                              child: Text(
+                                label,
+                                style: TextStyle(color: badgeText, fontWeight: FontWeight.w700, fontSize: 12),
+                              ),
                             ),
                           ],
                         ),
@@ -3295,6 +3411,36 @@ class _HistorySection extends StatelessWidget {
                     ),
                   );
                 }),
+
+              const SizedBox(height: 16),
+
+              // Pagination (simple)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: (_loading || _page == 0)
+                        ? null
+                        : () {
+                            setState(() => _page -= 1);
+                            _load();
+                          },
+                    icon: const Icon(Icons.chevron_left_rounded),
+                    label: const Text('Précédent'),
+                  ),
+                  Text('Page ${_page + 1}', style: TextStyle(color: Colors.grey.shade700)),
+                  OutlinedButton.icon(
+                    onPressed: (_loading || list.length < _pageSize)
+                        ? null
+                        : () {
+                            setState(() => _page += 1);
+                            _load();
+                          },
+                    icon: const Icon(Icons.chevron_right_rounded),
+                    label: const Text('Suivant'),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -3856,24 +4002,33 @@ class _ProfileSection extends StatelessWidget {
               _ActionButton(
                 icon: Icons.lock_reset_rounded,
                 label: 'Changer le mot de passe',
-                onTap: () {
+                onTap: () async {
                   HapticFeedback.mediumImpact();
+                  await _showChangePasswordDialog(context, notifier);
                 },
               ),
               const SizedBox(height: 12),
               _ActionButton(
                 icon: Icons.settings_rounded,
                 label: 'Paramètres',
-                onTap: () {
+                onTap: () async {
                   HapticFeedback.lightImpact();
+                  await _showSettingsSheet(context);
                 },
               ),
               const SizedBox(height: 12),
               _ActionButton(
                 icon: Icons.help_outline_rounded,
                 label: 'Aide & Support',
-                onTap: () {
+                onTap: () async {
                   HapticFeedback.lightImpact();
+                  final uri = Uri.parse('https://wa.me/2250778030075?text=Bonjour%20Support%20SMS%20Gateway');
+                  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  if (!ok && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Impossible d’ouvrir WhatsApp.')),
+                    );
+                  }
                 },
               ),
               const SizedBox(height: 12),
@@ -3920,6 +4075,14 @@ class _ProfileSection extends StatelessWidget {
                   HapticFeedback.mediumImpact();
                   await notifier.refreshAccountInfo();
                   await notifier.refreshSubscription(silent: true);
+                  await notifier.refreshInboxMessages(silent: true);
+                  await notifier.refreshOutboxHistory(silent: true);
+                  await notifier.refreshDeviceStatus(silent: true);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Infos actualisées ✅')),
+                    );
+                  }
                 },
               ),
             ],
@@ -3928,6 +4091,138 @@ class _ProfileSection extends StatelessWidget {
       ],
     );
   }
+}
+
+Future<void> _showSettingsSheet(BuildContext context) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (ctx) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Paramètres',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Les réglages avancés arrivent bientôt (notifications, auto-sync, thèmes, etc.).',
+              style: TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Fermer'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<void> _showChangePasswordDialog(BuildContext context, AppNotifier notifier) async {
+  final c1 = TextEditingController();
+  final c2 = TextEditingController();
+  bool saving = false;
+  String? error;
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setState) {
+          Future<void> submit() async {
+            final p1 = c1.text;
+            final p2 = c2.text;
+            if (p1.length < 8) {
+              setState(() => error = 'Mot de passe trop court (min 8 caractères).');
+              return;
+            }
+            if (p1 != p2) {
+              setState(() => error = 'Les mots de passe ne correspondent pas.');
+              return;
+            }
+
+            setState(() {
+              saving = true;
+              error = null;
+            });
+            try {
+              final supabase = notifier.ref.read(supabaseClientProvider);
+              if (supabase.auth.currentUser == null) {
+                throw Exception('Non connecté');
+              }
+              await supabase.auth.updateUser(UserAttributes(password: p1));
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Mot de passe mis à jour ✅')),
+                );
+              }
+            } catch (e) {
+              setState(() => error = e.toString());
+            } finally {
+              setState(() => saving = false);
+            }
+          }
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Changer le mot de passe'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: c1,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Nouveau mot de passe',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: c2,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirmer le mot de passe',
+                  ),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(error!, style: TextStyle(color: Colors.red.shade700)),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: saving ? null : () => Navigator.of(ctx).pop(),
+                child: const Text('Annuler'),
+              ),
+              FilledButton(
+                onPressed: saving ? null : submit,
+                child: Text(saving ? 'Mise à jour…' : 'Valider'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
 }
 
 class _ProfileInfoTile extends StatelessWidget {
