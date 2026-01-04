@@ -1,6 +1,8 @@
 package com.smsgateway.app
 
+import android.content.Context
 import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,6 +40,30 @@ class MainActivity : FlutterActivity() {
                         } catch (e: Exception) {
                             Log.e("SMS_GATEWAY", "Send SMS failed", e)
                             result.error("SMS_ERROR", e.localizedMessage ?: "Erreur inconnue", null)
+                        }
+                    }
+
+                    "getSimCards" -> {
+                        try {
+                            val subMgr =
+                                getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+                            val infos = subMgr.activeSubscriptionInfoList ?: emptyList()
+
+                            val sims = infos.map { info ->
+                                mapOf(
+                                    "subscriptionId" to info.subscriptionId,
+                                    "simSlotIndex" to info.simSlotIndex,
+                                    "displayName" to (info.displayName?.toString() ?: ""),
+                                    "carrierName" to (info.carrierName?.toString() ?: "")
+                                )
+                            }
+                            result.success(sims)
+                        } catch (e: SecurityException) {
+                            Log.w("SMS_GATEWAY", "getSimCards permission denied", e)
+                            result.success(emptyList<Map<String, Any>>())
+                        } catch (e: Exception) {
+                            Log.e("SMS_GATEWAY", "getSimCards failed", e)
+                            result.success(emptyList<Map<String, Any>>())
                         }
                     }
 

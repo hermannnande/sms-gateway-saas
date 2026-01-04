@@ -1,5 +1,7 @@
 'use client'
 
+import { useMemo, useState } from 'react'
+
 type Campaign = {
   id: string
   name: string
@@ -12,6 +14,18 @@ type Campaign = {
 }
 
 export function CampaignsList({ campaigns }: { campaigns: Campaign[] }) {
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState<'all' | Campaign['status']>('all')
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return campaigns.filter((c) => {
+      const matchQuery = !q || c.name.toLowerCase().includes(q)
+      const matchStatus = status === 'all' || c.status === status
+      return matchQuery && matchStatus
+    })
+  }, [campaigns, query, status])
+
   if (campaigns.length === 0) {
     return (
       <div className="glass-card rounded-3xl p-16 text-center border-4 border-black/10 dark:border-white/10 animate-fade-in">
@@ -51,8 +65,40 @@ export function CampaignsList({ campaigns }: { campaigns: Campaign[] }) {
   }
 
   return (
-    <div className="grid gap-4">
-      {campaigns.map((campaign) => (
+    <div className="space-y-4">
+      {/* Filtres */}
+      <div className="glass-card rounded-2xl p-4 border-4 border-black/10 dark:border-white/10">
+        <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Rechercher une campagne…"
+              className="w-full sm:w-[320px] px-4 py-2.5 rounded-xl border-2 border-black/10 dark:border-white/10 bg-white/60 dark:bg-black/20 outline-none focus:ring-2 focus:ring-primary/40"
+            />
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as any)}
+              className="w-full sm:w-[220px] px-4 py-2.5 rounded-xl border-2 border-black/10 dark:border-white/10 bg-white/60 dark:bg-black/20 outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              <option value="all">Tous les statuts</option>
+              <option value="draft">Brouillon</option>
+              <option value="queued">En file</option>
+              <option value="running">En cours</option>
+              <option value="paused">Pause</option>
+              <option value="done">Terminée</option>
+              <option value="canceled">Annulée</option>
+            </select>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            <span className="font-semibold text-foreground">{filtered.length}</span> résultat(s)
+          </div>
+        </div>
+      </div>
+
+      {/* Liste */}
+      <div className="grid gap-4">
+      {filtered.map((campaign) => (
         <a
           key={campaign.id}
           href={`/dashboard/campaigns/${campaign.id}`}
@@ -95,6 +141,7 @@ export function CampaignsList({ campaigns }: { campaigns: Campaign[] }) {
           </div>
         </a>
       ))}
+      </div>
     </div>
   )
 }
