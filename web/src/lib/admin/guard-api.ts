@@ -12,18 +12,15 @@ export async function requireAdminApi() {
     return { ok: false as const, response: NextResponse.json({ error: 'Non authentifié' }, { status: 401 }) }
   }
 
-  const service = createServiceClient()
-  const { data: adminRow } = await service
-    .from('admin_users')
-    .select('role')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (!adminRow?.role) {
+  const { data: role, error } = await supabase.rpc('admin_role')
+  if (error || !role) {
     return { ok: false as const, response: NextResponse.json({ error: 'Accès refusé' }, { status: 403 }) }
   }
 
-  return { ok: true as const, userId: user.id, role: adminRow.role as 'SUPER_ADMIN' | 'SUPPORT', service }
+  // NOTE: On garde le client service pour les requêtes globales (si configuré).
+  // Si la clé service-role est absente, les routes qui en dépendent renverront une erreur claire.
+  const service = createServiceClient()
+  return { ok: true as const, userId: user.id, role: role as 'SUPER_ADMIN' | 'SUPPORT', service }
 }
 
 
