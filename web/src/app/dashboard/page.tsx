@@ -83,6 +83,60 @@ export default async function DashboardPage() {
         </div>
       </div>
 
+      {/* Getting Started - Only show if no devices */}
+      {stats.devices === 0 && (
+        <div className="bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border-2 border-primary/20 rounded-xl p-6 shadow-sm">
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0 w-12 h-12 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xl">
+              🚀
+            </div>
+            <div className="flex-1">
+              <h2 className="text-xl font-bold mb-2">Commencer en 3 étapes</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                Configurez votre premier appareil pour commencer à envoyer des SMS
+              </p>
+              <div className="grid md:grid-cols-3 gap-3 mb-4">
+                <div className="flex items-center gap-2 p-3 bg-background rounded-lg">
+                  <span className="flex-shrink-0 w-6 h-6 bg-primary/20 text-primary rounded-full flex items-center justify-center text-xs font-bold">
+                    1
+                  </span>
+                  <span className="text-sm font-medium">Télécharger l&apos;APK</span>
+                </div>
+                <div className="flex items-center gap-2 p-3 bg-background rounded-lg">
+                  <span className="flex-shrink-0 w-6 h-6 bg-primary/20 text-primary rounded-full flex items-center justify-center text-xs font-bold">
+                    2
+                  </span>
+                  <span className="text-sm font-medium">Scanner l&apos;appareil</span>
+                </div>
+                <div className="flex items-center gap-2 p-3 bg-background rounded-lg">
+                  <span className="flex-shrink-0 w-6 h-6 bg-primary/20 text-primary rounded-full flex items-center justify-center text-xs font-bold">
+                    3
+                  </span>
+                  <span className="text-sm font-medium">Envoyer des SMS</span>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <a
+                  href="/onboarding"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-all"
+                >
+                  Voir le guide complet
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </a>
+                <a
+                  href="/dashboard/devices"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-background border border-border rounded-lg text-sm font-medium hover:bg-muted transition-all"
+                >
+                  Connecter un appareil
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Subscription status */}
       {subscription ? (
         <div className="glass-card rounded-2xl p-4 border-2 border-green-500/20 bg-green-500/5 animate-fade-in">
