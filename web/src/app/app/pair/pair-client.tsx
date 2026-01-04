@@ -1,15 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 
-export default function PairClient({
-  deviceToken,
-  deviceName,
-}: {
-  deviceToken: string
-  deviceName: string
-}) {
+export default function PairClient() {
   const [error, setError] = useState<string | null>(null)
+  const searchParams = useSearchParams()
+  const deviceToken = (searchParams.get('device_token') ?? '').trim()
+  const deviceName = (searchParams.get('device_name') ?? '').trim()
 
   const deepLink = useMemo(() => {
     const qs = new URLSearchParams()
