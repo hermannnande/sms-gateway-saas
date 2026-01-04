@@ -4,6 +4,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
+import 'package:smsgateway_flutter/config.dart';
 
 class AppUpdateInfo {
   AppUpdateInfo({
@@ -21,32 +22,22 @@ class AppUpdateInfo {
 
 class AppUpdateService {
   static const _ignoredKey = 'ignored_update_version';
-
-  /// Repo GitHub (public). On utilise Releases pour une mise à jour "semi-auto".
-  static const String repoOwner = 'hermannnande';
-  static const String repoName = 'sms-gateway-saas';
-
-  static Uri _latestReleaseApi() => Uri.parse(
-        'https://api.github.com/repos/$repoOwner/$repoName/releases/latest',
-      );
+  static Uri _manifestUrl() => Uri.parse(AppConfig.appUpdateManifestUrl);
 
   Future<AppUpdateInfo?> checkForUpdate() async {
     final current = await _currentVersion();
     final ignored = await _ignoredVersion();
 
-    final release = await _fetchLatestRelease();
-    if (release == null) return null;
+    final latest = await _fetchLatestManifest();
+    if (latest == null) return null;
 
     // Si l'utilisateur a ignoré exactement cette version, ne rien afficher
-    if (ignored != null && ignored == release.latestVersion) return null;
+    if (ignored != null && ignored == latest.latestVersion) return null;
 
-    // Comparaison simple : si différent => update dispo.
-    // (On peut renforcer plus tard avec un parsing semver+build.)
-    final a = _normalizeVersion(release.latestVersion);
-    final b = _normalizeVersion(current);
-    if (a == b) return null;
+    // Comparaison robuste: version + buildNumber (ex: v1.0.1+3)
+    if (!_isNewer(latest.latestVersion, current)) return null;
 
-    return release;
+    return latest;
   }
 
   Future<void> ignoreVersion(String version) async {
@@ -85,46 +76,91 @@ class AppUpdateService {
     return prefs.getString(_ignoredKey);
   }
 
-  Future<AppUpdateInfo?> _fetchLatestRelease() async {
+  Future<AppUpdateInfo?> _fetchLatestManifest() async {
     final res = await http.get(
-      _latestReleaseApi(),
-      headers: {
-        'Accept': 'application/vnd.github+json',
-      },
+      _manifestUrl(),
+      headers: {'Accept': 'application/json'},
     );
     if (res.statusCode >= 400) return null;
 
     final json = jsonDecode(res.body) as Map<String, dynamic>;
-    final tag = (json['tag_name'] as String?)?.trim();
-    final htmlUrl = (json['html_url'] as String?)?.trim();
-    final body = (json['body'] as String?)?.trim();
-    final assets = (json['assets'] as List?) ?? const [];
+    final latestVersionRaw = (json['latestVersion'] as String?)?.trim();
+    final notes = (json['notes'] as String?)?.trim();
+    final apkUrlRaw = (json['apkUrl'] as String?)?.trim();
 
-    // Chercher un asset APK
-    String? apkUrl;
-    for (final a in assets) {
-      final m = a as Map<String, dynamic>;
-      final name = (m['name'] as String?) ?? '';
-      final download = (m['browser_download_url'] as String?) ?? '';
-      if (name.toLowerCase().endsWith('.apk') && download.isNotEmpty) {
-        apkUrl = download;
-        break;
-      }
-    }
-
-    if (tag == null || tag.isEmpty || htmlUrl == null || htmlUrl.isEmpty || apkUrl == null) {
+    if (latestVersionRaw == null ||
+        latestVersionRaw.isEmpty ||
+        apkUrlRaw == null ||
+        apkUrlRaw.isEmpty) {
       return null;
     }
 
-    // On normalise en "vX.Y.Z+N" si possible
-    final latestVersion = tag.startsWith('v') ? tag : 'v$tag';
+    final latestVersion =
+        latestVersionRaw.startsWith('v') ? latestVersionRaw : 'v$latestVersionRaw';
+
+    final apkUrl =
+        apkUrlRaw.startsWith('http') ? apkUrlRaw : AppConfig.apkDownloadUrl;
 
     return AppUpdateInfo(
       latestVersion: latestVersion,
       apkUrl: apkUrl,
-      releaseUrl: htmlUrl,
-      notes: body?.isEmpty == true ? null : body,
+      releaseUrl: AppConfig.appUpdateHelpUrl,
+      notes: notes?.isEmpty == true ? null : notes,
     );
+  }
+
+  bool _isNewer(String latest, String current) {
+    final a = _parseVersion(latest);
+    final b = _parseVersion(current);
+    if (a == null || b == null) {
+      // Fallback simple si parsing échoue: différent => proposer update
+      return _normalizeVersion(latest) != _normalizeVersion(current);
+    }
+    return a.compareTo(b) > 0;
+  }
+
+  _ParsedVersion? _parseVersion(String v) {
+    var s = v.trim();
+    if (s.startsWith('v')) s = s.substring(1);
+
+    final parts = s.split('+');
+    final base = parts.isNotEmpty ? parts[0] : s;
+    final build = parts.length > 1 ? int.tryParse(parts[1]) : 0;
+
+    final nums = base.split('.');
+    final major = nums.isNotEmpty ? int.tryParse(nums[0]) : null;
+    final minor = nums.length > 1 ? int.tryParse(nums[1]) : 0;
+    final patch = nums.length > 2 ? int.tryParse(nums[2]) : 0;
+
+    if (major == null) return null;
+    return _ParsedVersion(
+      major: major,
+      minor: minor ?? 0,
+      patch: patch ?? 0,
+      build: build ?? 0,
+    );
+  }
+}
+
+class _ParsedVersion implements Comparable<_ParsedVersion> {
+  const _ParsedVersion({
+    required this.major,
+    required this.minor,
+    required this.patch,
+    required this.build,
+  });
+
+  final int major;
+  final int minor;
+  final int patch;
+  final int build;
+
+  @override
+  int compareTo(_ParsedVersion other) {
+    if (major != other.major) return major.compareTo(other.major);
+    if (minor != other.minor) return minor.compareTo(other.minor);
+    if (patch != other.patch) return patch.compareTo(other.patch);
+    return build.compareTo(other.build);
   }
 }
 

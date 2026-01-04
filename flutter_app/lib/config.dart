@@ -12,5 +12,15 @@ class AppConfig {
 
   /// Limite de messages à réclamer par batch.
   static const claimBatchSize = 10;
+
+  /// URL du manifeste de mise à jour (public).
+  /// Format JSON: { "latestVersion": "1.0.1+3", "apkUrl": "https://.../sms-gateway.apk", "notes": "..." }
+  static const appUpdateManifestUrl = 'https://smsenvoie.com/app/latest.json';
+
+  /// URL directe de téléchargement APK (public).
+  static const apkDownloadUrl = 'https://smsenvoie.com/sms-gateway.apk';
+
+  /// Page d'aide (optionnel) liée à la mise à jour.
+  static const appUpdateHelpUrl = 'https://smsenvoie.com/onboarding';
 }
 

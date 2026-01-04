@@ -862,7 +862,7 @@ class _MyAppState extends ConsumerState<MyApp> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Une nouvelle version de l’app est disponible.',
+                    'Une nouvelle version de l’app est disponible.\nAndroid vous demandera de confirmer l’installation.',
                   ),
                   const SizedBox(height: 12),
                   if (update.notes != null && update.notes!.isNotEmpty) ...[
@@ -875,23 +875,23 @@ class _MyAppState extends ConsumerState<MyApp> {
             ),
             actions: [
               TextButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('Plus tard'),
+              ),
+              TextButton(
                 onPressed: () async {
                   await ref.read(appUpdateServiceProvider).ignoreVersion(update.latestVersion);
                   if (ctx.mounted) Navigator.of(ctx).pop();
                 },
-                child: const Text('Ignorer'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  await ref.read(appUpdateServiceProvider).openReleasePage(update.releaseUrl);
-                },
-                child: const Text('Détails'),
+                child: const Text('Ignorer cette version'),
               ),
               FilledButton(
                 onPressed: () async {
                   await ref.read(appUpdateServiceProvider).openApkDownload(update.apkUrl);
                 },
-                child: const Text('Télécharger'),
+                child: const Text('Mettre à jour'),
               ),
             ],
           );
