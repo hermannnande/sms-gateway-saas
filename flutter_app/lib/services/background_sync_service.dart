@@ -1,0 +1,356 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+
+import 'package:smsgateway_flutter/config.dart';
+import 'package:smsgateway_flutter/models/message.dart';
+
+class BackgroundSyncService {
+  static const int serviceId = 701;
+  static const String _pausedKey = 'bg_sync_paused';
+  static const String _enabledKey = 'bg_sync_enabled';
+
+  static Future<void> init() async {
+    FlutterForegroundTask.initCommunicationPort();
+
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'sms_gateway_sync',
+        channelName: 'SMS Gateway',
+        channelDescription: 'Synchronisation et envoi de SMS en arrière-plan.',
+        onlyAlertOnce: true,
+      ),
+      iosNotificationOptions: IOSNotificationOptions(
+        showNotification: false,
+        playSound: false,
+      ),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(8000),
+        autoRunOnBoot: false,
+        autoRunOnMyPackageReplaced: true,
+        allowWakeLock: true,
+        allowWifiLock: true,
+      ),
+    );
+  }
+
+  @pragma('vm:entry-point')
+  static void startCallback() {
+    FlutterForegroundTask.setTaskHandler(_SmsGatewayTaskHandler());
+  }
+
+  static Future<bool> isRunning() => FlutterForegroundTask.isRunningService;
+
+  static Future<bool> isEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_enabledKey) ?? false;
+  }
+
+  static Future<void> setEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_enabledKey, enabled);
+  }
+
+  static Future<bool> isPaused() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_pausedKey) ?? false;
+  }
+
+  static Future<void> setPaused(bool paused) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_pausedKey, paused);
+    // Update notification immediately if running.
+    if (await FlutterForegroundTask.isRunningService) {
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: paused ? '⏸️ Pause' : '✅ Actif (en attente)',
+        notificationButtons: [
+          NotificationButton(id: paused ? 'resume' : 'pause', text: paused ? 'Reprendre' : 'Pause'),
+          const NotificationButton(id: 'stop', text: 'Stop'),
+        ],
+      );
+    }
+  }
+
+  static Future<void> start() async {
+    // Android 13+: notification permission for foreground notification
+    final permission = await FlutterForegroundTask.checkNotificationPermission();
+    if (permission != NotificationPermission.granted) {
+      await FlutterForegroundTask.requestNotificationPermission();
+    }
+
+    if (await FlutterForegroundTask.isRunningService) {
+      await FlutterForegroundTask.restartService();
+      return;
+    }
+
+    await FlutterForegroundTask.startService(
+      serviceId: serviceId,
+      notificationTitle: 'SMS Gateway',
+      notificationText: '✅ Actif (en attente)',
+      notificationButtons: const [
+        NotificationButton(id: 'pause', text: 'Pause'),
+        NotificationButton(id: 'stop', text: 'Stop'),
+      ],
+      callback: startCallback,
+    );
+  }
+
+  static Future<void> stop() async {
+    await FlutterForegroundTask.stopService();
+  }
+}
+
+class _SmsGatewayTaskHandler extends TaskHandler {
+  static const _channel = MethodChannel('com.smsgateway.app/sms');
+  final _http = http.Client();
+  final _rng = Random();
+  bool _busy = false;
+
+  Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
+
+  Future<String?> _loadDeviceToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString('device_token');
+    if (v == null) return null;
+    return v.trim().isEmpty ? null : v.trim();
+  }
+
+  Future<bool> _isPaused() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(BackgroundSyncService._pausedKey) ?? false;
+  }
+
+  Future<List<Map<String, dynamic>>> _getSimCards() async {
+    try {
+      final raw = await _channel.invokeMethod('getSimCards');
+      final list = (raw as List? ?? const []).whereType<Map>().map((e) {
+        final m = Map<String, dynamic>.from(e);
+        return m;
+      }).toList();
+      return list;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  int? _pickSubscriptionId(Message msg, List<Map<String, dynamic>> sims) {
+    if (msg.simSubscriptionId != null) return msg.simSubscriptionId;
+    if (msg.simSlotIndex == null) return null;
+    for (final s in sims) {
+      final slot = s['simSlotIndex'];
+      if (slot is int && slot == msg.simSlotIndex) {
+        final sub = s['subscriptionId'];
+        if (sub is int) return sub;
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> _postJson(Uri uri, Map<String, dynamic> body) async {
+    const maxAttempts = 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        final res = await _http
+            .post(
+              uri,
+              headers: const {'Content-Type': 'application/json'},
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 12));
+        final decoded = jsonDecode(res.body.isEmpty ? '{}' : res.body);
+        if (decoded is Map<String, dynamic>) {
+          if (res.statusCode >= 400) {
+            throw Exception(decoded['error']?.toString() ?? 'Erreur serveur (${res.statusCode})');
+          }
+          return decoded;
+        }
+        throw Exception('Réponse serveur inattendue');
+      } catch (e) {
+        if (attempt >= maxAttempts) rethrow;
+        await Future.delayed(Duration(milliseconds: 400 * (1 << (attempt - 1)) + _rng.nextInt(250)));
+      }
+    }
+    throw Exception('Erreur réseau');
+  }
+
+  Future<List<Message>> _claimMessages(String deviceToken) async {
+    final payload = await _postJson(
+      _proxyUri('/api/mobile/claim-messages'),
+      {'device_token': deviceToken, 'limit': AppConfig.claimBatchSize, 'sim_subscription_id': null},
+    );
+    final rawList = (payload['messages'] as List?) ?? const [];
+    return rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
+  }
+
+  Future<void> _updateStatus(String deviceToken, Message msg, bool success, String? error) async {
+    try {
+      await _postJson(
+        _proxyUri('/api/mobile/update-message-status'),
+        {
+          'device_token': deviceToken,
+          'message_id': msg.id,
+          'status': success ? 'sent' : 'failed',
+          'error': error,
+        },
+      );
+    } catch (_) {
+      // non-bloquant
+    }
+  }
+
+  String _progressBar(int done, int total) {
+    if (total <= 0) return '';
+    final width = 10;
+    final filled = ((done / total) * width).clamp(0, width).floor();
+    return '[${'█' * filled}${'░' * (width - filled)}]';
+  }
+
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    await FlutterForegroundTask.updateService(
+      notificationTitle: 'SMS Gateway',
+      notificationText: '✅ Actif (en attente)',
+      notificationButtons: const [
+        NotificationButton(id: 'pause', text: 'Pause'),
+        NotificationButton(id: 'stop', text: 'Stop'),
+      ],
+    );
+  }
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {
+    // Run async without blocking the event loop
+    unawaited(_tick());
+  }
+
+  Future<void> _tick() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final paused = await _isPaused();
+      if (paused) {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText: '⏸️ Pause',
+          notificationButtons: const [
+            NotificationButton(id: 'resume', text: 'Reprendre'),
+            NotificationButton(id: 'stop', text: 'Stop'),
+          ],
+        );
+        return;
+      }
+
+      final token = await _loadDeviceToken();
+      if (token == null) {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText: '⚠️ Aucun appareil jumelé',
+          notificationButtons: const [
+            NotificationButton(id: 'stop', text: 'Stop'),
+          ],
+        );
+        return;
+      }
+
+      final messages = await _claimMessages(token);
+      if (messages.isEmpty) {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText: '✅ Actif (en attente)',
+          notificationButtons: const [
+            NotificationButton(id: 'pause', text: 'Pause'),
+            NotificationButton(id: 'stop', text: 'Stop'),
+          ],
+        );
+        return;
+      }
+
+      final sims = await _getSimCards();
+      final total = messages.length;
+      var done = 0;
+
+      for (final msg in messages) {
+        // Check pause mid-batch
+        if (await _isPaused()) break;
+
+        done++;
+        final remain = total - done;
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'Envoi SMS en cours',
+          notificationText: '${_progressBar(done, total)} $done/$total • reste $remain',
+          notificationButtons: const [
+            NotificationButton(id: 'pause', text: 'Pause'),
+            NotificationButton(id: 'stop', text: 'Stop'),
+          ],
+        );
+
+        try {
+          final subscriptionId = _pickSubscriptionId(msg, sims);
+          await _channel.invokeMethod('sendSms', {
+            'to': msg.to,
+            'body': msg.content,
+            'subscriptionId': subscriptionId,
+          });
+          await _updateStatus(token, msg, true, null);
+        } catch (e) {
+          await _updateStatus(token, msg, false, e.toString());
+        }
+      }
+
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: '✅ Envoi terminé ($done/$total)',
+        notificationButtons: const [
+          NotificationButton(id: 'pause', text: 'Pause'),
+          NotificationButton(id: 'stop', text: 'Stop'),
+        ],
+      );
+    } catch (e) {
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: 'Erreur sync: ${e.toString()}',
+        notificationButtons: const [
+          NotificationButton(id: 'stop', text: 'Stop'),
+        ],
+      );
+    } finally {
+      _busy = false;
+    }
+  }
+
+  @override
+  void onNotificationButtonPressed(String id) {
+    unawaited(_handleButton(id));
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    // Cleanup
+    _http.close();
+  }
+
+  Future<void> _handleButton(String id) async {
+    if (id == 'pause') {
+      await BackgroundSyncService.setPaused(true);
+      return;
+    }
+    if (id == 'resume') {
+      await BackgroundSyncService.setPaused(false);
+      return;
+    }
+    if (id == 'stop') {
+      await BackgroundSyncService.setPaused(false);
+      await BackgroundSyncService.setEnabled(false);
+      await FlutterForegroundTask.stopService();
+      return;
+    }
+  }
+}
+
+

@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+5",
+  "latestVersion": "1.0.1+6",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Nouveau: connexion appareil en 1 clic depuis le Web (lien sous le QR). Amélioration: synchro réseau plus robuste + session persistante."
+  "notes": "Nouveau: envoi en arrière-plan avec notification (progression, pause/stop). + Connexion appareil en 1 clic depuis le Web."
 }
 
 

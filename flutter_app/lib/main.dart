@@ -19,7 +19,9 @@ import 'package:smsgateway_flutter/services/app_update_service.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/auth_session_storage.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
+import 'package:smsgateway_flutter/services/background_sync_service.dart';
 import 'package:supabase/supabase.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 /// Providers (dépendances partagées)
 final loggerProvider = Provider<Logger>((_) => Logger());
@@ -648,6 +650,8 @@ class AppNotifier extends Notifier<AppState> {
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Foreground task communication port
+  FlutterForegroundTask.initCommunicationPort();
   runApp(const ProviderScope(child: MyApp()));
 }
 
@@ -717,6 +721,15 @@ class _MyAppState extends ConsumerState<MyApp> {
     super.initState();
     scheduleMicrotask(() => ref.read(appProvider.notifier).init());
     scheduleMicrotask(_initDeepLinks);
+    // Init foreground service infra (background sending)
+    scheduleMicrotask(() async {
+      await BackgroundSyncService.init();
+      // Auto-start if enabled previously
+      final enabled = await BackgroundSyncService.isEnabled();
+      if (enabled) {
+        await BackgroundSyncService.start();
+      }
+    });
   }
 
   Future<void> _initDeepLinks() async {
@@ -4185,34 +4198,122 @@ Future<void> _showSettingsSheet(BuildContext context) async {
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
     builder: (ctx) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Paramètres',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Les réglages avancés arrivent bientôt (notifications, auto-sync, thèmes, etc.).',
-              style: TextStyle(color: Colors.black54),
-            ),
-            const SizedBox(height: 16),
-            Row(
+      return StatefulBuilder(
+        builder: (ctx, setState) {
+          bool loading = false;
+          bool enabled = false;
+          bool paused = false;
+
+          Future<void> load() async {
+            final e = await BackgroundSyncService.isEnabled();
+            final p = await BackgroundSyncService.isPaused();
+            setState(() {
+              enabled = e;
+              paused = p;
+            });
+          }
+
+          // Load once
+          scheduleMicrotask(load);
+
+          Future<void> toggleEnabled(bool v) async {
+            setState(() => loading = true);
+            await BackgroundSyncService.setEnabled(v);
+            if (v) {
+              await BackgroundSyncService.setPaused(false);
+              await BackgroundSyncService.start();
+            } else {
+              await BackgroundSyncService.stop();
+            }
+            await load();
+            setState(() => loading = false);
+          }
+
+          Future<void> togglePause() async {
+            setState(() => loading = true);
+            await BackgroundSyncService.setPaused(!paused);
+            await load();
+            setState(() => loading = false);
+          }
+
+          Future<void> stop() async {
+            setState(() => loading = true);
+            await BackgroundSyncService.setPaused(false);
+            await BackgroundSyncService.setEnabled(false);
+            await BackgroundSyncService.stop();
+            await load();
+            setState(() => loading = false);
+          }
+
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('Fermer'),
+                const Text(
+                  'Paramètres',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Envoi en arrière-plan (Android)\n'
+                  'Active une notification permanente pour continuer l’envoi même si tu quittes l’app.',
+                  style: TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 14),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Continuer en arrière-plan'),
+                  subtitle: const Text('Recommandé pour envoyer sans interruption'),
+                  value: enabled,
+                  onChanged: loading ? null : toggleEnabled,
+                ),
+                if (enabled) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: loading ? null : togglePause,
+                          icon: Icon(paused ? Icons.play_arrow_rounded : Icons.pause_rounded),
+                          label: Text(paused ? 'Reprendre' : 'Pause'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: loading ? null : stop,
+                          icon: const Icon(Icons.stop_rounded),
+                          label: const Text('Arrêter'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red.shade700,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 10),
+                  Text(
+                    paused ? 'Statut: en pause' : 'Statut: actif',
+                    style: TextStyle(color: paused ? Colors.orange.shade700 : Colors.green.shade700),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('Fermer'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
+          );
+        },
       );
     },
   );
