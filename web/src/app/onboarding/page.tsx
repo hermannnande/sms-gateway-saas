@@ -84,8 +84,8 @@ export default async function OnboardingPage() {
                 </p>
                 <div className="flex flex-wrap gap-3">
                   <a
-                    href="https://github.com/hermannnande/sms-gateway-saas/releases/latest/download/sms-gateway.apk"
-                    download
+                    href="/sms-gateway.apk"
+                    download="sms-gateway.apk"
                     className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition-all shadow-sm hover:shadow-md"
                   >
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
