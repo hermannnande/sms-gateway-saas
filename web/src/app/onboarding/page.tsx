@@ -41,8 +41,8 @@ export default async function OnboardingPage() {
               Vous êtes prêt à envoyer des SMS ! 🚀
             </p>
             <p className="text-muted-foreground text-lg">
-              La plateforme est accessible en <span className="font-bold text-primary">mode développement</span>.<br/>
-              Pour déployer en production, choisissez un plan.
+              Votre compte est activé avec le <span className="font-bold text-primary">plan Gratuit</span>.<br/>
+              <span className="font-bold">1 appareil</span> + <span className="font-bold">100 SMS offerts</span> pour démarrer.
             </p>
           </div>
           
@@ -82,7 +82,7 @@ export default async function OnboardingPage() {
               className="px-8 py-4 bg-white dark:bg-black text-foreground rounded-xl font-bold text-lg shadow-brutal border-4 border-black dark:border-white hover:translate-x-[4px] hover:translate-y-[4px] hover:shadow-none transition-all duration-200 flex items-center justify-center gap-2"
             >
               <span className="text-2xl">💳</span>
-              Voir les plans
+              Passer à un abonnement
             </a>
           </div>
         </div>

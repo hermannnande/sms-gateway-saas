@@ -27,7 +27,9 @@ export default async function DashboardPage() {
       .select('*, plans(*)')
       .eq('org_id', orgMember.org_id)
       .eq('status', 'active')
-      .single()
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
     subscription = sub
   }
@@ -81,30 +83,43 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Subscription status - Non bloquant */}
+      {/* Subscription status */}
       {subscription ? (
         <div className="glass-card rounded-2xl p-4 border-2 border-green-500/20 bg-green-500/5 animate-fade-in">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-2xl">✅</span>
-            <span className="text-green-700 dark:text-green-400">
-              <span className="font-bold">{subscription.plans?.name}</span> actif jusqu'au {new Date(subscription.current_period_end).toLocaleDateString('fr-FR')}
-            </span>
-          </div>
-        </div>
-      ) : (
-        <div className="glass-card rounded-2xl p-4 border-2 border-blue-500/20 bg-blue-500/5 animate-fade-in">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-2xl">💡</span>
-              <span className="text-muted-foreground">
-                Mode <span className="font-bold text-blue-600">développement</span> - Aucun abonnement requis
+              <span className="text-2xl">✅</span>
+              <span className="text-green-700 dark:text-green-400">
+                Plan <span className="font-bold">{subscription.plans?.name}</span>{' '}
+                {subscription.current_period_end ? (
+                  <>actif jusqu&apos;au {new Date(subscription.current_period_end).toLocaleDateString('fr-FR')}</>
+                ) : (
+                  <>actif</>
+                )}
               </span>
             </div>
             <a
               href="/billing/plans"
               className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
             >
-              Voir les plans
+              Gérer l&apos;abonnement
+            </a>
+          </div>
+        </div>
+      ) : (
+        <div className="glass-card rounded-2xl p-4 border-2 border-blue-500/20 bg-blue-500/5 animate-fade-in">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-2xl">🎁</span>
+              <span className="text-muted-foreground">
+                Plan <span className="font-bold text-blue-600">Gratuit</span> : 1 appareil + 100 SMS offerts
+              </span>
+            </div>
+            <a
+              href="/billing/plans"
+              className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
+            >
+              Passer à un abonnement
             </a>
           </div>
         </div>

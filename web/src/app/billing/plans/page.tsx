@@ -33,7 +33,9 @@ export default async function PlansPage() {
       .select('*, plans(*)')
       .eq('org_id', orgMember.org_id)
       .eq('status', 'active')
-      .single()
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
     currentSubscription = sub
   }
@@ -82,7 +84,7 @@ export default async function PlansPage() {
         )}
 
         {/* Plans grid */}
-        <div className="grid md:grid-cols-3 gap-8 max-w-7xl mx-auto">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-7xl mx-auto">
           {plans?.map((plan, index) => (
             <div
               key={plan.id}

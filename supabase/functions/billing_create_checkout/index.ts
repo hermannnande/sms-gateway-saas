@@ -1,15 +1,10 @@
 // Edge Function: billing_create_checkout
 // Créer un checkout Payfonte et retourner l'URL de paiement
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import { corsHeaders } from '../_shared/cors.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-serve(async (req) => {
+Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -62,6 +57,11 @@ serve(async (req) => {
       throw new Error('Plan non trouvé')
     }
 
+    // Interdire checkout sur plan gratuit
+    if (!plan.price_xof || plan.price_xof <= 0 || plan.id === 'free') {
+      throw new Error('Ce plan ne nécessite pas de paiement')
+    }
+
     // Calculate amount (Payfonte utilise la plus petite unité)
     // Pour XOF, pas de centimes, donc on utilise directement le montant
     const amount_minor = plan.price_xof
@@ -106,6 +106,7 @@ serve(async (req) => {
         phoneNumber: '',
         name: user.email?.split('@')[0] || 'User',
       },
+      description: `Abonnement: ${plan.name}`,
       redirectURL: `${appUrl}/billing/return?reference=${external_reference}`,
       webhook: `${Deno.env.get('SUPABASE_URL')}/functions/v1/billing_webhook`,
     }

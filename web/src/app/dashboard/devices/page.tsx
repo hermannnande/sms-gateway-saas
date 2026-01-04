@@ -74,7 +74,9 @@ export default async function DevicesPage({
         .select('*, plans(*)')
         .eq('org_id', orgIds[0])
         .eq('status', 'active')
-        .single()
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
     : { data: null }
 
   const maxDevices = subscription?.plans?.max_devices || 10
@@ -138,9 +140,9 @@ export default async function DevicesPage({
         </div>
       ) : (
         <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-center gap-3">
-          <div className="text-2xl">💡</div>
+          <div className="text-2xl">🎁</div>
           <p className="text-sm text-blue-800 dark:text-blue-400">
-            Mode développement : <span className="font-bold">{maxDevices}</span> appareil
+            Plan gratuit : <span className="font-bold">{maxDevices}</span> appareil
             {maxDevices > 1 ? 's' : ''} autorisé{maxDevices > 1 ? 's' : ''}
           </p>
         </div>

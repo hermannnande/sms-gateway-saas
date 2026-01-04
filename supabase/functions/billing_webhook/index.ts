@@ -2,11 +2,10 @@
 // Webhook Payfonte pour confirmer paiement
 // Vérifie signature HMAC SHA512
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
 import { crypto } from 'https://deno.land/std@0.168.0/crypto/mod.ts'
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   try {
     const rawBody = await req.text()
     const payload = JSON.parse(rawBody)
@@ -95,9 +94,16 @@ serve(async (req) => {
       const currentPeriodEnd = new Date()
       currentPeriodEnd.setDate(currentPeriodEnd.getDate() + 30)
 
+      // IMPORTANT: on force 1 seul abonnement ACTIF par org en expirant l'ancien.
+      await supabaseClient
+        .from('subscriptions')
+        .update({ status: 'expired', updated_at: new Date().toISOString() })
+        .eq('org_id', payment.org_id)
+        .eq('status', 'active')
+
       const { error: subError } = await supabaseClient
         .from('subscriptions')
-        .upsert({
+        .insert({
           org_id: payment.org_id,
           plan_id: payment.plan_id,
           status: 'active',

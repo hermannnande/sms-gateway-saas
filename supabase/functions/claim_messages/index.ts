@@ -65,92 +65,94 @@ Deno.serve(async (req) => {
       })
       .eq('id', device_id)
 
-    // Check active subscription
+    // Abonnement effectif (actif, non expiré) sinon fallback plan gratuit.
+    // Convention: plans.sms_quota_month = 0 => illimité
     let subscription: any = null
-    const { data: subRow, error: subError } = await supabaseClient
+    let plan: any = null
+
+    const { data: subRow } = await supabaseClient
       .from('subscriptions')
       .select('*, plans(*)')
       .eq('org_id', org_id)
       .eq('status', 'active')
-      .single()
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
-    if (!subError && subRow) {
-      subscription = subRow
-    } else {
-      // Auto-heal: create a TRIAL plan + active subscription if missing
-      // This avoids blocking first-time users (billing can be configured later).
-      const trialPlanId = 'trial'
+    const now = new Date()
+    if (subRow) {
+      const end = subRow.current_period_end ? new Date(subRow.current_period_end) : null
+      if (end && now > end) {
+        await supabaseClient.from('subscriptions').update({ status: 'expired' }).eq('id', subRow.id)
+      } else {
+        subscription = subRow
+        plan = subRow.plans
+      }
+    }
 
-      // Ensure plan exists
-      const { data: existingPlan } = await supabaseClient
+    // Auto-heal: si aucun abonnement actif => activer le plan gratuit (non expirant)
+    if (!subscription || !plan) {
+      const { data: freePlan } = await supabaseClient
         .from('plans')
-        .select('id')
-        .eq('id', trialPlanId)
+        .select('*')
+        .eq('id', 'free')
         .maybeSingle()
 
-      if (!existingPlan) {
-        await supabaseClient.from('plans').insert({
-          id: trialPlanId,
-          name: 'Essai (TRIAL)',
-          price_xof: 0,
-          sms_quota_month: 10000,
-          max_devices: 3,
-          rate_limit_per_min: 120,
-        })
+      if (!freePlan) {
+        throw new Error('Plan gratuit manquant: exécutez les migrations billing')
       }
-
-      const nowIso = new Date().toISOString()
-      const end = new Date()
-      end.setDate(end.getDate() + 14)
 
       const { data: createdSub, error: createSubErr } = await supabaseClient
         .from('subscriptions')
         .insert({
           org_id,
-          plan_id: trialPlanId,
+          plan_id: 'free',
           status: 'active',
-          current_period_start: nowIso,
-          current_period_end: end.toISOString(),
-          provider: 'trial',
+          current_period_start: new Date().toISOString(),
+          current_period_end: null,
+          provider: 'free',
         })
         .select('*, plans(*)')
         .single()
 
       if (createSubErr || !createdSub) {
-        throw new Error('Aucun abonnement actif')
+        throw new Error('Impossible d’activer le plan gratuit')
       }
 
       subscription = createdSub
-      console.log('Auto-created trial subscription for org:', org_id)
+      plan = createdSub.plans
     }
 
-    // Check subscription not expired
-    const now = new Date()
-    const periodEnd = new Date(subscription.current_period_end)
-    if (now > periodEnd) {
-      // Mark as expired
-      await supabaseClient
-        .from('subscriptions')
-        .update({ status: 'expired' })
-        .eq('id', subscription.id)
+    const smsQuota = typeof plan?.sms_quota_month === 'number' ? plan.sms_quota_month : 0
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 
-      throw new Error('Abonnement expiré')
-    }
-
-    // Check monthly quota
-    const periodStart = new Date(subscription.current_period_start)
-    
-    const { count: sentCount } = await supabaseClient
+    const { count: usedCount } = await supabaseClient
       .from('messages')
       .select('*', { count: 'exact', head: true })
       .eq('org_id', org_id)
-      .eq('status', 'sent')
-      .gte('sent_at', periodStart.toISOString())
+      .gte('created_at', monthStart)
 
-    const smsQuota = subscription.plans.sms_quota_month
+    const used = usedCount || 0
+    const quotaRemaining = smsQuota === 0 ? null : Math.max(smsQuota - used, 0)
 
-    if (sentCount && sentCount >= smsQuota) {
-      throw new Error(`Quota mensuel atteint: ${sentCount}/${smsQuota}`)
+    // Si quota atteint (plan gratuit), ne pas bloquer par erreur:
+    // on renvoie juste 0 messages à traiter.
+    if (smsQuota !== 0 && quotaRemaining !== null && quotaRemaining <= 0) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          messages: [],
+          count: 0,
+          plan: { id: plan.id, name: plan.name, max_devices: plan.max_devices, sms_quota_month: plan.sms_quota_month },
+          sms_used_this_month: used,
+          quota_remaining: 0,
+          campaign_running: false,
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        }
+      )
     }
 
     // Get optouts for this org
@@ -163,13 +165,16 @@ Deno.serve(async (req) => {
 
     // Claim messages atomically
     // Use SELECT FOR UPDATE to lock rows
+    const effectiveLimit =
+      smsQuota === 0 || quotaRemaining === null ? limit : Math.min(limit, quotaRemaining)
+
     const { data: messages, error: claimError } = await supabaseClient.rpc(
       'claim_messages_atomic',
       {
         p_org_id: org_id,
         p_device_id: device_id,
         p_sim_subscription_id: sim_subscription_id || null,
-        p_limit: limit,
+        p_limit: effectiveLimit,
         p_optout_phones: optoutPhones,
       }
     )
@@ -188,7 +193,9 @@ Deno.serve(async (req) => {
         success: true,
         messages: claimedMessages,
         count: claimedMessages.length,
-        quota_remaining: smsQuota - (sentCount || 0),
+        plan: { id: plan.id, name: plan.name, max_devices: plan.max_devices, sms_quota_month: plan.sms_quota_month },
+        sms_used_this_month: used,
+        quota_remaining: quotaRemaining,
         // infos campagne pour la file d'attente côté mobile (optionnel)
         campaign_running: true,
       }),

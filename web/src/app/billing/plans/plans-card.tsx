@@ -10,11 +10,14 @@ type Plan = {
   sms_quota_month: number
   max_devices: number
   rate_limit_per_min: number
+  features?: string[] | null
+  highlight?: boolean | null
 }
 
 export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showAllFeatures, setShowAllFeatures] = useState(false)
 
   async function handleSubscribe() {
     setLoading(true)
@@ -62,14 +65,24 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
     }
   }
 
-  const isPro = plan.name.toLowerCase().includes('pro') || plan.price_xof > 10000
+  const isPaid = plan.price_xof > 0 && plan.id !== 'free'
+  const isHighlighted = !!plan.highlight
+  const isPro = isHighlighted || plan.name.toLowerCase().includes('pro') || plan.price_xof >= 15900
+  const smsLabel = plan.sms_quota_month === 0 ? 'Illimité' : plan.sms_quota_month.toLocaleString('fr-FR')
+  const priceLabel =
+    plan.price_xof === 0
+      ? 'Gratuit'
+      : `${plan.price_xof.toLocaleString('fr-FR')} F CFA`
+
+  const features = (plan.features || []).filter(Boolean)
+  const visibleFeatures = showAllFeatures ? features : features.slice(0, 6)
 
   return (
     <div 
       className={`glass-card rounded-3xl p-8 border-4 transition-all duration-300 ${
         isActive 
           ? 'border-primary/50 bg-primary/5 shadow-brutal-primary' 
-          : isPro
+          : isHighlighted
           ? 'border-accent/30 hover:border-accent hover-lift hover:shadow-brutal-accent'
           : 'border-black/10 dark:border-white/10 hover-lift'
       }`}
@@ -81,7 +94,7 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
             <span>⭐</span> Plan actuel
           </span>
         </div>
-      ) : isPro && (
+      ) : isHighlighted && (
         <div className="text-center mb-4">
           <span className="inline-flex items-center gap-2 bg-gradient-accent text-white px-4 py-2 rounded-xl text-sm font-bold border-3 border-black dark:border-white shadow-brutal-sm">
             <span>🚀</span> Populaire
@@ -98,11 +111,12 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
       <div className="text-center mb-8">
         <div className="flex items-baseline justify-center gap-2">
           <span className="text-5xl font-black text-primary">
-            {(plan.price_xof / 1000).toLocaleString('fr-FR')}k
+            {priceLabel}
           </span>
-          <span className="text-muted-foreground font-semibold">XOF</span>
         </div>
-        <p className="text-sm text-muted-foreground mt-1 font-medium">/mois</p>
+        <p className="text-sm text-muted-foreground mt-1 font-medium">
+          {plan.price_xof === 0 ? 'Plan de démarrage' : '/ mois'}
+        </p>
       </div>
 
       {/* Features */}
@@ -110,8 +124,12 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
         <li className="flex items-center gap-3 p-3 bg-background/50 rounded-xl border-2 border-border">
           <span className="text-2xl">📨</span>
           <div>
-            <p className="font-bold">{plan.sms_quota_month.toLocaleString()} SMS</p>
-            <p className="text-xs text-muted-foreground">par mois</p>
+            <p className="font-bold">
+              {smsLabel} SMS
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {plan.sms_quota_month === 0 ? 'sans limite' : 'par mois'}
+            </p>
           </div>
         </li>
         <li className="flex items-center gap-3 p-3 bg-background/50 rounded-xl border-2 border-border">
@@ -121,14 +139,35 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
             <p className="text-xs text-muted-foreground">maximum</p>
           </div>
         </li>
-        <li className="flex items-center gap-3 p-3 bg-background/50 rounded-xl border-2 border-border">
-          <span className="text-2xl">⚡</span>
-          <div>
-            <p className="font-bold">{plan.rate_limit_per_min} SMS/min</p>
-            <p className="text-xs text-muted-foreground">rate limit</p>
-          </div>
-        </li>
       </ul>
+
+      {features.length > 0 && (
+        <div className="mb-8">
+          <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground mb-3">
+            Fonctionnalités incluses
+          </p>
+          <ul className="space-y-2">
+            {visibleFeatures.map((f, idx) => (
+              <li key={idx} className="flex items-start gap-2 text-sm">
+                <span className="mt-0.5 text-primary">✓</span>
+                <span className="text-foreground">{f}</span>
+              </li>
+            ))}
+          </ul>
+          {features.length > 6 && (
+            <button
+              type="button"
+              onClick={() => setShowAllFeatures(!showAllFeatures)}
+              className="mt-3 text-sm font-bold text-primary hover:underline"
+            >
+              {showAllFeatures ? 'Voir moins' : 'Voir tout'}
+            </button>
+          )}
+          <p className="text-xs text-muted-foreground mt-3">
+            Certaines fonctionnalités seront activées progressivement.
+          </p>
+        </div>
+      )}
 
       {/* Error message */}
       {error && (
@@ -140,9 +179,11 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
       {/* CTA Button */}
       <button
         onClick={handleSubscribe}
-        disabled={loading || isActive}
+        disabled={loading || isActive || !isPaid}
         className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-200 flex items-center justify-center gap-2 ${
           isActive
+            ? 'bg-muted text-muted-foreground cursor-not-allowed border-3 border-border'
+            : !isPaid
             ? 'bg-muted text-muted-foreground cursor-not-allowed border-3 border-border'
             : isPro
             ? 'bg-gradient-accent text-white shadow-brutal-accent border-4 border-black hover:translate-x-[4px] hover:translate-y-[4px] hover:shadow-none'
@@ -156,6 +197,10 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
         ) : isActive ? (
           <>
             <span>✓</span> Actif
+          </>
+        ) : !isPaid ? (
+          <>
+            <span>✓</span> Inclus
           </>
         ) : (
           <>
