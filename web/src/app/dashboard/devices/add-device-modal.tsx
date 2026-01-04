@@ -140,6 +140,24 @@ export function AddDeviceModal({ onClose }: { onClose: () => void }) {
               <p className="text-xs text-muted-foreground mt-4">
                 Appareil: <strong>{deviceName}</strong>
               </p>
+
+              {/* One-click deep link (mobile) */}
+              {deviceData?.device_token && (
+                <div className="mt-4">
+                  <a
+                    href={`smsgateway://pair?device_token=${encodeURIComponent(
+                      deviceData.device_token,
+                    )}&device_name=${encodeURIComponent(deviceName)}`}
+                    className="inline-flex items-center justify-center gap-2 w-full px-4 py-3 bg-muted text-foreground rounded-lg font-semibold hover:bg-muted/80 transition-all"
+                  >
+                    <span className="text-lg">🔗</span>
+                    Ouvrir dans l&apos;app (1 clic)
+                  </a>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Astuce : si vous êtes sur le téléphone qui a déjà l&apos;app installée, cliquez sur ce bouton pour connecter l&apos;appareil sans scanner.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="bg-primary/5 p-4 rounded-lg mb-6">

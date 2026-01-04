@@ -1,10 +1,11 @@
-import 'dart:async';
 import 'dart:ui';
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:app_links/app_links.dart';
 import 'package:logger/logger.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -708,11 +709,56 @@ class MyApp extends ConsumerStatefulWidget {
 
 class _MyAppState extends ConsumerState<MyApp> {
   bool _checkedUpdate = false;
+  final AppLinks _appLinks = AppLinks();
+  StreamSubscription<Uri>? _linkSub;
 
   @override
   void initState() {
     super.initState();
     scheduleMicrotask(() => ref.read(appProvider.notifier).init());
+    scheduleMicrotask(_initDeepLinks);
+  }
+
+  Future<void> _initDeepLinks() async {
+    // Initial link (app cold start)
+    try {
+      final uri = await _appLinks.getInitialLink();
+      await _handleDeepLink(uri);
+    } catch (_) {}
+
+    // Ongoing links (app already open)
+    _linkSub?.cancel();
+    _linkSub = _appLinks.uriLinkStream.listen(
+      (uri) async {
+        await _handleDeepLink(uri);
+      },
+      onError: (_) {},
+    );
+  }
+
+  Future<void> _handleDeepLink(Uri? uri) async {
+    if (uri == null) return;
+    // Expected: smsgateway://pair?device_token=...&device_name=...
+    if (uri.scheme != 'smsgateway' || uri.host != 'pair') return;
+
+    final token = (uri.queryParameters['device_token'] ??
+            uri.queryParameters['token'] ??
+            '')
+        .trim();
+    if (token.isEmpty) return;
+
+    try {
+      await ref.read(appProvider.notifier).saveToken(token);
+      ref.read(appProvider.notifier).setLastStatus('Appareil connecté via lien ✅');
+    } catch (e) {
+      ref.read(appProvider.notifier).setLastStatus('Lien de connexion invalide: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _linkSub?.cancel();
+    super.dispose();
   }
 
   @override
