@@ -16,6 +16,7 @@ import 'package:smsgateway_flutter/models/outbox_message.dart';
 import 'package:smsgateway_flutter/services/device_service.dart';
 import 'package:smsgateway_flutter/services/app_update_service.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
+import 'package:smsgateway_flutter/services/auth_session_storage.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:supabase/supabase.dart';
 
@@ -30,6 +31,9 @@ final supabaseClientProvider = Provider<SupabaseClient>(
 );
 
 final tokenStorageProvider = Provider<TokenStorage>((_) => TokenStorage());
+
+final authSessionStorageProvider =
+    Provider<AuthSessionStorage>((_) => AuthSessionStorage());
 
 final deviceServiceProvider = Provider<DeviceService>(
   (ref) => DeviceService(
@@ -207,10 +211,30 @@ class AppNotifier extends Notifier<AppState> {
       } catch (_) {}
     }
 
-    // Vérifier s'il existe déjà une session supabase (auth)
+    // Restaurer la session Supabase (pour rester connecté même après fermeture de l'app)
     final supabase = ref.read(supabaseClientProvider);
-    final session = supabase.auth.currentSession;
-    final hasSession = session != null;
+    var session = supabase.auth.currentSession;
+    var hasSession = session != null;
+
+    if (!hasSession) {
+      final refreshToken =
+          await ref.read(authSessionStorageProvider).loadRefreshToken();
+      if (refreshToken != null) {
+        try {
+          final res = await supabase.auth.refreshSession(refreshToken);
+          session = res.session;
+          hasSession = session != null;
+          if (!hasSession) {
+            await ref.read(authSessionStorageProvider).clear();
+          }
+        } catch (e) {
+          // Token expiré/invalide => on nettoie et l'utilisateur devra se reconnecter.
+          await ref.read(authSessionStorageProvider).clear();
+          setLastStatus('Session expirée. Merci de vous reconnecter.');
+        }
+      }
+    }
+
     state = state.copyWith(
       loading: false,
       deviceToken: token,
@@ -464,6 +488,7 @@ class AppNotifier extends Notifier<AppState> {
   Future<void> signOutAccount() async {
     final supabase = ref.read(supabaseClientProvider);
     await supabase.auth.signOut();
+    await ref.read(authSessionStorageProvider).clear();
     // IMPORTANT: on garde le deviceToken pour éviter de devoir re-scanner l’appareil.
     state = state.copyWith(
       authenticated: false,
@@ -489,6 +514,10 @@ class AppNotifier extends Notifier<AppState> {
     if (res.session == null) {
       throw Exception('Connexion impossible');
     }
+    final refresh = res.session?.refreshToken;
+    if (refresh != null && refresh.isNotEmpty) {
+      await ref.read(authSessionStorageProvider).saveRefreshToken(refresh);
+    }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
     await refreshSubscription(silent: true);
@@ -505,6 +534,10 @@ class AppNotifier extends Notifier<AppState> {
       throw Exception('Session invalide (QR expiré ou incomplet). Régénérez le QR sur le web.')
 ;
     }
+    final refresh = res.session?.refreshToken;
+    if (refresh != null && refresh.isNotEmpty) {
+      await ref.read(authSessionStorageProvider).saveRefreshToken(refresh);
+    }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
     await refreshSubscription(silent: true);
@@ -519,6 +552,10 @@ class AppNotifier extends Notifier<AppState> {
     final res = await supabase.auth.refreshSession(refreshToken);
     if (res.session == null) {
       throw Exception('Session invalide. Régénérez le QR sur le web et réessayez.');
+    }
+    final refresh = res.session?.refreshToken;
+    if (refresh != null && refresh.isNotEmpty) {
+      await ref.read(authSessionStorageProvider).saveRefreshToken(refresh);
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
