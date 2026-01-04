@@ -1,61 +1,18 @@
 import { NextResponse } from 'next/server'
-import crypto from 'crypto'
-import { createServiceClient } from '@/lib/supabase/service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function sha256Hex(input: string) {
-  return crypto.createHash('sha256').update(input).digest('hex')
-}
-
-async function ensureActiveSubscription(supabase: ReturnType<typeof createServiceClient>, org_id: string) {
-  const { data: subRow, error: subError } = await supabase
-    .from('subscriptions')
-    .select('*, plans(*)')
-    .eq('org_id', org_id)
-    .eq('status', 'active')
-    .single()
-
-  if (!subError && subRow) return subRow
-
-  // Auto-trial
-  const trialPlanId = 'trial'
-  const { data: existingPlan } = await supabase.from('plans').select('id').eq('id', trialPlanId).maybeSingle()
-
-  if (!existingPlan) {
-    await supabase.from('plans').insert({
-      id: trialPlanId,
-      name: 'Essai (TRIAL)',
-      price_xof: 0,
-      sms_quota_month: 10000,
-      max_devices: 3,
-      rate_limit_per_min: 120,
-    })
-  }
-
-  const nowIso = new Date().toISOString()
-  const end = new Date()
-  end.setDate(end.getDate() + 14)
-
-  const { data: createdSub, error: createSubErr } = await supabase
-    .from('subscriptions')
-    .insert({
-      org_id,
-      plan_id: trialPlanId,
-      status: 'active',
-      current_period_start: nowIso,
-      current_period_end: end.toISOString(),
-      provider: 'trial',
-    })
-    .select('*, plans(*)')
-    .single()
-
-  if (createSubErr || !createdSub) throw new Error('Aucun abonnement actif')
-  return createdSub
+function getSupabaseEnv() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url) throw new Error('NEXT_PUBLIC_SUPABASE_URL manquant')
+  if (!anonKey) throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY manquant')
+  return { url, anonKey }
 }
 
 export async function GET() {
+  // Health check (proxy side)
   return NextResponse.json(
     { ok: true, service: 'mobile/claim-messages', ts: new Date().toISOString() },
     { headers: { 'Cache-Control': 'no-store' } },
@@ -73,76 +30,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'device_token requis', messages: [], count: 0 }, { status: 400 })
     }
 
-    const supabase = createServiceClient()
-    const token_hash = sha256Hex(device_token)
-
-    const { data: device, error: deviceError } = await supabase
-      .from('devices')
-      .select('id, org_id, name')
-      .eq('token_hash', token_hash)
-      .single()
-
-    if (deviceError || !device) {
-      return NextResponse.json({ ok: false, error: 'Device non trouvé ou token invalide', messages: [], count: 0 }, { status: 400 })
-    }
-
-    const org_id = device.org_id
-    const device_id = device.id
-
-    await supabase.from('devices').update({ last_seen_at: new Date().toISOString(), status: 'online' }).eq('id', device_id)
-
-    const subscription = await ensureActiveSubscription(supabase, org_id)
-
-    const now = new Date()
-    const periodEnd = new Date(subscription.current_period_end)
-    if (now > periodEnd) {
-      await supabase.from('subscriptions').update({ status: 'expired' }).eq('id', subscription.id)
-      return NextResponse.json({ ok: false, error: 'Abonnement expiré', messages: [], count: 0 }, { status: 400 })
-    }
-
-    const periodStart = new Date(subscription.current_period_start)
-    const { count: sentCount } = await supabase
-      .from('messages')
-      .select('*', { count: 'exact', head: true })
-      .eq('org_id', org_id)
-      .eq('status', 'sent')
-      .gte('sent_at', periodStart.toISOString())
-
-    const smsQuota = subscription.plans?.sms_quota_month ?? 0
-    if (sentCount && sentCount >= smsQuota) {
-      return NextResponse.json({ ok: false, error: `Quota mensuel atteint: ${sentCount}/${smsQuota}`, messages: [], count: 0 }, { status: 400 })
-    }
-
-    const { data: optouts } = await supabase.from('optouts').select('phone_e164').eq('org_id', org_id)
-    const optoutPhones = (optouts ?? []).map((o: any) => o.phone_e164)
-
-    const { data: messages, error: claimError } = await supabase.rpc('claim_messages_atomic', {
-      p_org_id: org_id,
-      p_device_id: device_id,
-      p_sim_subscription_id: sim_subscription_id,
-      p_limit: limit,
-      p_optout_phones: optoutPhones,
+    const { url, anonKey } = getSupabaseEnv()
+    const upstream = await fetch(`${url}/functions/v1/claim_messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({ device_token, limit, sim_subscription_id }),
     })
 
-    if (claimError) {
-      return NextResponse.json({ ok: false, error: claimError.message, messages: [], count: 0 }, { status: 500 })
+    const text = await upstream.text()
+    const headers = { 'Cache-Control': 'no-store' }
+    try {
+      const json = text ? JSON.parse(text) : {}
+      return NextResponse.json(json, { status: upstream.status, headers })
+    } catch (_) {
+      return new NextResponse(text, { status: upstream.status, headers })
     }
-
-    const claimedMessages = messages ?? []
-
-    return NextResponse.json(
-      {
-        ok: true,
-        success: true,
-        messages: claimedMessages,
-        count: claimedMessages.length,
-        quota_remaining: smsQuota - (sentCount || 0),
-      },
-      { headers: { 'Cache-Control': 'no-store' } },
-    )
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? 'Erreur', messages: [], count: 0 }, { status: 500 })
   }
 }
-
-

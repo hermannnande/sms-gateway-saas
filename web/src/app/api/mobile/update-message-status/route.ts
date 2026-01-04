@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server'
-import crypto from 'crypto'
-import { createServiceClient } from '@/lib/supabase/service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function sha256Hex(input: string) {
-  return crypto.createHash('sha256').update(input).digest('hex')
+function getSupabaseEnv() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url) throw new Error('NEXT_PUBLIC_SUPABASE_URL manquant')
+  if (!anonKey) throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY manquant')
+  return { url, anonKey }
 }
 
 export async function GET() {
+  // Health check (proxy side)
   return NextResponse.json(
     { ok: true, service: 'mobile/update-message-status', ts: new Date().toISOString() },
     { headers: { 'Cache-Control': 'no-store' } },
@@ -27,99 +30,27 @@ export async function POST(req: Request) {
     if (!device_token || !message_id || !status) {
       return NextResponse.json({ ok: false, error: 'device_token, message_id, status requis' }, { status: 400 })
     }
-    if (!['sent', 'failed'].includes(status)) {
-      return NextResponse.json({ ok: false, error: 'status doit être sent ou failed' }, { status: 400 })
+
+    const { url, anonKey } = getSupabaseEnv()
+    const upstream = await fetch(`${url}/functions/v1/update_message_status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({ device_token, message_id, status, error: errorMsg }),
+    })
+
+    const text = await upstream.text()
+    const headers = { 'Cache-Control': 'no-store' }
+    try {
+      const json = text ? JSON.parse(text) : {}
+      return NextResponse.json(json, { status: upstream.status, headers })
+    } catch (_) {
+      return new NextResponse(text, { status: upstream.status, headers })
     }
-
-    const supabase = createServiceClient()
-    const token_hash = sha256Hex(device_token)
-
-    const { data: device, error: deviceError } = await supabase
-      .from('devices')
-      .select('id, org_id')
-      .eq('token_hash', token_hash)
-      .single()
-    if (deviceError || !device) {
-      return NextResponse.json({ ok: false, error: 'Device non trouvé' }, { status: 400 })
-    }
-
-    const { data: message, error: msgError } = await supabase.from('messages').select('*').eq('id', message_id).single()
-    if (msgError || !message) {
-      return NextResponse.json({ ok: false, error: 'Message non trouvé' }, { status: 400 })
-    }
-    if (message.org_id !== device.org_id) {
-      return NextResponse.json({ ok: false, error: "Message n'appartient pas à cette org" }, { status: 403 })
-    }
-
-    if (status === 'sent') {
-      const { error: updateError } = await supabase
-        .from('messages')
-        .update({ status: 'sent', sent_at: new Date().toISOString() })
-        .eq('id', message_id)
-      if (updateError) {
-        return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 })
-      }
-
-      await supabase
-        .from('devices')
-        .update({ last_seen_at: new Date().toISOString(), status: 'online' })
-        .eq('id', device.id)
-
-      if (message.campaign_id) {
-        const { data: campaign } = await supabase
-          .from('campaigns')
-          .select('sent_count,total_count,status')
-          .eq('id', message.campaign_id)
-          .single()
-
-        const newSent = (campaign?.sent_count || 0) + 1
-        const updatePayload: Record<string, unknown> = { sent_count: newSent }
-        if (campaign?.total_count && campaign.total_count > 0 && newSent >= campaign.total_count) {
-          updatePayload.status = 'done'
-        }
-
-        await supabase.from('campaigns').update(updatePayload).eq('id', message.campaign_id)
-      }
-
-      return NextResponse.json({ ok: true, success: true, status: 'sent' }, { headers: { 'Cache-Control': 'no-store' } })
-    }
-
-    // failed
-    const newTryCount = (message.try_count || 0) + 1
-    const maxRetries = 3
-
-    if (newTryCount < maxRetries) {
-      const { error: updateError } = await supabase
-        .from('messages')
-        .update({
-          status: 'queued',
-          try_count: newTryCount,
-          last_error: errorMsg || 'Unknown error',
-          device_id: null,
-        })
-        .eq('id', message_id)
-      if (updateError) {
-        return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 })
-      }
-      return NextResponse.json({ ok: true, success: true, status: 'queued_retry', try_count: newTryCount })
-    }
-
-    const { error: updateError } = await supabase
-      .from('messages')
-      .update({
-        status: 'failed',
-        try_count: newTryCount,
-        last_error: errorMsg || 'Max retries reached',
-      })
-      .eq('id', message_id)
-    if (updateError) {
-      return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 })
-    }
-
-    return NextResponse.json({ ok: true, success: true, status: 'failed', try_count: newTryCount })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? 'Erreur' }, { status: 500 })
   }
 }
-
-
