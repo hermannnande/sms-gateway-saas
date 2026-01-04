@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math';
 
 import 'package:logger/logger.dart';
 import 'package:http/http.dart' as http;
@@ -13,30 +14,70 @@ class DeviceService {
   final SupabaseClient client;
   final Logger _logger;
   final http.Client _http = http.Client();
+  final Random _rng = Random();
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
   Future<Map<String, dynamic>> _postProxy(String path, Map<String, dynamic> body) async {
-    final res = await _http.post(
-      _proxyUri(path),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
-    );
-    final decoded = jsonDecode(res.body.isEmpty ? '{}' : res.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw Exception('Réponse proxy inattendue');
+    final uri = _proxyUri(path);
+    const maxAttempts = 3;
+    const baseTimeout = Duration(seconds: 12);
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        final res = await _http
+            .post(
+              uri,
+              headers: const {'Content-Type': 'application/json'},
+              body: jsonEncode(body),
+            )
+            .timeout(baseTimeout);
+
+        // Retry sur erreurs serveurs temporaires
+        if (res.statusCode >= 500 && attempt < maxAttempts) {
+          _logger.w('Proxy $path (${res.statusCode}) attempt $attempt/$maxAttempts');
+          await Future.delayed(_backoff(attempt));
+          continue;
+        }
+
+        final decoded = jsonDecode(res.body.isEmpty ? '{}' : res.body);
+        if (decoded is! Map<String, dynamic>) {
+          throw Exception('Réponse serveur inattendue');
+        }
+        if (res.statusCode >= 400) {
+          throw Exception(decoded['error']?.toString() ?? 'Erreur serveur (${res.statusCode})');
+        }
+        return decoded;
+      } on TimeoutException catch (e) {
+        if (attempt >= maxAttempts) throw _humanizeNetworkError(e);
+        await Future.delayed(_backoff(attempt));
+      } catch (e) {
+        if (attempt >= maxAttempts) throw _humanizeNetworkError(e);
+        await Future.delayed(_backoff(attempt));
+      }
     }
-    if (res.statusCode >= 400) {
-      throw Exception(decoded['error']?.toString() ?? 'Erreur proxy (${res.statusCode})');
-    }
-    return decoded;
+
+    // impossible normalement
+    throw Exception('Erreur réseau');
+  }
+
+  Duration _backoff(int attempt) {
+    // 400ms, 800ms, 1600ms + jitter
+    final baseMs = 400 * (1 << (attempt - 1));
+    final jitterMs = _rng.nextInt(250);
+    return Duration(milliseconds: baseMs + jitterMs);
   }
 
   Exception _humanizeNetworkError(Object e) {
     final s = e.toString();
-    if (s.contains('Failed host lookup') || s.contains('No address associated with hostname')) {
+    if (e is TimeoutException) {
+      return Exception('Temps de connexion dépassé. Vérifie Internet et réessaie.');
+    }
+    if (s.contains('Failed host lookup') ||
+        s.contains('No address associated with hostname') ||
+        s.contains('SocketException')) {
       return Exception(
-        'Problème réseau/DNS: impossible de résoudre Supabase. Désactive VPN/DNS privé et change de réseau (Wi‑Fi/4G).',
+        'Problème réseau/DNS: impossible de contacter le serveur. Vérifie la connexion (Wi‑Fi/4G) puis réessaie.',
       );
     }
     return Exception(s);
@@ -56,9 +97,8 @@ class DeviceService {
       final rawList = (payload['messages'] as List?) ?? [];
       return rawList.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
     } catch (e) {
-      // Client-proof: on évite de retomber sur Supabase direct (souvent bloqué par DNS/VPN).
       _logger.w('Proxy claim-messages failed: $e');
-      throw Exception('Problème réseau: impossible de contacter le serveur. Réessaie dans 10 secondes.');
+      throw _humanizeNetworkError(e);
     }
   }
 
@@ -88,7 +128,7 @@ class DeviceService {
       return await _postProxy('/api/mobile/heartbeat', {'device_token': deviceToken});
     } catch (e) {
       _logger.w('Proxy heartbeat failed: $e');
-      throw Exception('Heartbeat échoué: problème réseau.');
+      throw _humanizeNetworkError(e);
     }
   }
 

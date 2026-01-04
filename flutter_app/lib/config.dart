@@ -4,7 +4,8 @@ class AppConfig {
   static const supabaseUrl = 'https://gamumybcoxxanhjakpde.supabase.co';
 
   /// URL API Web (Vercel) - utilisée comme proxy pour éviter les soucis DNS Supabase côté clients.
-  static const webApiBaseUrl = 'https://sms-gateway-saas.vercel.app';
+  /// IMPORTANT: utiliser le domaine de prod (plus fiable que *.vercel.app côté DNS chez certains opérateurs).
+  static const webApiBaseUrl = 'https://smsenvoie.com';
 
   /// Clef publique (anon) Supabase. **Ne pas mettre la service_role ici.**
   static const supabaseAnonKey =
