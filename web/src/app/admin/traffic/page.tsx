@@ -1,90 +1,131 @@
-import { createServiceClient } from '@/lib/supabase/service'
-import { requireAdmin } from '@/lib/admin/guard'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useEffect, useState } from 'react'
+import { PageHeader } from '@/components/admin/page-header'
+import { AdminTable } from '@/components/admin/admin-table'
+import { Filters } from '@/components/admin/filters'
+import { Pagination } from '@/components/admin/pagination'
+import { createClient } from '@/lib/supabase/client'
 
-export default async function AdminTrafficPage() {
-  await requireAdmin()
-  const service = createServiceClient()
+interface Event {
+  id: string
+  event_type: string
+  metadata: any
+  occurred_at: string
+  user_id: string | null
+  device_id: string | null
+}
 
-  const now = new Date()
-  const last5m = new Date(now.getTime() - 5 * 60 * 1000)
-  const todayStart = new Date()
-  todayStart.setHours(0, 0, 0, 0)
+export default function AdminTrafficPage() {
+  const [events, setEvents] = useState<Event[]>([])
+  const [loading, setLoading] = useState(true)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const pageSize = 50
 
-  const [{ count: activeWeb5m }, { count: apkDownloadsToday }] = await Promise.all([
-    service
+  useEffect(() => {
+    loadEvents()
+  }, [currentPage, typeFilter])
+
+  async function loadEvents() {
+    setLoading(true)
+    const supabase = createClient()
+
+    let query = supabase
       .from('analytics_events')
-      .select('user_id', { count: 'exact', head: true })
-      .eq('event_type', 'web_ping')
-      .gte('occurred_at', last5m.toISOString()),
-    service
-      .from('analytics_events')
-      .select('*', { count: 'exact', head: true })
-      .eq('event_type', 'apk_download')
-      .gte('occurred_at', todayStart.toISOString()),
-  ])
+      .select('*', { count: 'exact' })
+      .order('occurred_at', { ascending: false })
+      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
 
-  const { data: lastEvents } = await service
-    .from('analytics_events')
-    .select('event_type, occurred_at, platform, user_id, org_id, device_id, meta')
-    .order('occurred_at', { ascending: false })
-    .limit(50)
+    if (typeFilter !== 'all') {
+      query = query.eq('event_type', typeFilter)
+    }
+
+    const { data, count, error } = await query
+
+    if (!error && data) {
+      setEvents(data)
+      setTotalCount(count || 0)
+    }
+    setLoading(false)
+  }
+
+  const eventTypeLabels: Record<string, string> = {
+    apk_download: '📥 Téléchargement APK',
+    web_ping: '🌐 Activité Web',
+    device_heartbeat: '💓 Heartbeat Appareil',
+    device_claim: '📨 Claim Messages',
+    device_update_status: '✅ Update Status',
+  }
+
+  const columns = [
+    {
+      header: 'Type',
+      accessor: (row: Event) => (
+        <span className="inline-flex items-center gap-2">
+          {eventTypeLabels[row.event_type] || row.event_type}
+        </span>
+      ),
+    },
+    {
+      header: 'Date/Heure',
+      accessor: (row: Event) => {
+        const date = new Date(row.occurred_at)
+        return (
+          <div className="text-sm">
+            <div>{date.toLocaleDateString('fr-FR')}</div>
+            <div className="text-gray-500">{date.toLocaleTimeString('fr-FR')}</div>
+          </div>
+        )
+      },
+    },
+    {
+      header: 'Détails',
+      accessor: (row: Event) => {
+        if (!row.metadata) return '-'
+        const meta = row.metadata
+        if (meta.source) return `Source: ${meta.source}`
+        if (meta.user_agent) return `UA: ${meta.user_agent.substring(0, 40)}...`
+        if (meta.device_token) return `Device: ${meta.device_token.substring(0, 12)}...`
+        return JSON.stringify(meta).substring(0, 50)
+      },
+    },
+  ]
 
   return (
     <div className="space-y-6">
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-1">Trafic & activité</h2>
-        <p className="text-sm text-muted-foreground">
-          Temps réel approximatif (basé sur events). Les dashboards détaillés seront ajoutés ensuite.
-        </p>
-      </div>
+      <PageHeader title="Trafic & Activité" description={`${totalCount} événements enregistrés`} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-card border border-border rounded-lg p-5">
-          <div className="text-xs text-muted-foreground uppercase tracking-wide">Actifs Web (5 min)</div>
-          <div className="text-3xl font-bold">{activeWeb5m || 0}</div>
-        </div>
-        <div className="bg-card border border-border rounded-lg p-5">
-          <div className="text-xs text-muted-foreground uppercase tracking-wide">Téléchargements APK (aujourd’hui)</div>
-          <div className="text-3xl font-bold">{apkDownloadsToday || 0}</div>
-        </div>
-      </div>
+      <Filters
+        filters={[
+          {
+            label: 'Type',
+            value: typeFilter,
+            onChange: setTypeFilter,
+            options: [
+              { label: 'Tous', value: 'all' },
+              { label: '📥 Téléchargements APK', value: 'apk_download' },
+              { label: '🌐 Activité Web', value: 'web_ping' },
+              { label: '💓 Heartbeats', value: 'device_heartbeat' },
+              { label: '📨 Claims', value: 'device_claim' },
+              { label: '✅ Updates', value: 'device_update_status' },
+            ],
+          },
+        ]}
+      />
 
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-border font-semibold">Derniers événements</div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b border-border">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold">Type</th>
-                <th className="px-4 py-3 text-left font-semibold">Plateforme</th>
-                <th className="px-4 py-3 text-left font-semibold">Heure</th>
-                <th className="px-4 py-3 text-left font-semibold">Meta</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {(lastEvents || []).map((e, idx) => (
-                <tr key={idx}>
-                  <td className="px-4 py-3 font-medium">{e.event_type}</td>
-                  <td className="px-4 py-3">{e.platform}</td>
-                  <td className="px-4 py-3">{new Date(e.occurred_at).toLocaleString('fr-FR')}</td>
-                  <td className="px-4 py-3 font-mono text-xs max-w-[520px] truncate">{JSON.stringify(e.meta)}</td>
-                </tr>
-              ))}
-              {(lastEvents || []).length === 0 && (
-                <tr>
-                  <td className="px-4 py-6 text-muted-foreground" colSpan={4}>
-                    Aucun événement.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <AdminTable data={events} columns={columns} loading={loading} emptyMessage="Aucun événement trouvé" />
+
+      {totalCount > pageSize && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={Math.ceil(totalCount / pageSize)}
+          onPageChange={setCurrentPage}
+          itemsPerPage={pageSize}
+          totalItems={totalCount}
+        />
+      )}
     </div>
   )
 }
-
-

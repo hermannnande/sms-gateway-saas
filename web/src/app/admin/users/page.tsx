@@ -1,64 +1,120 @@
-import { createServiceClient } from '@/lib/supabase/service'
-import { requireAdmin } from '@/lib/admin/guard'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useEffect, useState } from 'react'
+import { PageHeader } from '@/components/admin/page-header'
+import { AdminTable } from '@/components/admin/admin-table'
+import { Filters } from '@/components/admin/filters'
+import { Pagination } from '@/components/admin/pagination'
+import { createClient } from '@/lib/supabase/client'
 
-export default async function AdminUsersPage() {
-  await requireAdmin()
-  const service = createServiceClient()
+interface User {
+  id: string
+  email: string
+  created_at: string
+  last_sign_in_at: string | null
+  email_confirmed_at: string | null
+}
 
-  const { data: users } = await service
-    .from('app_users')
-    .select('user_id, email, created_at, last_login_at, last_web_seen_at, last_mobile_seen_at')
-    .order('created_at', { ascending: false })
-    .limit(100)
+export default function AdminUsersPage() {
+  const [users, setUsers] = useState<User[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const pageSize = 20
+
+  useEffect(() => {
+    loadUsers()
+  }, [currentPage, search, statusFilter])
+
+  async function loadUsers() {
+    setLoading(true)
+    const supabase = createClient()
+
+    let query = supabase
+      .from('app_users')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
+
+    if (search) {
+      query = query.ilike('email', `%${search}%`)
+    }
+
+    if (statusFilter === 'confirmed') {
+      query = query.not('email_confirmed_at', 'is', null)
+    } else if (statusFilter === 'unconfirmed') {
+      query = query.is('email_confirmed_at', null)
+    }
+
+    const { data, count, error } = await query
+
+    if (!error && data) {
+      setUsers(data)
+      setTotalCount(count || 0)
+    }
+    setLoading(false)
+  }
+
+  const columns = [
+    { header: 'Email', accessor: 'email' as keyof User },
+    {
+      header: 'Statut',
+      accessor: (row: User) => (
+        <span
+          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+            row.email_confirmed_at ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+          }`}
+        >
+          {row.email_confirmed_at ? '✓ Confirmé' : '⏳ En attente'}
+        </span>
+      ),
+    },
+    {
+      header: 'Inscrit le',
+      accessor: (row: User) => new Date(row.created_at).toLocaleDateString('fr-FR'),
+    },
+    {
+      header: 'Dernière connexion',
+      accessor: (row: User) =>
+        row.last_sign_in_at ? new Date(row.last_sign_in_at).toLocaleDateString('fr-FR') : '-',
+    },
+  ]
 
   return (
     <div className="space-y-6">
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-1">Utilisateurs</h2>
-        <p className="text-sm text-muted-foreground">
-          100 derniers inscrits (la pagination/filtrage avancés seront ajoutés ensuite).
-        </p>
-      </div>
+      <PageHeader title="Utilisateurs" description={`${totalCount} utilisateurs inscrits`} />
 
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b border-border">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold">Email</th>
-                <th className="px-4 py-3 text-left font-semibold">Créé</th>
-                <th className="px-4 py-3 text-left font-semibold">Dernier login</th>
-                <th className="px-4 py-3 text-left font-semibold">Web vu</th>
-                <th className="px-4 py-3 text-left font-semibold">Mobile vu</th>
-                <th className="px-4 py-3 text-left font-semibold">User ID</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {(users || []).map((u) => (
-                <tr key={u.user_id}>
-                  <td className="px-4 py-3">{u.email || '—'}</td>
-                  <td className="px-4 py-3">{u.created_at ? new Date(u.created_at).toLocaleString('fr-FR') : '—'}</td>
-                  <td className="px-4 py-3">{u.last_login_at ? new Date(u.last_login_at).toLocaleString('fr-FR') : '—'}</td>
-                  <td className="px-4 py-3">{u.last_web_seen_at ? new Date(u.last_web_seen_at).toLocaleString('fr-FR') : '—'}</td>
-                  <td className="px-4 py-3">{u.last_mobile_seen_at ? new Date(u.last_mobile_seen_at).toLocaleString('fr-FR') : '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{u.user_id}</td>
-                </tr>
-              ))}
-              {(users || []).length === 0 && (
-                <tr>
-                  <td className="px-4 py-6 text-muted-foreground" colSpan={6}>
-                    Aucun utilisateur.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Filters
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Rechercher par email..."
+        filters={[
+          {
+            label: 'Statut',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            options: [
+              { label: 'Tous', value: 'all' },
+              { label: 'Confirmés', value: 'confirmed' },
+              { label: 'Non confirmés', value: 'unconfirmed' },
+            ],
+          },
+        ]}
+      />
+
+      <AdminTable data={users} columns={columns} loading={loading} emptyMessage="Aucun utilisateur trouvé" />
+
+      {totalCount > pageSize && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={Math.ceil(totalCount / pageSize)}
+          onPageChange={setCurrentPage}
+          itemsPerPage={pageSize}
+          totalItems={totalCount}
+        />
+      )}
     </div>
   )
 }
-
-

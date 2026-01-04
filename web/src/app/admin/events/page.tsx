@@ -1,64 +1,120 @@
-import { createServiceClient } from '@/lib/supabase/service'
-import { requireAdmin } from '@/lib/admin/guard'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useEffect, useState } from 'react'
+import { PageHeader } from '@/components/admin/page-header'
+import { AdminTable } from '@/components/admin/admin-table'
+import { Filters } from '@/components/admin/filters'
+import { Pagination } from '@/components/admin/pagination'
+import { createClient } from '@/lib/supabase/client'
 
-export default async function AdminEventsPage() {
-  await requireAdmin()
-  const service = createServiceClient()
+interface Event {
+  id: string
+  event_type: string
+  metadata: any
+  occurred_at: string
+  user_id: string | null
+  device_id: string | null
+}
 
-  const { data: events } = await service
-    .from('analytics_events')
-    .select('event_type, occurred_at, platform, user_id, org_id, device_id, meta')
-    .order('occurred_at', { ascending: false })
-    .limit(200)
+export default function AdminEventsPage() {
+  const [events, setEvents] = useState<Event[]>([])
+  const [loading, setLoading] = useState(true)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const pageSize = 100
+
+  useEffect(() => {
+    loadEvents()
+  }, [currentPage, typeFilter])
+
+  async function loadEvents() {
+    setLoading(true)
+    const supabase = createClient()
+
+    let query = supabase
+      .from('analytics_events')
+      .select('*', { count: 'exact' })
+      .order('occurred_at', { ascending: false })
+      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
+
+    if (typeFilter !== 'all') {
+      query = query.eq('event_type', typeFilter)
+    }
+
+    const { data, count, error } = await query
+
+    if (!error && data) {
+      setEvents(data)
+      setTotalCount(count || 0)
+    }
+    setLoading(false)
+  }
+
+  const columns = [
+    {
+      header: 'ID',
+      accessor: (row: Event) => row.id.substring(0, 8) + '...',
+      className: 'font-mono text-xs',
+    },
+    {
+      header: 'Type',
+      accessor: 'event_type' as keyof Event,
+      className: 'font-medium',
+    },
+    {
+      header: 'Date/Heure',
+      accessor: (row: Event) => {
+        const date = new Date(row.occurred_at)
+        return date.toLocaleString('fr-FR')
+      },
+    },
+    {
+      header: 'Metadata',
+      accessor: (row: Event) => (
+        <pre className="text-xs text-gray-600 max-w-xs overflow-x-auto">
+          {JSON.stringify(row.metadata, null, 2)}
+        </pre>
+      ),
+    },
+  ]
 
   return (
     <div className="space-y-6">
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-1">Événements (logs)</h2>
-        <p className="text-sm text-muted-foreground">200 derniers événements.</p>
-      </div>
+      <PageHeader
+        title="Événements (Logs)"
+        description={`${totalCount} événements • Dernières 48h`}
+      />
 
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b border-border">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold">Heure</th>
-                <th className="px-4 py-3 text-left font-semibold">Type</th>
-                <th className="px-4 py-3 text-left font-semibold">Plateforme</th>
-                <th className="px-4 py-3 text-left font-semibold">User</th>
-                <th className="px-4 py-3 text-left font-semibold">Org</th>
-                <th className="px-4 py-3 text-left font-semibold">Device</th>
-                <th className="px-4 py-3 text-left font-semibold">Meta</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {(events || []).map((e, idx) => (
-                <tr key={idx}>
-                  <td className="px-4 py-3 whitespace-nowrap">{new Date(e.occurred_at).toLocaleString('fr-FR')}</td>
-                  <td className="px-4 py-3 font-medium">{e.event_type}</td>
-                  <td className="px-4 py-3">{e.platform}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{e.user_id || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{e.org_id || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{e.device_id || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs max-w-[520px] truncate">{JSON.stringify(e.meta)}</td>
-                </tr>
-              ))}
-              {(events || []).length === 0 && (
-                <tr>
-                  <td className="px-4 py-6 text-muted-foreground" colSpan={7}>
-                    Aucun événement.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Filters
+        filters={[
+          {
+            label: 'Type',
+            value: typeFilter,
+            onChange: setTypeFilter,
+            options: [
+              { label: 'Tous', value: 'all' },
+              { label: 'APK Downloads', value: 'apk_download' },
+              { label: 'Web Ping', value: 'web_ping' },
+              { label: 'Device Heartbeat', value: 'device_heartbeat' },
+              { label: 'Device Claim', value: 'device_claim' },
+              { label: 'Device Update Status', value: 'device_update_status' },
+            ],
+          },
+        ]}
+      />
+
+      <AdminTable data={events} columns={columns} loading={loading} emptyMessage="Aucun événement trouvé" />
+
+      {totalCount > pageSize && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={Math.ceil(totalCount / pageSize)}
+          onPageChange={setCurrentPage}
+          itemsPerPage={pageSize}
+          totalItems={totalCount}
+        />
+      )}
     </div>
   )
 }
-
-

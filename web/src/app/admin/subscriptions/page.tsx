@@ -1,64 +1,143 @@
-import { createServiceClient } from '@/lib/supabase/service'
-import { requireAdmin } from '@/lib/admin/guard'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useEffect, useState } from 'react'
+import { PageHeader } from '@/components/admin/page-header'
+import { AdminTable } from '@/components/admin/admin-table'
+import { Filters } from '@/components/admin/filters'
+import { Pagination } from '@/components/admin/pagination'
+import { createClient } from '@/lib/supabase/client'
 
-export default async function AdminSubscriptionsPage() {
-  await requireAdmin()
-  const service = createServiceClient()
+interface Subscription {
+  id: string
+  org_id: string
+  plan_id: string
+  status: string
+  current_period_end: string | null
+  created_at: string
+  organization: {
+    name: string
+  }
+  plan: {
+    name: string
+    price_xof: number
+  }
+}
 
-  const { data: subs } = await service
-    .from('subscriptions')
-    .select('id, org_id, plan_id, status, current_period_start, current_period_end, provider, created_at, plans(name, price_xof, max_devices, sms_quota_month)')
-    .order('created_at', { ascending: false })
-    .limit(200)
+export default function AdminSubscriptionsPage() {
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
+  const [loading, setLoading] = useState(true)
+  const [statusFilter, setStatusFilter] = useState('active')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const pageSize = 20
+
+  useEffect(() => {
+    loadSubscriptions()
+  }, [currentPage, statusFilter])
+
+  async function loadSubscriptions() {
+    setLoading(true)
+    const supabase = createClient()
+
+    let query = supabase
+      .from('subscriptions')
+      .select(
+        `
+        *,
+        organization:organizations(name),
+        plan:plans(name, price_xof)
+      `,
+        { count: 'exact' }
+      )
+      .order('created_at', { ascending: false })
+      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
+
+    if (statusFilter !== 'all') {
+      query = query.eq('status', statusFilter)
+    }
+
+    const { data, count, error } = await query
+
+    if (!error && data) {
+      setSubscriptions(data as any)
+      setTotalCount(count || 0)
+    }
+    setLoading(false)
+  }
+
+  const columns = [
+    {
+      header: 'Organisation',
+      accessor: (row: Subscription) => row.organization?.name || '-',
+    },
+    {
+      header: 'Plan',
+      accessor: (row: Subscription) => row.plan?.name || '-',
+    },
+    {
+      header: 'Prix',
+      accessor: (row: Subscription) =>
+        row.plan?.price_xof === 0 ? 'Gratuit' : `${row.plan?.price_xof.toLocaleString()} F CFA`,
+    },
+    {
+      header: 'Statut',
+      accessor: (row: Subscription) => (
+        <span
+          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+            row.status === 'active'
+              ? 'bg-green-100 text-green-800'
+              : row.status === 'canceled'
+              ? 'bg-red-100 text-red-800'
+              : 'bg-gray-100 text-gray-800'
+          }`}
+        >
+          {row.status}
+        </span>
+      ),
+    },
+    {
+      header: 'Fin de période',
+      accessor: (row: Subscription) =>
+        row.current_period_end ? new Date(row.current_period_end).toLocaleDateString('fr-FR') : 'Permanent',
+    },
+  ]
 
   return (
     <div className="space-y-6">
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-1">Abonnements</h2>
-        <p className="text-sm text-muted-foreground">
-          200 derniers abonnements (gestion avancée à venir).
-        </p>
-      </div>
+      <PageHeader title="Abonnements" description={`${totalCount} abonnements au total`} />
 
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b border-border">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold">Plan</th>
-                <th className="px-4 py-3 text-left font-semibold">Statut</th>
-                <th className="px-4 py-3 text-left font-semibold">Début</th>
-                <th className="px-4 py-3 text-left font-semibold">Fin</th>
-                <th className="px-4 py-3 text-left font-semibold">Provider</th>
-                <th className="px-4 py-3 text-left font-semibold">Org</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {(subs || []).map((s) => (
-                <tr key={s.id}>
-                  <td className="px-4 py-3">{s.plans?.name || s.plan_id}</td>
-                  <td className="px-4 py-3">{s.status}</td>
-                  <td className="px-4 py-3">{s.current_period_start ? new Date(s.current_period_start).toLocaleDateString('fr-FR') : '—'}</td>
-                  <td className="px-4 py-3">{s.current_period_end ? new Date(s.current_period_end).toLocaleDateString('fr-FR') : '—'}</td>
-                  <td className="px-4 py-3">{s.provider}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{s.org_id}</td>
-                </tr>
-              ))}
-              {(subs || []).length === 0 && (
-                <tr>
-                  <td className="px-4 py-6 text-muted-foreground" colSpan={6}>
-                    Aucun abonnement.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Filters
+        filters={[
+          {
+            label: 'Statut',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            options: [
+              { label: 'Actifs', value: 'active' },
+              { label: 'Tous', value: 'all' },
+              { label: 'Annulés', value: 'canceled' },
+              { label: 'Expirés', value: 'expired' },
+            ],
+          },
+        ]}
+      />
+
+      <AdminTable
+        data={subscriptions}
+        columns={columns}
+        loading={loading}
+        emptyMessage="Aucun abonnement trouvé"
+      />
+
+      {totalCount > pageSize && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={Math.ceil(totalCount / pageSize)}
+          onPageChange={setCurrentPage}
+          itemsPerPage={pageSize}
+          totalItems={totalCount}
+        />
+      )}
     </div>
   )
 }
-
-

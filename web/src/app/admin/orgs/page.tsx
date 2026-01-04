@@ -1,85 +1,129 @@
-import { createServiceClient } from '@/lib/supabase/service'
-import { requireAdmin } from '@/lib/admin/guard'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useEffect, useState } from 'react'
+import { PageHeader } from '@/components/admin/page-header'
+import { AdminTable } from '@/components/admin/admin-table'
+import { Filters } from '@/components/admin/filters'
+import { Pagination } from '@/components/admin/pagination'
+import { createClient } from '@/lib/supabase/client'
 
-export default async function AdminOrgsPage() {
-  await requireAdmin()
-  const service = createServiceClient()
-
-  const { data: orgs } = await service
-    .from('organizations')
-    .select('id, name, created_at')
-    .order('created_at', { ascending: false })
-    .limit(100)
-
-  // Fetch subscriptions for these orgs (batch)
-  const orgIds = (orgs || []).map((o) => o.id)
-  const { data: subs } = orgIds.length
-    ? await service
-        .from('subscriptions')
-        .select('org_id, status, current_period_end, plans(name)')
-        .in('org_id', orgIds)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-    : { data: [] }
-
-  const byOrg = new Map<string, any>()
-  for (const s of subs || []) {
-    if (!byOrg.has(s.org_id)) byOrg.set(s.org_id, s)
+interface Org {
+  id: string
+  name: string
+  created_at: string
+  subscription?: {
+    plan: {
+      name: string
+      max_devices: number
+      sms_quota_month: number
+    }
+    current_period_end: string | null
   }
+  devices_count?: number
+}
+
+export default function AdminOrgsPage() {
+  const [orgs, setOrgs] = useState<Org[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const pageSize = 20
+
+  useEffect(() => {
+    loadOrgs()
+  }, [currentPage, search])
+
+  async function loadOrgs() {
+    setLoading(true)
+    const supabase = createClient()
+
+    let query = supabase
+      .from('organizations')
+      .select(
+        `
+        *,
+        subscriptions!inner(
+          plan:plans(*),
+          current_period_end,
+          status
+        )
+      `,
+        { count: 'exact' }
+      )
+      .eq('subscriptions.status', 'active')
+      .order('created_at', { ascending: false })
+      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
+
+    if (search) {
+      query = query.ilike('name', `%${search}%`)
+    }
+
+    const { data, count, error } = await query
+
+    if (!error && data) {
+      // Count devices per org
+      const orgsWithDevices = await Promise.all(
+        data.map(async (org: any) => {
+          const { count: devicesCount } = await supabase
+            .from('devices')
+            .select('*', { count: 'exact', head: true })
+            .eq('org_id', org.id)
+
+          return {
+            ...org,
+            subscription: Array.isArray(org.subscriptions) ? org.subscriptions[0] : org.subscriptions,
+            devices_count: devicesCount || 0,
+          }
+        })
+      )
+
+      setOrgs(orgsWithDevices)
+      setTotalCount(count || 0)
+    }
+    setLoading(false)
+  }
+
+  const columns = [
+    { header: 'Nom', accessor: 'name' as keyof Org },
+    {
+      header: 'Plan',
+      accessor: (row: Org) => row.subscription?.plan?.name || 'free',
+    },
+    {
+      header: 'Appareils',
+      accessor: (row: Org) => `${row.devices_count || 0} / ${row.subscription?.plan?.max_devices || 1}`,
+    },
+    {
+      header: 'Quota SMS',
+      accessor: (row: Org) =>
+        row.subscription?.plan?.sms_quota_month === -1
+          ? 'Illimité'
+          : (row.subscription?.plan?.sms_quota_month || 100).toLocaleString(),
+    },
+    {
+      header: 'Créé le',
+      accessor: (row: Org) => new Date(row.created_at).toLocaleDateString('fr-FR'),
+    },
+  ]
 
   return (
     <div className="space-y-6">
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-1">Organisations</h2>
-        <p className="text-sm text-muted-foreground">
-          100 dernières organisations + plan actif (si présent).
-        </p>
-      </div>
+      <PageHeader title="Organisations" description={`${totalCount} organisations actives`} />
 
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b border-border">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold">Nom</th>
-                <th className="px-4 py-3 text-left font-semibold">Créé</th>
-                <th className="px-4 py-3 text-left font-semibold">Plan actif</th>
-                <th className="px-4 py-3 text-left font-semibold">Fin</th>
-                <th className="px-4 py-3 text-left font-semibold">Org ID</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {(orgs || []).map((o) => {
-                const s = byOrg.get(o.id)
-                const planName = s?.plans?.name || '—'
-                const end = s?.current_period_end
-                  ? new Date(s.current_period_end).toLocaleDateString('fr-FR')
-                  : '—'
-                return (
-                  <tr key={o.id}>
-                    <td className="px-4 py-3 font-medium">{o.name}</td>
-                    <td className="px-4 py-3">{o.created_at ? new Date(o.created_at).toLocaleString('fr-FR') : '—'}</td>
-                    <td className="px-4 py-3">{planName}</td>
-                    <td className="px-4 py-3">{end}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{o.id}</td>
-                  </tr>
-                )
-              })}
-              {(orgs || []).length === 0 && (
-                <tr>
-                  <td className="px-4 py-6 text-muted-foreground" colSpan={5}>
-                    Aucune organisation.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Filters searchValue={search} onSearchChange={setSearch} searchPlaceholder="Rechercher par nom..." />
+
+      <AdminTable data={orgs} columns={columns} loading={loading} emptyMessage="Aucune organisation trouvée" />
+
+      {totalCount > pageSize && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={Math.ceil(totalCount / pageSize)}
+          onPageChange={setCurrentPage}
+          itemsPerPage={pageSize}
+          totalItems={totalCount}
+        />
+      )}
     </div>
   )
 }
-
-
