@@ -5,22 +5,16 @@ import { PageHeader } from '@/components/admin/page-header'
 import { AdminTable } from '@/components/admin/admin-table'
 import { Filters } from '@/components/admin/filters'
 import { Pagination } from '@/components/admin/pagination'
-import { createClient } from '@/lib/supabase/client'
 
 interface Subscription {
   id: string
   org_id: string
-  plan_id: string
   status: string
   current_period_end: string | null
   created_at: string
-  organization: {
-    name: string
-  }
-  plan: {
-    name: string
-    price_xof: number
-  }
+  org_name: string
+  plan_name: string | null
+  price_xof: number | null
 }
 
 export default function AdminSubscriptionsPage() {
@@ -37,30 +31,19 @@ export default function AdminSubscriptionsPage() {
 
   async function loadSubscriptions() {
     setLoading(true)
-    const supabase = createClient()
-
-    let query = supabase
-      .from('subscriptions')
-      .select(
-        `
-        *,
-        organization:organizations(name),
-        plan:plans(name, price_xof)
-      `,
-        { count: 'exact' }
-      )
-      .order('created_at', { ascending: false })
-      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
-
-    if (statusFilter !== 'all') {
-      query = query.eq('status', statusFilter)
-    }
-
-    const { data, count, error } = await query
-
-    if (!error && data) {
-      setSubscriptions(data as any)
-      setTotalCount(count || 0)
+    const qs = new URLSearchParams({
+      status: statusFilter,
+      page: String(currentPage - 1),
+      pageSize: String(pageSize),
+    })
+    const res = await fetch(`/api/admin/subscriptions?${qs.toString()}`, { cache: 'no-store' })
+    const json = await res.json()
+    if (json?.ok) {
+      setSubscriptions(json.items || [])
+      setTotalCount(json.total || 0)
+    } else {
+      setSubscriptions([])
+      setTotalCount(0)
     }
     setLoading(false)
   }
@@ -68,16 +51,16 @@ export default function AdminSubscriptionsPage() {
   const columns = [
     {
       header: 'Organisation',
-      accessor: (row: Subscription) => row.organization?.name || '-',
+      accessor: (row: Subscription) => row.org_name || '-',
     },
     {
       header: 'Plan',
-      accessor: (row: Subscription) => row.plan?.name || '-',
+      accessor: (row: Subscription) => row.plan_name || '-',
     },
     {
       header: 'Prix',
       accessor: (row: Subscription) =>
-        row.plan?.price_xof === 0 ? 'Gratuit' : `${row.plan?.price_xof.toLocaleString()} F CFA`,
+        (row.price_xof ?? 0) === 0 ? 'Gratuit' : `${(row.price_xof ?? 0).toLocaleString()} F CFA`,
     },
     {
       header: 'Statut',

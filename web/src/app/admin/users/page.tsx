@@ -5,14 +5,16 @@ import { PageHeader } from '@/components/admin/page-header'
 import { AdminTable } from '@/components/admin/admin-table'
 import { Filters } from '@/components/admin/filters'
 import { Pagination } from '@/components/admin/pagination'
-import { createClient } from '@/lib/supabase/client'
 
 interface User {
-  id: string
-  email: string
+  user_id: string
+  email: string | null
   created_at: string
   last_sign_in_at: string | null
   email_confirmed_at: string | null
+  last_web_seen_at: string | null
+  last_mobile_seen_at: string | null
+  is_admin: boolean
 }
 
 export default function AdminUsersPage() {
@@ -30,35 +32,26 @@ export default function AdminUsersPage() {
 
   async function loadUsers() {
     setLoading(true)
-    const supabase = createClient()
-
-    let query = supabase
-      .from('app_users')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
-
-    if (search) {
-      query = query.ilike('email', `%${search}%`)
-    }
-
-    if (statusFilter === 'confirmed') {
-      query = query.not('email_confirmed_at', 'is', null)
-    } else if (statusFilter === 'unconfirmed') {
-      query = query.is('email_confirmed_at', null)
-    }
-
-    const { data, count, error } = await query
-
-    if (!error && data) {
-      setUsers(data)
-      setTotalCount(count || 0)
+    const qs = new URLSearchParams({
+      search,
+      status: statusFilter,
+      page: String(currentPage - 1),
+      pageSize: String(pageSize),
+    })
+    const res = await fetch(`/api/admin/users?${qs.toString()}`, { cache: 'no-store' })
+    const json = await res.json()
+    if (json?.ok) {
+      setUsers(json.items || [])
+      setTotalCount(json.total || 0)
+    } else {
+      setUsers([])
+      setTotalCount(0)
     }
     setLoading(false)
   }
 
   const columns = [
-    { header: 'Email', accessor: 'email' as keyof User },
+    { header: 'Email', accessor: (row: User) => row.email || '—' },
     {
       header: 'Statut',
       accessor: (row: User) => (
@@ -72,6 +65,17 @@ export default function AdminUsersPage() {
       ),
     },
     {
+      header: 'Admin',
+      accessor: (row: User) =>
+        row.is_admin ? (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+            SUPER
+          </span>
+        ) : (
+          '—'
+        ),
+    },
+    {
       header: 'Inscrit le',
       accessor: (row: User) => new Date(row.created_at).toLocaleDateString('fr-FR'),
     },
@@ -79,6 +83,15 @@ export default function AdminUsersPage() {
       header: 'Dernière connexion',
       accessor: (row: User) =>
         row.last_sign_in_at ? new Date(row.last_sign_in_at).toLocaleDateString('fr-FR') : '-',
+    },
+    {
+      header: 'Vu Web',
+      accessor: (row: User) => (row.last_web_seen_at ? new Date(row.last_web_seen_at).toLocaleDateString('fr-FR') : '-'),
+    },
+    {
+      header: 'Vu Mobile',
+      accessor: (row: User) =>
+        row.last_mobile_seen_at ? new Date(row.last_mobile_seen_at).toLocaleDateString('fr-FR') : '-',
     },
   ]
 

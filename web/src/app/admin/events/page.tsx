@@ -5,12 +5,11 @@ import { PageHeader } from '@/components/admin/page-header'
 import { AdminTable } from '@/components/admin/admin-table'
 import { Filters } from '@/components/admin/filters'
 import { Pagination } from '@/components/admin/pagination'
-import { createClient } from '@/lib/supabase/client'
 
 interface Event {
   id: string
   event_type: string
-  metadata: any
+  meta: any
   occurred_at: string
   user_id: string | null
   device_id: string | null
@@ -30,23 +29,19 @@ export default function AdminEventsPage() {
 
   async function loadEvents() {
     setLoading(true)
-    const supabase = createClient()
-
-    let query = supabase
-      .from('analytics_events')
-      .select('*', { count: 'exact' })
-      .order('occurred_at', { ascending: false })
-      .range((currentPage - 1) * pageSize, currentPage * pageSize - 1)
-
-    if (typeFilter !== 'all') {
-      query = query.eq('event_type', typeFilter)
-    }
-
-    const { data, count, error } = await query
-
-    if (!error && data) {
-      setEvents(data)
-      setTotalCount(count || 0)
+    const qs = new URLSearchParams({
+      type: typeFilter,
+      page: String(currentPage - 1),
+      pageSize: String(pageSize),
+    })
+    const res = await fetch(`/api/admin/events?${qs.toString()}`, { cache: 'no-store' })
+    const json = await res.json()
+    if (json?.ok) {
+      setEvents(json.items || [])
+      setTotalCount(json.total || 0)
+    } else {
+      setEvents([])
+      setTotalCount(0)
     }
     setLoading(false)
   }
@@ -73,7 +68,7 @@ export default function AdminEventsPage() {
       header: 'Metadata',
       accessor: (row: Event) => (
         <pre className="text-xs text-gray-600 max-w-xs overflow-x-auto">
-          {JSON.stringify(row.metadata, null, 2)}
+          {JSON.stringify(row.meta, null, 2)}
         </pre>
       ),
     },
