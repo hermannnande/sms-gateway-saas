@@ -145,7 +145,7 @@ export function AddDeviceModal({ onClose }: { onClose: () => void }) {
               {deviceData?.device_token && (
                 <div className="mt-4">
                   <a
-                    href={`smsgateway://pair?device_token=${encodeURIComponent(
+                    href={`/app/pair?device_token=${encodeURIComponent(
                       deviceData.device_token,
                     )}&device_name=${encodeURIComponent(deviceName)}`}
                     className="inline-flex items-center justify-center gap-2 w-full px-4 py-3 bg-muted text-foreground rounded-lg font-semibold hover:bg-muted/80 transition-all"

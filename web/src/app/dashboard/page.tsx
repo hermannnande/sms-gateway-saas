@@ -79,7 +79,16 @@ export default async function DashboardPage() {
             </p>
             <p className="text-xs text-muted-foreground mt-0.5">{user.email}</p>
           </div>
-          <div className="text-3xl">👋</div>
+          <div className="flex items-center gap-3">
+            <a
+              href="/app/download?source=dashboard"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-semibold hover:bg-primary/90 transition-all"
+            >
+              <span className="text-base">⬇️</span>
+              Télécharger l&apos;app Android
+            </a>
+            <div className="text-3xl">👋</div>
+          </div>
         </div>
       </div>
 
