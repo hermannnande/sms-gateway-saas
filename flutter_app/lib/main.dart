@@ -617,6 +617,29 @@ class AppNotifier extends Notifier<AppState> {
       return;
     }
 
+    // IMPORTANT: éviter le double-envoi.
+    // Si le mode "Continuer en arrière-plan" est activé, l'envoi doit être fait
+    // par le Foreground Service (notification). Sinon, la notif reste "en attente"
+    // pendant que l'envoi se fait en écran via syncOnce(), ce qui donne l'impression
+    // que la barre/progression ne marche pas.
+    try {
+      final bgEnabled = await BackgroundSyncService.isEnabled();
+      if (bgEnabled) {
+        final running = await BackgroundSyncService.isRunning();
+        if (!running) {
+          await BackgroundSyncService.setPaused(false);
+          await BackgroundSyncService.start();
+        }
+        state = state.copyWith(
+          syncing: false,
+          lastStatus: '✅ Envoi en arrière-plan actif. Ouvre la notification "SMS Gateway" pour voir la progression.',
+        );
+        return;
+      }
+    } catch (_) {
+      // Si erreur sur le service, on continue en mode foreground (syncOnce) pour ne pas bloquer.
+    }
+
     state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
 
     try {
@@ -2224,19 +2247,27 @@ class _HomePageState extends ConsumerState<HomePage>
     // Premier check après 5s
     Future<void>.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      final appState = ref.read(appProvider);
-      if (appState.authenticated && (appState.deviceToken?.isNotEmpty ?? false)) {
-        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
-      }
+      BackgroundSyncService.isEnabled().then((enabled) {
+        if (!mounted) return;
+        if (enabled) return; // le service background gère déjà l'envoi
+        final appState = ref.read(appProvider);
+        if (appState.authenticated && (appState.deviceToken?.isNotEmpty ?? false)) {
+          ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+        }
+      });
     });
 
     _autoSyncTimer?.cancel();
     _autoSyncTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-      final appState = ref.read(appProvider);
-      if (!appState.authenticated) return;
-      if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
-      if (appState.syncing) return;
-      ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      BackgroundSyncService.isEnabled().then((enabled) {
+        if (!mounted) return;
+        if (enabled) return; // le service background gère déjà l'envoi
+        final appState = ref.read(appProvider);
+        if (!appState.authenticated) return;
+        if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
+        if (appState.syncing) return;
+        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      });
     });
   }
 
