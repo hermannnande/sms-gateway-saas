@@ -1,24 +1,31 @@
-import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
-export type AdminRole = 'SUPER_ADMIN' | 'SUPPORT'
-
-export async function requireAdmin(): Promise<{ userId: string; role: AdminRole }> {
+/**
+ * Vérifie si l'utilisateur actuel est admin.
+ * À utiliser dans les Server Components.
+ * @returns Role de l'admin ('super_admin' ou 'admin') ou null si pas admin
+ */
+export async function requireAdmin(): Promise<string | null> {
   const supabase = await createClient()
+
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect('/auth/login')
+    return null
   }
 
-  const { data: role, error } = await supabase.rpc('admin_role')
-  if (error || !role) {
-    redirect('/dashboard')
+  // Chercher dans app_users pour voir si c'est un admin
+  const { data: appUser } = await supabase
+    .from('app_users')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  if (!appUser || (appUser.role !== 'super_admin' && appUser.role !== 'admin')) {
+    return null
   }
 
-  return { userId: user.id, role: role as AdminRole }
+  return appUser.role
 }
-
-

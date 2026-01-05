@@ -201,12 +201,21 @@ export default async function DashboardPage() {
                 </div>
               </div>
             </div>
-            <a
-              href="/billing/plans"
-              className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
-            >
-              Gérer l&apos;abonnement
-            </a>
+            <div className="flex gap-2">
+              <a
+                href="/billing/plans"
+                className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
+              >
+                Gérer l&apos;abonnement
+              </a>
+              <a
+                href="/dashboard/promo"
+                className="px-4 py-2 text-xs bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-lg font-bold hover:bg-purple-500/20 transition whitespace-nowrap"
+                title="Activer un code promo"
+              >
+                🎟️ Code promo
+              </a>
+            </div>
           </div>
         </div>
       ) : (
@@ -223,12 +232,21 @@ export default async function DashboardPage() {
                 </div>
               </div>
             </div>
-            <a
-              href="/billing/plans"
-              className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
-            >
-              Passer à un abonnement
-            </a>
+            <div className="flex gap-2">
+              <a
+                href="/billing/plans"
+                className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
+              >
+                Passer à un abonnement
+              </a>
+              <a
+                href="/dashboard/promo"
+                className="px-4 py-2 text-xs bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-lg font-bold hover:bg-purple-500/20 transition whitespace-nowrap"
+                title="Activer un code promo"
+              >
+                🎟️ Code promo
+              </a>
+            </div>
           </div>
         </div>
       )}
