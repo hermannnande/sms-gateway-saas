@@ -80,7 +80,7 @@ export default async function PlansPage() {
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Commencez gratuitement, passez à un plan mensuel quand vous êtes prêt.
             <br />
-            Paiement sécurisé via <span className="font-semibold text-foreground">Payfonte</span> en F CFA.
+            Paiement sécurisé via <span className="font-semibold text-foreground">Moneroo</span> (Orange Money, Wave, Visa, Mastercard).
           </p>
         </div>
 
@@ -168,7 +168,7 @@ export default async function PlansPage() {
               },
               {
                 q: 'Quels moyens de paiement acceptez-vous ?',
-                a: 'Paiement sécurisé via Payfonte (Mobile Money, Visa, Mastercard).',
+                a: 'Paiement sécurisé via Moneroo : Orange Money, Wave, MTN Money, Moov Money, Visa, Mastercard.',
               },
             ].map((faq, idx) => (
               <div key={idx}>
@@ -217,7 +217,7 @@ export default async function PlansPage() {
               <span>🔒</span> SSL / TLS
             </span>
             <span className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg text-xs font-medium">
-              <span>💳</span> Payfonte Gateway
+              <span>💳</span> Moneroo Payment
             </span>
             <span className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg text-xs font-medium">
               <span>🇨🇮</span> XOF (F CFA)

@@ -196,10 +196,17 @@ export async function POST(req: Request) {
   }
 }
 
-// Fonctions pour extraire les données de différents formats de webhook
+// Fonctions pour extraire les données de différents formats de webhook (compatible Moneroo)
 function extractAmount(body: any): number | null {
-  // Essayer différents champs possibles
-  const amount = body.amount || body.montant || body.total || body.price || body.value
+  // Format Moneroo: body.data.amount ou body.amount
+  let amount = null
+  
+  if (body.data && body.data.amount) {
+    amount = body.data.amount
+  } else {
+    amount = body.amount || body.montant || body.total || body.price || body.value
+  }
+  
   if (!amount) return null
   
   // Convertir en nombre
@@ -208,6 +215,14 @@ function extractAmount(body: any): number | null {
 }
 
 function extractEmail(body: any): string | null {
+  // Format Moneroo: body.data.customer.email ou body.customer.email
+  if (body.data && body.data.customer && body.data.customer.email) {
+    return body.data.customer.email
+  }
+  if (body.customer && body.customer.email) {
+    return body.customer.email
+  }
+  
   return body.email || 
          body.customer_email || 
          body.customerEmail || 
@@ -217,6 +232,14 @@ function extractEmail(body: any): string | null {
 }
 
 function extractPhone(body: any): string | null {
+  // Format Moneroo: body.data.customer.phone
+  if (body.data && body.data.customer && body.data.customer.phone) {
+    return body.data.customer.phone
+  }
+  if (body.customer && body.customer.phone) {
+    return body.customer.phone
+  }
+  
   return body.phone || 
          body.telephone || 
          body.customer_phone || 
@@ -227,11 +250,34 @@ function extractPhone(body: any): string | null {
 }
 
 function extractStatus(body: any): string | null {
-  const status = body.status || body.statut || body.state || body.payment_status || 'unknown'
-  return status.toString().toLowerCase()
+  // Format Moneroo: body.status ou body.data.status
+  let status = 'unknown'
+  
+  if (body.data && body.data.status) {
+    status = body.data.status
+  } else {
+    status = body.status || body.statut || body.state || body.payment_status || 'unknown'
+  }
+  
+  const normalizedStatus = status.toString().toLowerCase()
+  
+  // Moneroo utilise "completed" ou "success"
+  if (normalizedStatus === 'completed' || normalizedStatus === 'success' || normalizedStatus === 'paid') {
+    return 'success'
+  }
+  
+  return normalizedStatus
 }
 
 function extractReference(body: any): string | null {
+  // Format Moneroo: body.data.reference ou body.data.id
+  if (body.data && body.data.reference) {
+    return body.data.reference
+  }
+  if (body.data && body.data.id) {
+    return body.data.id
+  }
+  
   return body.reference || 
          body.ref || 
          body.transaction_id || 
