@@ -561,12 +561,23 @@ class AppNotifier extends Notifier<AppState> {
     } catch (_) {}
 
     // Battery optimization (pour éviter que le service soit tué)
+    bool batteryOptimizationGranted = false;
     try {
       final status = await Permission.ignoreBatteryOptimizations.status;
       if (!status.isGranted) {
-        await Permission.ignoreBatteryOptimizations.request();
+        final result = await Permission.ignoreBatteryOptimizations.request();
+        batteryOptimizationGranted = result.isGranted;
+      } else {
+        batteryOptimizationGranted = true;
       }
     } catch (_) {}
+
+    // Si la permission batterie n'est pas accordée, afficher un message
+    if (!batteryOptimizationGranted) {
+      state = state.copyWith(
+        lastStatus: 'Autorisation arriere-plan requise pour que l\'envoi continue meme quand l\'app est fermee.',
+      );
+    }
 
     // Si on a un appareil jumelé ET "Continuer en arrière‑plan" activé → démarrer le service
     try {
@@ -1493,6 +1504,58 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
     super.dispose();
   }
 
+  Future<void> _checkBatteryPermissionAndShowDialog() async {
+    // Attendre un peu pour que les autres dialogs de permissions se ferment
+    await Future.delayed(const Duration(milliseconds: 800));
+    
+    if (!mounted) return;
+    
+    try {
+      final status = await Permission.ignoreBatteryOptimizations.status;
+      if (!status.isGranted) {
+        // ignore: use_build_context_synchronously
+        if (!mounted) return;
+        
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: [
+                Icon(Icons.battery_alert_rounded, color: Colors.orange.shade700, size: 28),
+                const SizedBox(width: 12),
+                const Text('Autorisation arrière-plan'),
+              ],
+            ),
+            content: const Text(
+              'Pour que l\'envoi de SMS continue meme quand l\'app est fermee, '
+              'vous devez autoriser l\'app a ignorer l\'optimisation de la batterie.\n\n'
+              'Cliquez sur "Ouvrir les parametres" ci-dessous pour acceder directement '
+              'aux parametres systeme et autoriser l\'app.',
+              style: TextStyle(fontSize: 15),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Plus tard'),
+              ),
+              FilledButton.icon(
+                onPressed: () async {
+                  Navigator.of(ctx).pop();
+                  // Ouvrir directement les paramètres système
+                  await openAppSettings();
+                },
+                icon: const Icon(Icons.settings_rounded),
+                label: const Text('Ouvrir les parametres'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (_) {}
+  }
+
   Future<void> _signIn() async {
     final email = _emailController.text.trim();
     final pass = _passwordController.text;
@@ -1506,6 +1569,11 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
     });
     try {
       await ref.read(appProvider.notifier).signInWithEmail(email: email, password: pass);
+      
+      // Vérifier si la permission batterie est accordée
+      if (mounted) {
+        _checkBatteryPermissionAndShowDialog();
+      }
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
