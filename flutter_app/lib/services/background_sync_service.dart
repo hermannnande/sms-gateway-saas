@@ -21,9 +21,15 @@ class BackgroundSyncService {
 
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'sms_gateway_sync',
+        // IMPORTANT: le channel est créé 1 seule fois sur Android 8+.
+        // On utilise un nouveau channelId pour éviter qu'un ancien channel "LOW" reste minimisé
+        // (texte/boutons cachés sur certains téléphones).
+        channelId: 'sms_gateway_sending',
         channelName: 'SMS Gateway',
-        channelDescription: 'Synchronisation et envoi de SMS en arrière-plan.',
+        channelDescription: 'Envoi de SMS en arrière-plan (progression, pause, annulation).',
+        channelImportance: NotificationChannelImportance.DEFAULT,
+        priority: NotificationPriority.DEFAULT,
+        showWhen: false,
         onlyAlertOnce: true,
       ),
       iosNotificationOptions: IOSNotificationOptions(
@@ -72,7 +78,7 @@ class BackgroundSyncService {
         notificationText: paused ? '⏸️ Pause' : '✅ Actif (en attente)',
         notificationButtons: [
           NotificationButton(id: paused ? 'resume' : 'pause', text: paused ? 'Reprendre' : 'Pause'),
-          const NotificationButton(id: 'stop', text: 'Stop'),
+          const NotificationButton(id: 'stop', text: 'Annuler'),
         ],
       );
     }
@@ -82,6 +88,10 @@ class BackgroundSyncService {
     // Android 13+: notification permission for foreground notification
     try {
       final s = await Permission.notification.status;
+      if (s.isPermanentlyDenied) {
+        await openAppSettings();
+        return;
+      }
       if (!s.isGranted) {
         await Permission.notification.request();
       }
@@ -95,6 +105,10 @@ class BackgroundSyncService {
     // Optionnel: demander d'ignorer l'optimisation batterie (beaucoup d'OEM tuent les services sinon)
     try {
       final b = await Permission.ignoreBatteryOptimizations.status;
+      if (b.isPermanentlyDenied) {
+        await openAppSettings();
+        // on continue quand même, mais le service risque d'être tué par l'OS
+      }
       if (!b.isGranted) {
         await Permission.ignoreBatteryOptimizations.request();
       }
@@ -111,7 +125,7 @@ class BackgroundSyncService {
       notificationText: '✅ Actif (en attente)',
       notificationButtons: const [
         NotificationButton(id: 'pause', text: 'Pause'),
-        NotificationButton(id: 'stop', text: 'Stop'),
+        NotificationButton(id: 'stop', text: 'Annuler'),
       ],
       callback: startCallback,
     );
@@ -255,7 +269,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       notificationText: '✅ Actif (en attente)',
       notificationButtons: const [
         NotificationButton(id: 'pause', text: 'Pause'),
-        NotificationButton(id: 'stop', text: 'Stop'),
+        NotificationButton(id: 'stop', text: 'Annuler'),
       ],
     );
   }
@@ -277,7 +291,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           notificationText: '⏸️ Pause',
           notificationButtons: const [
             NotificationButton(id: 'resume', text: 'Reprendre'),
-            NotificationButton(id: 'stop', text: 'Stop'),
+            NotificationButton(id: 'stop', text: 'Annuler'),
           ],
         );
         return;
@@ -289,7 +303,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           notificationTitle: 'SMS Gateway',
           notificationText: '⚠️ Aucun appareil jumelé',
           notificationButtons: const [
-            NotificationButton(id: 'stop', text: 'Stop'),
+            NotificationButton(id: 'stop', text: 'Annuler'),
           ],
         );
         return;
@@ -311,7 +325,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             notificationTitle: 'SMS Gateway',
             notificationText: '🚫 Quota atteint (0 restant ce mois)',
             notificationButtons: const [
-              NotificationButton(id: 'stop', text: 'Stop'),
+              NotificationButton(id: 'stop', text: 'Annuler'),
             ],
           );
           return;
@@ -321,7 +335,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           notificationText: '✅ Actif (en attente)',
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Stop'),
+            NotificationButton(id: 'stop', text: 'Annuler'),
           ],
         );
         return;
@@ -399,7 +413,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             notificationText: '$campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
             notificationButtons: const [
               NotificationButton(id: 'pause', text: 'Pause'),
-              NotificationButton(id: 'stop', text: 'Stop'),
+              NotificationButton(id: 'stop', text: 'Annuler'),
             ],
           );
         } else {
@@ -409,7 +423,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             notificationText: '${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
             notificationButtons: const [
               NotificationButton(id: 'pause', text: 'Pause'),
-              NotificationButton(id: 'stop', text: 'Stop'),
+              NotificationButton(id: 'stop', text: 'Annuler'),
             ],
           );
         }
@@ -424,7 +438,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           notificationText: '✅ Actif • $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Stop'),
+            NotificationButton(id: 'stop', text: 'Annuler'),
           ],
         );
       } else {
@@ -433,7 +447,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           notificationText: '✅ Batch traité ($attempted/$batchTotal)',
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Stop'),
+            NotificationButton(id: 'stop', text: 'Annuler'),
           ],
         );
       }
@@ -442,7 +456,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         notificationTitle: 'SMS Gateway',
         notificationText: 'Erreur sync: ${e.toString()}',
         notificationButtons: const [
-          NotificationButton(id: 'stop', text: 'Stop'),
+          NotificationButton(id: 'stop', text: 'Annuler'),
         ],
       );
     } finally {
