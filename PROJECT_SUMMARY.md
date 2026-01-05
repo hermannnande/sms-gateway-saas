@@ -172,7 +172,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
 ### Keystore Android (Signing)
 - **Path**: `flutter_app/android/sms-gateway-release.jks`
 - **Alias**: `sms_gateway_key`
-- **Passwords**: `smsgateway2025` (store + key)
+- **Passwords**: **ne pas stocker en clair dans le repo** (utiliser un gestionnaire de mots de passe)
 - **Config**: `flutter_app/android/key.properties` (gitignored)
 
 ---
@@ -451,6 +451,7 @@ git push origin main
 **Dernière mise à jour**: 31 Décembre 2024  
 **Commit**: `43f90b8` (fix RLS recursion)  
 **Status**: ✅ Production Ready
+
 
 
 

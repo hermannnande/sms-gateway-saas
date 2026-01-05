@@ -80,9 +80,9 @@ flutter build apk --release
 - Guide client: `GUIDE_INSTALLATION_CLIENT.md`
 
 ### Signing:
-- **Keystore**: `flutter_app/android/sms-gateway-release.jks` (gitignored)
+- **Keystore**: `flutter_app/android/sms-gateway-release.jks` (**ne jamais committer**)
 - **Alias**: `sms_gateway_key`
-- **Passwords**: `smsgateway2025`
+- **Passwords**: **NE PAS écrire en clair dans le repo** (utiliser un gestionnaire de mots de passe)
 
 ---
 
@@ -91,19 +91,20 @@ flutter build apk --release
 ### Supabase
 **URL**: `https://gamumybcoxxanhjakpde.supabase.co`
 
-**Anon Key** (public):
-```
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbXVteWJjb3h4YW5oamFrcGRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcxMDA1MzAsImV4cCI6MjA4MjY3NjUzMH0.0SLKPBAO5AaYguxnqUjb2nDVIGvZiK8N-3FQCREKk6w
-```
+**Anon Key** (publique):
+- À récupérer dans Supabase Dashboard → **Settings → API**
+- Recommandé: la stocker dans `web/.env.local` et/ou `flutter_app/lib/config.dart`
 
-**Service Role Key** (secret - NEVER expose client-side):
-```
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbXVteWJjb3h4YW5oamFrcGRlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NzEwMDUzMCwiZXhwIjoyMDgyNjc2NTMwfQ.sIFvQRRj_eXBVHsuZmv2R_GJ890ajn-IFdeDYTJ6iKE
-```
+**Service Role Key** (SECRET — ne jamais exposer côté client):
+- À récupérer dans Supabase Dashboard → **Settings → API**
+- À stocker uniquement dans:
+  - **Vercel Environment Variables** (prod)
+  - `web/.env.local` (local, gitignored)
+  - ou `supabase secrets set ...` (Edge Functions)
+- Placeholder: `SUPABASE_SERVICE_ROLE_KEY=<VOTRE_SERVICE_ROLE_KEY>`
 
 ### Keystore Android
-- **Store Password**: `smsgateway2025`
-- **Key Password**: `smsgateway2025`
+- **Store Password / Key Password**: à garder hors repo (gestionnaire de mots de passe)
 - **Key Alias**: `sms_gateway_key`
 
 ### Payfonte (à configurer)
@@ -130,9 +131,9 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
 ### Keystore (`flutter_app/android/key.properties`)
 ```properties
 storeFile=sms-gateway-release.jks
-storePassword=smsgateway2025
+storePassword=<STORE_PASSWORD>
 keyAlias=sms_gateway_key
-keyPassword=smsgateway2025
+keyPassword=<KEY_PASSWORD>
 ```
 
 ---
@@ -239,6 +240,7 @@ supabase db push
 **📅 Dernière mise à jour**: 31 Décembre 2024  
 **🔖 Commit**: `de75075`  
 **✅ Status**: Production Ready
+
 
 
 

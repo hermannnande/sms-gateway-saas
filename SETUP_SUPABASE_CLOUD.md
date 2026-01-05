@@ -6,8 +6,8 @@ Créez le fichier `web/.env.local` avec ce contenu :
 
 ```env
 # Supabase Configuration
-NEXT_PUBLIC_SUPABASE_URL=https://gamumybcooxanhjskpde.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_hZwqTJIzRf69_sNQGUAdDb_6RXbGzj5
+NEXT_PUBLIC_SUPABASE_URL=https://<PROJECT_REF>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<SUPABASE_ANON_KEY>
 
 # Service Role Key - À récupérer après provisioning
 SUPABASE_SERVICE_ROLE_KEY=VOTRE_SERVICE_ROLE_KEY_ICI
@@ -56,6 +56,7 @@ L'app sera accessible sur http://localhost:3000
 2. ✅ Configurer Payfonte (optionnel pour tests)
 3. ✅ Build Android APK
 4. ✅ Scanner QR code et tester !
+
 
 
 
