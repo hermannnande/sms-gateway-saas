@@ -508,6 +508,18 @@ class AppNotifier extends Notifier<AppState> {
       deviceToken: normalized,
       lastStatus: 'Token enregistré',
     );
+
+    // UX: activer le mode arrière-plan automatiquement au premier jumelage,
+    // pour que l'envoi continue même si l'utilisateur sort de l'app.
+    try {
+      final enabled = await BackgroundSyncService.isEnabled();
+      if (!enabled) {
+        await BackgroundSyncService.setEnabled(true);
+        await BackgroundSyncService.setPaused(false);
+        await BackgroundSyncService.start(); // déclenche la demande de permission Notifications si besoin
+        state = state.copyWith(lastStatus: '✅ Appareil connecté + mode arrière‑plan activé');
+      }
+    } catch (_) {}
   }
 
   Future<void> clearToken() async {

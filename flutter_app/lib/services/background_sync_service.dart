@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
@@ -79,10 +80,25 @@ class BackgroundSyncService {
 
   static Future<void> start() async {
     // Android 13+: notification permission for foreground notification
+    try {
+      final s = await Permission.notification.status;
+      if (!s.isGranted) {
+        await Permission.notification.request();
+      }
+    } catch (_) {}
+
     final permission = await FlutterForegroundTask.checkNotificationPermission();
     if (permission != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();
     }
+
+    // Optionnel: demander d'ignorer l'optimisation batterie (beaucoup d'OEM tuent les services sinon)
+    try {
+      final b = await Permission.ignoreBatteryOptimizations.status;
+      if (!b.isGranted) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (_) {}
 
     if (await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.restartService();

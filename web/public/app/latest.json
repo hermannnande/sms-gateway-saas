@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+9",
+  "latestVersion": "1.0.1+10",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Nouveau: alertes quota + affichage SMS restants (web + app). Nouveau: pause auto des campagnes quand quota atteint. Toujours: jumelage 1 clic + notification arrière-plan (pause/stop)."
+  "notes": "Fix: autorisation Notifications + demande d’ignorer optimisation batterie + activation auto du mode arrière‑plan au jumelage (notif progression/pause/stop)."
 }
 
 
