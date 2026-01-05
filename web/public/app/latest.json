@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+16",
+  "latestVersion": "1.0.1+17",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Fix: évite le double-envoi (écran + background). Quand “Continuer en arrière-plan” est activé, l’envoi passe par le service → notification/progression visible."
+  "notes": "Fix: demande TOUTES les permissions (SMS + notifications + batterie) dès la connexion + démarre le service automatiquement"
 }
 
 

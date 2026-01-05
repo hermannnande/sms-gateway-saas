@@ -9,6 +9,7 @@ import 'package:app_links/app_links.dart';
 import 'package:logger/logger.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/inbox_message.dart';
@@ -548,6 +549,41 @@ class AppNotifier extends Notifier<AppState> {
     );
   }
 
+  Future<void> _requestAllPermissionsAfterLogin() async {
+    // SMS permissions (obligatoire pour envoyer)
+    try {
+      await ref.read(smsSenderProvider).ensurePermissions();
+    } catch (_) {}
+
+    // Notifications (Android 13+, nécessaire pour la notification foreground)
+    try {
+      await Permission.notification.request();
+    } catch (_) {}
+
+    // Battery optimization (pour éviter que le service soit tué)
+    try {
+      final status = await Permission.ignoreBatteryOptimizations.status;
+      if (!status.isGranted) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (_) {}
+
+    // Si on a un appareil jumelé ET "Continuer en arrière‑plan" activé → démarrer le service
+    try {
+      if (state.deviceToken != null && state.deviceToken!.isNotEmpty) {
+        final enabled = await BackgroundSyncService.isEnabled();
+        if (enabled) {
+          await BackgroundSyncService.start();
+        } else {
+          // Activer automatiquement le mode arrière-plan après connexion
+          await BackgroundSyncService.setEnabled(true);
+          await BackgroundSyncService.setPaused(false);
+          await BackgroundSyncService.start();
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<void> signInWithEmail({
     required String email,
     required String password,
@@ -569,6 +605,9 @@ class AppNotifier extends Notifier<AppState> {
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
+    
+    // IMPORTANT: demander toutes les permissions après connexion
+    await _requestAllPermissionsAfterLogin();
   }
 
   Future<void> recoverSessionFromQrJson({
@@ -589,6 +628,9 @@ class AppNotifier extends Notifier<AppState> {
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
+    
+    // IMPORTANT: demander toutes les permissions après connexion
+    await _requestAllPermissionsAfterLogin();
   }
 
   Future<void> signInWithRefreshToken({
@@ -608,6 +650,9 @@ class AppNotifier extends Notifier<AppState> {
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
+    
+    // IMPORTANT: demander toutes les permissions après connexion
+    await _requestAllPermissionsAfterLogin();
   }
 
   Future<void> syncOnce({bool silentIfEmpty = false}) async {
