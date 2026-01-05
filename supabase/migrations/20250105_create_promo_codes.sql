@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS promo_codes (
   duration_days INTEGER NOT NULL DEFAULT 30,
   max_uses INTEGER DEFAULT 1,
   current_uses INTEGER DEFAULT 0,
-  created_by UUID REFERENCES app_users(id),
+  created_by UUID REFERENCES auth.users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ,
   is_active BOOLEAN DEFAULT true,
@@ -40,9 +40,9 @@ CREATE POLICY "Admins can view all promo codes"
   TO authenticated
   USING (
     EXISTS (
-      SELECT 1 FROM app_users
-      WHERE app_users.id = auth.uid()
-      AND app_users.role IN ('admin', 'super_admin')
+      SELECT 1 FROM admin_users
+      WHERE admin_users.user_id = auth.uid()
+      AND admin_users.role IN ('SUPER_ADMIN', 'SUPPORT')
     )
   );
 
@@ -53,9 +53,9 @@ CREATE POLICY "Admins can create promo codes"
   TO authenticated
   WITH CHECK (
     EXISTS (
-      SELECT 1 FROM app_users
-      WHERE app_users.id = auth.uid()
-      AND app_users.role IN ('admin', 'super_admin')
+      SELECT 1 FROM admin_users
+      WHERE admin_users.user_id = auth.uid()
+      AND admin_users.role IN ('SUPER_ADMIN', 'SUPPORT')
     )
   );
 
@@ -66,9 +66,9 @@ CREATE POLICY "Admins can update promo codes"
   TO authenticated
   USING (
     EXISTS (
-      SELECT 1 FROM app_users
-      WHERE app_users.id = auth.uid()
-      AND app_users.role IN ('admin', 'super_admin')
+      SELECT 1 FROM admin_users
+      WHERE admin_users.user_id = auth.uid()
+      AND admin_users.role IN ('SUPER_ADMIN', 'SUPPORT')
     )
   );
 
@@ -92,9 +92,9 @@ CREATE POLICY "Admins can view all redemptions"
   TO authenticated
   USING (
     EXISTS (
-      SELECT 1 FROM app_users
-      WHERE app_users.id = auth.uid()
-      AND app_users.role IN ('admin', 'super_admin')
+      SELECT 1 FROM admin_users
+      WHERE admin_users.user_id = auth.uid()
+      AND admin_users.role IN ('SUPER_ADMIN', 'SUPPORT')
     )
   );
 

@@ -29,13 +29,13 @@ export async function POST(req: Request) {
     const codeUpper = code.trim().toUpperCase()
 
     // Récupérer l'organisation de l'utilisateur
-    const { data: appUser } = await supabaseService
-      .from('app_users')
-      .select('email, org_id')
-      .eq('id', user.id)
-      .single()
+    const { data: orgMember } = await supabaseService
+      .from('org_members')
+      .select('org_id')
+      .eq('user_id', user.id)
+      .maybeSingle()
 
-    if (!appUser || !appUser.org_id) {
+    if (!orgMember || !orgMember.org_id) {
       return NextResponse.json({ error: 'Organisation non trouvée' }, { status: 404 })
     }
 
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
       .from('promo_code_redemptions')
       .select('id')
       .eq('promo_code_id', promoCode.id)
-      .eq('org_id', appUser.org_id)
+      .eq('org_id', orgMember.org_id)
       .maybeSingle()
 
     if (existingRedemption) {
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
     const { data: existingSub } = await supabaseService
       .from('subscriptions')
       .select('id')
-      .eq('org_id', appUser.org_id)
+      .eq('org_id', orgMember.org_id)
       .eq('status', 'active')
       .maybeSingle()
 
@@ -118,13 +118,13 @@ export async function POST(req: Request) {
       if (updateError) throw updateError
       subscriptionId = updatedSub.id
 
-      console.log(`✅ Promo code ${codeUpper}: subscription ${existingSub.id} updated for org ${appUser.org_id}`)
+      console.log(`✅ Promo code ${codeUpper}: subscription ${existingSub.id} updated for org ${orgMember.org_id}`)
     } else {
       // Créer un nouvel abonnement
       const { data: newSub, error: insertError } = await supabaseService
         .from('subscriptions')
         .insert({
-          org_id: appUser.org_id,
+          org_id: orgMember.org_id,
           plan_id: promoCode.plan_id,
           status: 'active',
           period_start: now.toISOString(),
@@ -136,14 +136,14 @@ export async function POST(req: Request) {
       if (insertError) throw insertError
       subscriptionId = newSub.id
 
-      console.log(`✅ Promo code ${codeUpper}: new subscription ${newSub.id} created for org ${appUser.org_id}`)
+      console.log(`✅ Promo code ${codeUpper}: new subscription ${newSub.id} created for org ${orgMember.org_id}`)
     }
 
     // Enregistrer l'utilisation du code
     await supabaseService.from('promo_code_redemptions').insert({
       promo_code_id: promoCode.id,
-      org_id: appUser.org_id,
-      user_email: appUser.email,
+      org_id: orgMember.org_id,
+      user_email: user.email,
       subscription_id: subscriptionId,
     })
 
