@@ -3886,6 +3886,29 @@ class _SubscriptionSection extends StatelessWidget {
                   label: const Text('Actualiser mon abonnement'),
                 ),
               ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: !appState.authenticated
+                      ? null
+                      : () async {
+                          HapticFeedback.mediumImpact();
+                          final uri = Uri.parse('${AppConfig.webApiBaseUrl}/billing/plans');
+                          final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          if (!ok && context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Impossible d’ouvrir la page des plans.')),
+                            );
+                          }
+                        },
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  icon: const Icon(Icons.shopping_cart_checkout_rounded),
+                  label: const Text('Voir les plans & s’abonner'),
+                ),
+              ),
             ],
           ),
         ),
