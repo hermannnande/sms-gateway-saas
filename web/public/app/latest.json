@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+8",
+  "latestVersion": "1.0.1+9",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Nouveau: bouton “Lier automatiquement (1 clic)” sur l’écran de jumelage (plus besoin de scanner si déjà connecté). Fix: plan gratuit respecté (100 SMS) + affichage abonnement corrigé."
+  "notes": "Nouveau: alertes quota + affichage SMS restants (web + app). Nouveau: pause auto des campagnes quand quota atteint. Toujours: jumelage 1 clic + notification arrière-plan (pause/stop)."
 }
 
 

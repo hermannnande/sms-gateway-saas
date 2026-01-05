@@ -38,9 +38,11 @@ type MessageRow = {
 export function CampaignDetails({
   campaign: initialCampaign,
   stats: initialStats,
+  quotaInfo,
 }: {
   campaign: Campaign
   stats: Stats
+  quotaInfo: { quota: number | null; used: number; remaining: number | null }
 }) {
   const [campaign, setCampaign] = useState(initialCampaign)
   const [stats, setStats] = useState(initialStats)
@@ -165,6 +167,31 @@ export function CampaignDetails({
 
   return (
     <div>
+      {quotaInfo.remaining === 0 && (stats.queued > 0 || stats.sending > 0) && (
+        <div className="mb-6 glass-card rounded-2xl p-4 border-2 border-red-500/20 bg-red-500/5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-2">
+              <span className="text-2xl">🚫</span>
+              <div>
+                <div className="font-bold text-red-700 dark:text-red-400">Quota atteint</div>
+                <div className="text-sm text-muted-foreground">
+                  {stats.queued + stats.sending} message(s) restent en attente. Ils seront envoyés après renouvellement ou après upgrade.
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Quota ce mois : {quotaInfo.used}/{quotaInfo.quota ?? '∞'} • reste {quotaInfo.remaining ?? '∞'}
+                </div>
+              </div>
+            </div>
+            <a
+              href="/billing/plans"
+              className="px-4 py-2 text-xs bg-red-500/10 text-red-700 dark:text-red-400 rounded-lg font-bold hover:bg-red-500/20 transition whitespace-nowrap"
+            >
+              Upgrade
+            </a>
+          </div>
+        </div>
+      )}
+
       <div className="mb-8 flex justify-between items-start">
         <div>
           <h1 className="text-3xl font-bold mb-2">{campaign.name}</h1>

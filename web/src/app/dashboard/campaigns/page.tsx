@@ -35,6 +35,28 @@ export default async function CampaignsPage({
     return <div>Aucune organisation trouvée</div>
   }
 
+  // Quota SMS (mois en cours) - utile pour expliquer pourquoi des messages restent "en attente"
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+  const { data: activeSub } = await supabase
+    .from('subscriptions')
+    .select('plans(sms_quota_month)')
+    .eq('org_id', orgMember.org_id)
+    .eq('status', 'active')
+    .eq('plans.is_visible', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  let smsQuotaMonth: number | null = activeSub?.plans?.sms_quota_month ?? 100
+  if (smsQuotaMonth === 0) smsQuotaMonth = null
+  const { count: usedCount } = await supabase
+    .from('messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('org_id', orgMember.org_id)
+    .eq('status', 'sent')
+    .gte('sent_at', monthStart)
+  const smsUsedThisMonth = usedCount || 0
+  const smsRemaining = smsQuotaMonth === null ? null : Math.max(smsQuotaMonth - smsUsedThisMonth, 0)
+
   // Build query for total count
   let countQuery = supabase
     .from('campaigns')
@@ -126,6 +148,30 @@ export default async function CampaignsPage({
           </a>
         }
       />
+
+      <div className="glass-card rounded-2xl p-4 border-2 border-black/10 dark:border-white/10 bg-card">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="font-bold">Quota SMS (mois en cours)</div>
+            <div className="text-sm text-muted-foreground">
+              {smsRemaining === null
+                ? `${smsUsedThisMonth} SMS envoyés (illimité)`
+                : `${smsUsedThisMonth}/${smsQuotaMonth} • reste ${smsRemaining}`}
+            </div>
+            {smsRemaining === 0 && (
+              <div className="text-sm text-red-700 dark:text-red-400 mt-1 font-semibold">
+                🚫 Quota atteint : les messages restants resteront en attente jusqu’au renouvellement ou upgrade.
+              </div>
+            )}
+          </div>
+          <a
+            href="/billing/plans"
+            className="px-4 py-2 text-xs bg-primary/10 text-primary rounded-lg font-bold hover:bg-primary/20 transition whitespace-nowrap"
+          >
+            Voir les plans
+          </a>
+        </div>
+      </div>
 
       {/* Stats cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

@@ -179,13 +179,11 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     throw Exception('Erreur réseau');
   }
 
-  Future<List<Message>> _claimMessages(String deviceToken) async {
-    final payload = await _postJson(
+  Future<Map<String, dynamic>> _claimPayload(String deviceToken) async {
+    return await _postJson(
       _proxyUri('/api/mobile/claim-messages'),
       {'device_token': deviceToken, 'limit': AppConfig.claimBatchSize, 'sim_subscription_id': null},
     );
-    final rawList = (payload['messages'] as List?) ?? const [];
-    return rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
   Future<void> _updateStatus(String deviceToken, Message msg, bool success, String? error) async {
@@ -258,8 +256,26 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         return;
       }
 
-      final messages = await _claimMessages(token);
+      final payload = await _claimPayload(token);
+      final rawList = (payload['messages'] as List?) ?? const [];
+      final messages =
+          rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
+      final remaining = payload['quota_remaining'] is int ? payload['quota_remaining'] as int : null;
+      final quotaReached = payload['quota_reached'] == true || remaining == 0;
+      final plan = payload['plan'];
+      final planQuota = plan is Map && plan['sms_quota_month'] is int ? plan['sms_quota_month'] as int : null;
+
       if (messages.isEmpty) {
+        if (quotaReached && (planQuota ?? 0) > 0) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '🚫 Quota atteint (0 restant ce mois)',
+            notificationButtons: const [
+              NotificationButton(id: 'stop', text: 'Stop'),
+            ],
+          );
+          return;
+        }
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
           notificationText: '✅ Actif (en attente)',

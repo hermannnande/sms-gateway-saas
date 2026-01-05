@@ -91,6 +91,16 @@ Deno.serve(async (req) => {
     // Si quota atteint (plan gratuit), ne pas bloquer par erreur:
     // on renvoie juste 0 messages à traiter.
     if (smsQuota !== 0 && quotaRemaining !== null && quotaRemaining <= 0) {
+      // UX: Mettre les campagnes en pause pour éviter "bloqué / en attente" sans explication côté web.
+      // Les messages restent en file (queued) et pourront repartir après upgrade/renouvellement.
+      try {
+        await supabaseClient
+          .from('campaigns')
+          .update({ status: 'paused', updated_at: new Date().toISOString() })
+          .eq('org_id', org_id)
+          .eq('status', 'running')
+      } catch (_) {}
+
       return new Response(
         JSON.stringify({
           success: true,
@@ -99,6 +109,8 @@ Deno.serve(async (req) => {
           plan: { id: plan.id, name: plan.name, max_devices: plan.max_devices, sms_quota_month: plan.sms_quota_month },
           sms_used_this_month: used,
           quota_remaining: 0,
+          quota_reached: true,
+          reason: 'quota_reached',
           campaign_running: false,
         }),
         {
@@ -149,6 +161,7 @@ Deno.serve(async (req) => {
         plan: { id: plan.id, name: plan.name, max_devices: plan.max_devices, sms_quota_month: plan.sms_quota_month },
         sms_used_this_month: used,
         quota_remaining: quotaRemaining,
+        quota_reached: false,
         // infos campagne pour la file d'attente côté mobile (optionnel)
         campaign_running: true,
       }),

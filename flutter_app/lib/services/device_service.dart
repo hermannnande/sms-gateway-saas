@@ -110,6 +110,19 @@ class DeviceService {
     }
   }
 
+  /// Variante verbose: retourne toute la réponse (messages + quota + plan...).
+  Future<Map<String, dynamic>> claimMessagesVerbose({
+    required String deviceToken,
+    int limit = 10,
+    int? simSubscriptionId,
+  }) async {
+    return await _postProxy('/api/mobile/claim-messages', {
+      'device_token': deviceToken,
+      'limit': limit,
+      'sim_subscription_id': simSubscriptionId,
+    });
+  }
+
   Future<void> updateMessageStatus({
     required String deviceToken,
     required Message message,

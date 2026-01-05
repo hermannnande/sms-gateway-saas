@@ -24,6 +24,28 @@ export default async function CampaignPage({ params }: { params: { id: string } 
     redirect('/dashboard/campaigns')
   }
 
+  // Quota SMS (mois en cours) pour afficher une alerte claire si des messages restent en attente
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+  const { data: activeSub } = await supabase
+    .from('subscriptions')
+    .select('plans(sms_quota_month)')
+    .eq('org_id', campaign.org_id)
+    .eq('status', 'active')
+    .eq('plans.is_visible', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  let smsQuotaMonth: number | null = activeSub?.plans?.sms_quota_month ?? 100
+  if (smsQuotaMonth === 0) smsQuotaMonth = null
+  const { count: usedCount } = await supabase
+    .from('messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('org_id', campaign.org_id)
+    .eq('status', 'sent')
+    .gte('sent_at', monthStart)
+  const smsUsedThisMonth = usedCount || 0
+  const smsRemaining = smsQuotaMonth === null ? null : Math.max(smsQuotaMonth - smsUsedThisMonth, 0)
+
   // Get messages stats
   const { data: messages } = await supabase
     .from('messages')
@@ -50,7 +72,11 @@ export default async function CampaignPage({ params }: { params: { id: string } 
       </nav>
 
       <main className="container mx-auto px-4 py-8">
-        <CampaignDetails campaign={campaign} stats={stats} />
+        <CampaignDetails
+          campaign={campaign}
+          stats={stats}
+          quotaInfo={{ quota: smsQuotaMonth, used: smsUsedThisMonth, remaining: smsRemaining }}
+        />
       </main>
     </div>
   )

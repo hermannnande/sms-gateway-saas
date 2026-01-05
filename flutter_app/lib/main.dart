@@ -74,6 +74,8 @@ class AppState {
     required this.planSmsQuotaMonth,
     required this.planMaxDevices,
     required this.subscriptionPeriodEnd,
+    required this.smsUsedThisMonth,
+    required this.quotaRemaining,
   });
 
   factory AppState.initial() => const AppState(
@@ -97,6 +99,8 @@ class AppState {
         planSmsQuotaMonth: null,
         planMaxDevices: null,
         subscriptionPeriodEnd: null,
+        smsUsedThisMonth: null,
+        quotaRemaining: null,
       );
 
   final bool loading;
@@ -119,6 +123,8 @@ class AppState {
   final int? planSmsQuotaMonth;
   final int? planMaxDevices;
   final DateTime? subscriptionPeriodEnd;
+  final int? smsUsedThisMonth;
+  final int? quotaRemaining;
 
   AppState copyWith({
     bool? loading,
@@ -141,6 +147,8 @@ class AppState {
     int? planSmsQuotaMonth,
     int? planMaxDevices,
     DateTime? subscriptionPeriodEnd,
+    int? smsUsedThisMonth,
+    int? quotaRemaining,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -163,6 +171,8 @@ class AppState {
       planSmsQuotaMonth: planSmsQuotaMonth ?? this.planSmsQuotaMonth,
       planMaxDevices: planMaxDevices ?? this.planMaxDevices,
       subscriptionPeriodEnd: subscriptionPeriodEnd ?? this.subscriptionPeriodEnd,
+      smsUsedThisMonth: smsUsedThisMonth ?? this.smsUsedThisMonth,
+      quotaRemaining: quotaRemaining ?? this.quotaRemaining,
     );
   }
 }
@@ -388,6 +398,8 @@ class AppNotifier extends Notifier<AppState> {
             planSmsQuotaMonth: _safeParseInt(plan['sms_quota_month']),
             planMaxDevices: _safeParseInt(plan['max_devices']),
             subscriptionPeriodEnd: null,
+            smsUsedThisMonth: _safeParseInt(payload['sms_used_this_month']),
+            quotaRemaining: _safeParseInt(payload['quota_remaining']),
           );
           return;
         }
@@ -436,6 +448,8 @@ class AppNotifier extends Notifier<AppState> {
         planName: plan is Map ? plan['name']?.toString() : state.planName,
         planSmsQuotaMonth: plan is Map ? _safeParseInt(plan['sms_quota_month']) : state.planSmsQuotaMonth,
         planMaxDevices: plan is Map ? _safeParseInt(plan['max_devices']) : state.planMaxDevices,
+        smsUsedThisMonth: _safeParseInt(payload['sms_used_this_month']),
+        quotaRemaining: _safeParseInt(payload['quota_remaining']),
       );
     } catch (e) {
       if (!silent) setLastStatus('Statut appareil: $e');
@@ -605,7 +619,7 @@ class AppNotifier extends Notifier<AppState> {
         await refreshSimCards();
       }
 
-      final messages = await ref.read(deviceServiceProvider).claimMessages(
+      final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
             deviceToken: token,
             limit: AppConfig.claimBatchSize,
             // La SIM est décidée côté campagne web (via sim_slot_index),
@@ -613,12 +627,38 @@ class AppNotifier extends Notifier<AppState> {
             simSubscriptionId: null,
           );
 
+      // Mettre à jour quota/usage dès qu’on a une réponse serveur.
+      final usedThisMonth = _safeParseInt(payload['sms_used_this_month']);
+      final remaining = _safeParseInt(payload['quota_remaining']);
+      state = state.copyWith(
+        smsUsedThisMonth: usedThisMonth ?? state.smsUsedThisMonth,
+        quotaRemaining: remaining ?? state.quotaRemaining,
+      );
+
+      final rawList = (payload['messages'] as List?) ?? const [];
+      final messages = rawList
+          .whereType<Map>()
+          .map((e) => Message.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+
       if (messages.isEmpty) {
+        final quotaReached = payload['quota_reached'] == true || remaining == 0;
+        final plan = payload['plan'];
+        final planQuota = plan is Map ? _safeParseInt(plan['sms_quota_month']) : null;
+
         if (!silentIfEmpty) {
-          state = state.copyWith(
-            lastStatus: 'Aucun message à envoyer',
-            lastMessages: const [],
-          );
+          if (quotaReached && planQuota != null && planQuota > 0) {
+            state = state.copyWith(
+              lastStatus:
+                  '🚫 Quota atteint (${planQuota} SMS/mois). Reste: 0.\nLes SMS restants sont en attente. Passe à un abonnement ou attends le renouvellement.',
+              lastMessages: const [],
+            );
+          } else {
+            state = state.copyWith(
+              lastStatus: 'Aucun message à envoyer',
+              lastMessages: const [],
+            );
+          }
         }
         return;
       }
@@ -656,6 +696,9 @@ class AppNotifier extends Notifier<AppState> {
         lastMessages: messages,
         lastStatus: results.join('\n'),
       );
+
+      // Rafraîchir le quota après envoi (statuts mis à jour côté serveur)
+      await refreshDeviceStatus(silent: true);
     } catch (e, st) {
       ref.read(loggerProvider).e('syncOnce error', error: e, stackTrace: st);
       state = state.copyWith(lastStatus: 'Erreur sync: $e');
@@ -3638,6 +3681,8 @@ class _SubscriptionSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final planName = appState.planName ?? 'Essai';
     final quota = appState.planSmsQuotaMonth;
+    final used = appState.smsUsedThisMonth ?? 0;
+    final remaining = appState.quotaRemaining;
     final maxDevices = appState.planMaxDevices;
     final end = appState.subscriptionPeriodEnd;
     return ListView(
@@ -3758,7 +3803,11 @@ class _SubscriptionSection extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        '1 250 / 10 000',
+                        quota == null
+                            ? '—'
+                            : (quota == 0
+                                ? '$used / ∞'
+                                : '$used / $quota (reste ${remaining ?? (quota - used).clamp(0, quota)})'),
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey.shade600,
@@ -3770,7 +3819,9 @@ class _SubscriptionSection extends StatelessWidget {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: LinearProgressIndicator(
-                      value: 0.125,
+                      value: (quota == null || quota == 0)
+                          ? null
+                          : (quota > 0 ? (used / quota).clamp(0.0, 1.0) : null),
                       minHeight: 8,
                       backgroundColor: Colors.grey.shade200,
                       valueColor: const AlwaysStoppedAnimation<Color>(
@@ -3780,12 +3831,32 @@ class _SubscriptionSection extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '12,5% utilisé',
+                    quota == null
+                        ? '—'
+                        : (quota == 0
+                            ? 'Illimité'
+                            : '${((used / quota) * 100).clamp(0, 100).toStringAsFixed(0)}% utilisé • reste ${remaining ?? (quota - used).clamp(0, quota)}'),
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.grey.shade600,
                     ),
                   ),
+                  if (quota != null && quota > 0 && (remaining ?? 0) <= 0) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red.shade200),
+                      ),
+                      child: Text(
+                        '🚫 Quota gratuit atteint: 0 SMS restant ce mois.\nLes messages restants restent en attente jusqu’au renouvellement ou un upgrade.',
+                        style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600, fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 24),
