@@ -387,6 +387,30 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
         attempted++;
 
+        // Mettre à jour la notification AVANT d'envoyer le SMS (pour montrer "Envoi en cours...")
+        if (hasCampaignTotals) {
+          final s = sentNow();
+          final remain = max(totalSum - s, 0);
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '📤 Envoi... • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
+            notificationButtons: const [
+              NotificationButton(id: 'pause', text: 'Pause'),
+              NotificationButton(id: 'stop', text: 'Annuler'),
+            ],
+          );
+        } else {
+          final remain = batchTotal - attempted;
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'Envoi SMS en cours',
+            notificationText: '📤 Envoi... • ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
+            notificationButtons: const [
+              NotificationButton(id: 'pause', text: 'Pause'),
+              NotificationButton(id: 'stop', text: 'Annuler'),
+            ],
+          );
+        }
+
         try {
           final subscriptionId = _pickSubscriptionId(msg, sims);
           await _channel.invokeMethod('sendSms', {
@@ -401,19 +425,17 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           if (cid != null && campaigns.containsKey(cid)) {
             sentDeltaByCampaign[cid] = (sentDeltaByCampaign[cid] ?? 0) + 1;
           }
-
-          // Petit délai pour éviter d'envoyer trop vite et laisser la notif se mettre à jour
-          await Future.delayed(const Duration(milliseconds: 500));
         } catch (e) {
           await _updateStatus(token, msg, false, e.toString());
         }
 
+        // Mettre à jour IMMÉDIATEMENT après l'envoi pour montrer la progression
         if (hasCampaignTotals) {
           final s = sentNow();
           final remain = max(totalSum - s, 0);
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMS Gateway',
-            notificationText: '$campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
+            notificationText: '✅ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
             notificationButtons: const [
               NotificationButton(id: 'pause', text: 'Pause'),
               NotificationButton(id: 'stop', text: 'Annuler'),
@@ -423,13 +445,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           final remain = batchTotal - attempted;
           await FlutterForegroundTask.updateService(
             notificationTitle: 'Envoi SMS en cours',
-            notificationText: '${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
+            notificationText: '✅ ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
             notificationButtons: const [
               NotificationButton(id: 'pause', text: 'Pause'),
               NotificationButton(id: 'stop', text: 'Annuler'),
             ],
           );
         }
+
+        // Délai entre chaque SMS pour que la notif soit VISIBLE (configurable dans config.dart)
+        await Future.delayed(Duration(milliseconds: AppConfig.smsDelayMs));
       }
 
       // Fin du batch - ne pas revenir sur "en attente" si la campagne continue
