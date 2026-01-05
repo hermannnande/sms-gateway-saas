@@ -225,6 +225,29 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     return '[${'█' * filled}${'░' * (width - filled)}]';
   }
 
+  Map<String, Map<String, dynamic>> _campaignsFromPayload(Map<String, dynamic> payload) {
+    final raw = payload['campaigns'];
+    if (raw is! List) return <String, Map<String, dynamic>>{};
+    final out = <String, Map<String, dynamic>>{};
+    for (final item in raw) {
+      if (item is Map) {
+        final m = Map<String, dynamic>.from(item);
+        final id = m['id']?.toString();
+        if (id != null && id.trim().isNotEmpty) {
+          out[id.trim()] = m;
+        }
+      }
+    }
+    return out;
+  }
+
+  int _asInt(dynamic v, {int fallback = 0}) {
+    if (v == null) return fallback;
+    if (v is int) return v;
+    if (v is double) return v.toInt();
+    return int.tryParse(v.toString()) ?? fallback;
+  }
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     await FlutterForegroundTask.updateService(
@@ -276,6 +299,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final rawList = (payload['messages'] as List?) ?? const [];
       final messages =
           rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
+      final campaigns = _campaignsFromPayload(payload);
       final remaining = payload['quota_remaining'] is int ? payload['quota_remaining'] as int : null;
       final quotaReached = payload['quota_reached'] == true || remaining == 0;
       final plan = payload['plan'];
@@ -304,23 +328,50 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       }
 
       final sims = await _getSimCards();
-      final total = messages.length;
-      var done = 0;
+      final batchTotal = messages.length;
+      var attempted = 0;
+
+      // Progression "campagne" (sent_count/total_count) si dispo, sinon fallback batch.
+      final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
+      final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
+      final isMultiCampaign = knownCampaignIds.length > 1;
+      final activeCampaignId = knownCampaignIds.length == 1 ? knownCampaignIds.first : null;
+
+      final campaignLabel = () {
+        if (activeCampaignId != null) {
+          final name = campaigns[activeCampaignId]?['name']?.toString().trim();
+          return (name == null || name.isEmpty) ? 'Campagne' : name;
+        }
+        if (isMultiCampaign) return 'Multi-campagnes';
+        return 'Campagne';
+      }();
+
+      int baseSentSum = 0;
+      int totalSum = 0;
+      if (knownCampaignIds.isNotEmpty) {
+        for (final id in knownCampaignIds) {
+          final c = campaigns[id];
+          baseSentSum += _asInt(c?['sent_count'], fallback: 0);
+          totalSum += _asInt(c?['total_count'], fallback: 0);
+        }
+      }
+      final hasCampaignTotals = knownCampaignIds.isNotEmpty && totalSum > 0;
+      final sentDeltaByCampaign = <String, int>{};
+
+      int sentNow() {
+        if (!hasCampaignTotals) return 0;
+        int deltaSum = 0;
+        for (final v in sentDeltaByCampaign.values) {
+          deltaSum += v;
+        }
+        return baseSentSum + deltaSum;
+      }
 
       for (final msg in messages) {
         // Check pause mid-batch
         if (await _isPaused()) break;
 
-        done++;
-        final remain = total - done;
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'Envoi SMS en cours',
-          notificationText: '${_progressBar(done, total)} $done/$total • reste $remain',
-          notificationButtons: const [
-            NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Stop'),
-          ],
-        );
+        attempted++;
 
         try {
           final subscriptionId = _pickSubscriptionId(msg, sims);
@@ -330,19 +381,62 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             'subscriptionId': subscriptionId,
           });
           await _updateStatus(token, msg, true, null);
+
+          // Mettre à jour la progression locale (le backend incrémente aussi sent_count).
+          final cid = msg.campaignId;
+          if (cid != null && campaigns.containsKey(cid)) {
+            sentDeltaByCampaign[cid] = (sentDeltaByCampaign[cid] ?? 0) + 1;
+          }
         } catch (e) {
           await _updateStatus(token, msg, false, e.toString());
         }
+
+        if (hasCampaignTotals) {
+          final s = sentNow();
+          final remain = max(totalSum - s, 0);
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '$campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
+            notificationButtons: const [
+              NotificationButton(id: 'pause', text: 'Pause'),
+              NotificationButton(id: 'stop', text: 'Stop'),
+            ],
+          );
+        } else {
+          final remain = batchTotal - attempted;
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'Envoi SMS en cours',
+            notificationText: '${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
+            notificationButtons: const [
+              NotificationButton(id: 'pause', text: 'Pause'),
+              NotificationButton(id: 'stop', text: 'Stop'),
+            ],
+          );
+        }
       }
 
-      await FlutterForegroundTask.updateService(
-        notificationTitle: 'SMS Gateway',
-        notificationText: '✅ Envoi terminé ($done/$total)',
-        notificationButtons: const [
-          NotificationButton(id: 'pause', text: 'Pause'),
-          NotificationButton(id: 'stop', text: 'Stop'),
-        ],
-      );
+      // Fin du batch (pas forcément fin de campagne)
+      if (hasCampaignTotals) {
+        final s = sentNow();
+        final remain = max(totalSum - s, 0);
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText: '✅ Actif • $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
+          notificationButtons: const [
+            NotificationButton(id: 'pause', text: 'Pause'),
+            NotificationButton(id: 'stop', text: 'Stop'),
+          ],
+        );
+      } else {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText: '✅ Batch traité ($attempted/$batchTotal)',
+          notificationButtons: const [
+            NotificationButton(id: 'pause', text: 'Pause'),
+            NotificationButton(id: 'stop', text: 'Stop'),
+          ],
+        );
+      }
     } catch (e) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMS Gateway',

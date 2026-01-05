@@ -3,6 +3,7 @@ class Message {
   final String to;
   final String content;
   final int tryCount;
+  final String? campaignId;
   final int? simSubscriptionId;
   final int? simSlotIndex;
 
@@ -11,6 +12,7 @@ class Message {
     required this.to,
     required this.content,
     this.tryCount = 0,
+    this.campaignId,
     this.simSubscriptionId,
     this.simSlotIndex,
   });
@@ -20,6 +22,7 @@ class Message {
     final simParsed = _parseSim(simRaw);
     return Message(
       id: json['id'].toString(),
+      campaignId: json['campaign_id']?.toString(),
       to: (json['to_phone_e164'] ??
               json['phone_e164'] ??
               json['recipient'] ??
@@ -57,6 +60,7 @@ class Message {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'campaign_id': campaignId,
       'to': to,
       'content': content,
       'try_count': tryCount,

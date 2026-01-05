@@ -153,6 +153,28 @@ Deno.serve(async (req) => {
 
     console.log(`Claimed ${claimedMessages.length} messages for device ${device_id}`)
 
+    // Retourner aussi l'avancement des campagnes concernées (pour la notif mobile)
+    let campaigns: Array<Record<string, unknown>> = []
+    try {
+      const ids = Array.from(
+        new Set(
+          (claimedMessages as Array<Record<string, unknown>>)
+            .map((m) => (m as any)?.campaign_id)
+            .filter((v) => typeof v === 'string' && v.length > 0),
+        ),
+      )
+      if (ids.length > 0) {
+        const { data: rows } = await supabaseClient
+          .from('campaigns')
+          .select('id,name,status,total_count,sent_count')
+          .eq('org_id', org_id)
+          .in('id', ids)
+        campaigns = (rows as any) ?? []
+      }
+    } catch (_) {
+      // non-bloquant
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -162,6 +184,7 @@ Deno.serve(async (req) => {
         sms_used_this_month: used,
         quota_remaining: quotaRemaining,
         quota_reached: false,
+        campaigns,
         // infos campagne pour la file d'attente côté mobile (optionnel)
         campaign_running: true,
       }),

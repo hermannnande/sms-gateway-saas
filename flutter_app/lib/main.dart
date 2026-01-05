@@ -2935,6 +2935,46 @@ class _AppDrawer extends StatelessWidget {
                       label: 'Profil',
                       section: AppSection.profile,
                     ),
+                    const SizedBox(height: 12),
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: ListTile(
+                        leading: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            Icons.open_in_new_rounded,
+                            color: Colors.grey.shade700,
+                            size: 22,
+                          ),
+                        ),
+                        title: const Text(
+                          'Ouvrir le dashboard web',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                            fontSize: 15,
+                          ),
+                        ),
+                        onTap: () async {
+                          HapticFeedback.mediumImpact();
+                          Navigator.of(context).pop();
+                          final uri = Uri.parse('${AppConfig.webApiBaseUrl}/dashboard');
+                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        },
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
