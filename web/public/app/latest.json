@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+18",
+  "latestVersion": "1.0.1+19",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "UX: après connexion, si permission batterie non accordée → dialog avec bouton direct vers Paramètres Android"
+  "notes": "Fix: bouton \"Synchroniser et envoyer\" fiable même avec l'arrière-plan. Notif: progression/pause/annuler plus stable."
 }
 
 
