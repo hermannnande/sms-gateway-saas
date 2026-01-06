@@ -17,6 +17,106 @@ interface User {
   is_admin: boolean
 }
 
+interface ResetPasswordModalProps {
+  user: User | null
+  onClose: () => void
+  onSuccess: () => void
+}
+
+function ResetPasswordModal({ user, onClose, onSuccess }: ResetPasswordModalProps) {
+  const [newPassword, setNewPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (!user) return null
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (newPassword.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      const res = await fetch('/api/admin/reset-user-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.user_id, new_password: newPassword }),
+      })
+
+      const json = await res.json()
+
+      if (json.ok) {
+        onSuccess()
+        onClose()
+      } else {
+        setError(json.error || 'Erreur lors de la modification du mot de passe')
+      }
+    } catch (err: any) {
+      setError(err.message || 'Erreur réseau')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+        <h2 className="text-xl font-bold mb-4">Modifier le mot de passe</h2>
+        <p className="text-sm text-gray-600 mb-4">
+          Utilisateur : <strong>{user.email}</strong>
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="new_password" className="block text-sm font-medium text-gray-700 mb-1">
+              Nouveau mot de passe
+            </label>
+            <input
+              type="password"
+              id="new_password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Minimum 6 caractères"
+              minLength={6}
+              required
+              autoFocus
+            />
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-800 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {loading ? 'Modification...' : 'Modifier'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
@@ -25,6 +125,8 @@ export default function AdminUsersPage() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const pageSize = 20
 
   useEffect(() => {
@@ -51,6 +153,11 @@ export default function AdminUsersPage() {
       setError(json?.error || `Erreur API (${res.status})`)
     }
     setLoading(false)
+  }
+
+  function handlePasswordResetSuccess() {
+    setSuccessMessage('Mot de passe modifié avec succès ✓')
+    setTimeout(() => setSuccessMessage(null), 3000)
   }
 
   const columns = [
@@ -96,6 +203,17 @@ export default function AdminUsersPage() {
       accessor: (row: User) =>
         row.last_mobile_seen_at ? new Date(row.last_mobile_seen_at).toLocaleDateString('fr-FR') : '-',
     },
+    {
+      header: 'Actions',
+      accessor: (row: User) => (
+        <button
+          onClick={() => setSelectedUser(row)}
+          className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          🔑 Modifier mot de passe
+        </button>
+      ),
+    },
   ]
 
   return (
@@ -120,6 +238,12 @@ export default function AdminUsersPage() {
         ]}
       />
 
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-green-800 text-sm font-medium">
+          {successMessage}
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-800 text-sm">
           {error}
@@ -137,6 +261,8 @@ export default function AdminUsersPage() {
           totalItems={totalCount}
         />
       )}
+
+      <ResetPasswordModal user={selectedUser} onClose={() => setSelectedUser(null)} onSuccess={handlePasswordResetSuccess} />
     </div>
   )
 }
