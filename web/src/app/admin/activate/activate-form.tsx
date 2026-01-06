@@ -162,9 +162,13 @@ export function ActivateSubscriptionForm() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          org_id: searchResult.org.id,
           plan_id: selectedPlan,
           duration_days: duration,
+          // If org exists, use it; otherwise activate by email/user_id (backend will auto-create org)
+          org_id: searchResult?.org?.id || undefined,
+          user_id: searchResult?.user?.user_id || undefined,
+          email: searchResult?.user?.email || email.trim().toLowerCase(),
+          org_name: newOrgName.trim() || undefined,
         }),
       })
 
@@ -401,9 +405,17 @@ export function ActivateSubscriptionForm() {
       )}
 
       {/* Activate Subscription */}
-      {searchResult && !searchResult.needsOrg && (
+      {searchResult && (
         <div className="bg-card rounded-xl border border-border p-6">
           <h2 className="text-xl font-bold mb-4">2. Activer/Renouveler l'abonnement</h2>
+          {searchResult.needsOrg && (
+            <div className="mb-4 p-4 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:border-amber-800 dark:text-amber-200">
+              <div className="font-semibold">ℹ️ Organisation manquante</div>
+              <div className="text-sm mt-1">
+                Pas de souci : si vous cliquez sur <strong>Activer</strong>, le système créera automatiquement une organisation pour ce client (sans que vous ayez à la gérer).
+              </div>
+            </div>
+          )}
           
           {/* Plan Selection */}
           <div className="mb-4">
