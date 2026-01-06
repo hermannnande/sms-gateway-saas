@@ -87,6 +87,16 @@ export function CampaignDetails({
     setRefreshing(false)
   }
 
+  // Auto-refresh toutes les 3 secondes si la campagne est en cours
+  useEffect(() => {
+    if (campaign.status === 'running') {
+      const interval = setInterval(() => {
+        refreshStats()
+      }, 3000) // Refresh toutes les 3 secondes
+      return () => clearInterval(interval)
+    }
+  }, [campaign.status])
+
   async function fetchMessages() {
     setMessagesLoading(true)
     try {
