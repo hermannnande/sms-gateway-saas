@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 
 type Plan = {
   id: string
@@ -9,6 +8,24 @@ type Plan = {
   price_xof: number
   sms_quota_month: number
   max_devices: number
+}
+
+type FindUserPayload = {
+  ok: boolean
+  error?: string
+  hint?: string
+  user?: {
+    user_id: string
+    email: string
+    created_at: string
+    email_confirmed_at?: string | null
+    last_sign_in_at?: string | null
+  }
+  org?: { id: string; name: string } | null
+  org_id?: string
+  currentSubscription?: any | null
+  devicesCount?: number
+  messagesSentThisMonth?: number
 }
 
 export function ActivateSubscriptionForm() {
@@ -36,69 +53,29 @@ export function ActivateSubscriptionForm() {
     setSearchResult(null)
 
     try {
-      const supabase = createClient()
-      
-      // Chercher l'utilisateur
-      const { data: user } = await supabase
-        .from('app_users')
-        .select('id, email, created_at')
-        .eq('email', email.trim().toLowerCase())
-        .maybeSingle()
+      const emailNorm = email.trim().toLowerCase()
+      const res = await fetch(`/api/admin/find-user?email=${encodeURIComponent(emailNorm)}`, {
+        cache: 'no-store',
+      })
+      const json = (await res.json().catch(() => ({}))) as FindUserPayload
 
-      if (!user) {
-        setMessage({ 
-          type: 'error', 
-          text: `❌ Aucun compte trouvé pour : ${email.trim()}\n\n💡 Vérifiez que :\n• L'email est correctement écrit\n• Le client s'est bien inscrit sur smsenvoie.com\n• Le compte n'a pas été supprimé\n\n➡️ Invitez le client à créer un compte sur : https://smsenvoie.com/auth/register` 
-        })
-        setLoading(false)
+      if (!res.ok || !json?.ok) {
+        const txt = [json?.error || `Erreur API (${res.status})`, json?.hint].filter(Boolean).join('\n\n')
+        setMessage({ type: 'error', text: txt })
         return
       }
 
-      // Chercher son organisation
-      const { data: member } = await supabase
-        .from('org_members')
-        .select('org_id, organizations(id, name)')
-        .eq('user_id', user.id)
-        .maybeSingle()
-
-      if (!member) {
-        setMessage({ 
-          type: 'error', 
-          text: `⚠️ Compte trouvé mais aucune organisation associée.\n\nCela peut arriver si le compte est incomplet. Demandez au client de se reconnecter sur smsenvoie.com pour finaliser son inscription.` 
-        })
-        setLoading(false)
+      if (!json.user) {
+        setMessage({ type: 'error', text: 'Réponse invalide: user manquant' })
         return
       }
-
-      // Chercher les devices
-      const { count: devicesCount } = await supabase
-        .from('devices')
-        .select('*', { count: 'exact' })
-        .eq('org_id', member.org_id)
-
-      // Chercher son abonnement actuel
-      const { data: currentSub } = await supabase
-        .from('subscriptions')
-        .select('*, plans(name, max_devices, sms_quota_month, price_xof)')
-        .eq('org_id', member.org_id)
-        .eq('status', 'active')
-        .maybeSingle()
-
-      // Compter les messages envoyés ce mois
-      const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
-      const { count: messagesSent } = await supabase
-        .from('messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('org_id', member.org_id)
-        .eq('status', 'sent')
-        .gte('sent_at', monthStart)
 
       setSearchResult({
-        user,
-        org: member.organizations,
-        currentSubscription: currentSub,
-        devicesCount: devicesCount || 0,
-        messagesSentThisMonth: messagesSent || 0,
+        user: json.user,
+        org: json.org || { id: json.org_id, name: 'Organisation' },
+        currentSubscription: json.currentSubscription,
+        devicesCount: json.devicesCount || 0,
+        messagesSentThisMonth: json.messagesSentThisMonth || 0,
       })
       setMessage({ type: 'success', text: '✅ Client trouvé avec succès !' })
     } catch (err: any) {
