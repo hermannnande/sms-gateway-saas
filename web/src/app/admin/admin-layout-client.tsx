@@ -13,6 +13,8 @@ export default function AdminLayoutClient({ children }: { children: ReactNode })
     { name: 'Utilisateurs', href: '/admin/users', icon: '👥' },
     { name: 'Organisations', href: '/admin/orgs', icon: '🏢' },
     { name: 'Abonnements', href: '/admin/subscriptions', icon: '💳' },
+    { name: 'Activer Abonnement', href: '/admin/activate', icon: '✅' },
+    { name: 'Codes Promo', href: '/admin/promo-codes', icon: '🎟️' },
     { name: 'Trafic', href: '/admin/traffic', icon: '📈' },
     { name: 'Événements', href: '/admin/events', icon: '📋' },
   ]
