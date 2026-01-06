@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.2+26",
+  "latestVersion": "1.0.2+27",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Fix: Pause/Reprendre/Annuler fonctionne même si session expirée (fallback device_token)."
+  "notes": "Fix: Pause/Annuler (401) -> fallback direct Supabase + message d'erreur plus clair."
 }
 
 

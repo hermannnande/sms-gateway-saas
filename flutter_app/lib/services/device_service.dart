@@ -84,7 +84,18 @@ class DeviceService {
           throw Exception('Réponse serveur inattendue');
         }
         if (res.statusCode >= 400) {
-          throw Exception(decoded['error']?.toString() ?? 'Erreur serveur (${res.statusCode})');
+          final err = decoded['error']?.toString().trim();
+          if (err != null && err.isNotEmpty) {
+            throw Exception(err);
+          }
+          final msg = decoded['message']?.toString().trim();
+          if (msg != null && msg.isNotEmpty) {
+            throw Exception(msg);
+          }
+          // Dernier recours: inclure un aperçu de la réponse pour debug.
+          final preview = res.body.trim();
+          final short = preview.length > 140 ? '${preview.substring(0, 140)}…' : preview;
+          throw Exception('Erreur serveur (${res.statusCode})${short.isEmpty ? '' : ': $short'}');
         }
         return decoded;
       } on TimeoutException catch (e) {
@@ -207,21 +218,58 @@ class DeviceService {
     required String campaignId,
     String? deviceToken, // fallback si JWT expiré
   }) async {
-    final token = await _getFreshAccessTokenOrThrow();
-    if (token.isEmpty) {
-      throw Exception('Non authentifié. Connectez-vous d’abord.');
-    }
     final act = action.trim().toLowerCase();
     if (!['pause', 'resume', 'cancel'].contains(act)) {
       throw Exception('Action invalide: $action');
     }
-    final payload = await _postProxy(
-      '/api/mobile/campaign-control',
-      {'action': act, 'campaign_id': campaignId, 'device_token': deviceToken},
-      headers: {'Authorization': 'Bearer $token'},
-    );
-    if (payload['success'] != true && payload['ok'] != true) {
-      throw Exception(payload['error']?.toString() ?? 'Erreur contrôle campagne');
+
+    // 1) Tentative via proxy web (préférée)
+    try {
+      final token = await _getFreshAccessTokenOrThrow();
+      final payload = await _postProxy(
+        '/api/mobile/campaign-control',
+        {'action': act, 'campaign_id': campaignId, 'device_token': deviceToken},
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (payload['success'] != true && payload['ok'] != true) {
+        throw Exception(payload['error']?.toString() ?? payload['message']?.toString() ?? 'Erreur contrôle campagne');
+      }
+      return;
+    } catch (e) {
+      _logger.w('campaignControl proxy failed: $e');
+
+      // 2) Fallback direct vers Supabase Edge Function (comme le web)
+      // utile si le proxy renvoie 401/edge cache, ou si le device_token fallback ne passe pas.
+      try {
+        final token = await _getFreshAccessTokenOrThrow();
+        final url = AppConfig.supabaseUrl;
+        final anon = AppConfig.supabaseAnonKey;
+        final res = await _http.post(
+          Uri.parse('$url/functions/v1/campaign_control'),
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': anon,
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({'action': act, 'campaign_id': campaignId}),
+        );
+
+        final decoded = jsonDecode(res.body.isEmpty ? '{}' : res.body);
+        if (res.statusCode >= 400) {
+          if (decoded is Map && decoded['error'] != null) {
+            throw Exception(decoded['error'].toString());
+          }
+          throw Exception('Erreur serveur (${res.statusCode})');
+        }
+        if (decoded is Map && (decoded['success'] == true || decoded['ok'] == true)) {
+          return;
+        }
+        return;
+      } catch (e2) {
+        _logger.w('campaignControl direct supabase failed: $e2');
+        // remonter l'erreur proxy initiale (plus utile côté utilisateur)
+        rethrow;
+      }
     }
   }
 
