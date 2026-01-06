@@ -380,6 +380,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final plan = payload['plan'];
       final planQuota = plan is Map && plan['sms_quota_month'] is int ? plan['sms_quota_month'] as int : null;
 
+      // DEBUG: Afficher combien de messages ont été récupérés
       if (messages.isEmpty) {
         if (quotaReached && (planQuota ?? 0) > 0) {
           await FlutterForegroundTask.updateService(
@@ -391,9 +392,11 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           );
           return;
         }
+        // DEBUG: Indiquer clairement qu'il n'y a pas de messages à envoyer
+        final debugInfo = quotaReached ? 'quota=$remaining' : 'pas de campagne';
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '✅ Actif • ${_hhmmss()} • En attente de messages...',
+          notificationText: '✅ Actif • ${_hhmmss()} • Aucun msg ($debugInfo)',
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
             NotificationButton(id: 'stop', text: 'Annuler'),
@@ -401,6 +404,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         );
         return;
       }
+
+      // DEBUG: Afficher combien de messages on va envoyer
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: '🔄 ${messages.length} msg récupérés, envoi imminent...',
+        notificationButtons: const [
+          NotificationButton(id: 'pause', text: 'Pause'),
+          NotificationButton(id: 'stop', text: 'Annuler'),
+        ],
+      );
 
       final sims = await _getSimCards();
       // Si la campagne force une SIM (slot:X) mais on ne peut pas lire les SIMs, prévenir.
