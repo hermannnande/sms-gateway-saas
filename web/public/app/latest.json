@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.1+19",
+  "latestVersion": "1.0.1+20",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Fix: bouton \"Synchroniser et envoyer\" fiable même avec l'arrière-plan. Notif: progression/pause/annuler plus stable."
+  "notes": "Fix CRITIQUE: notification se met à jour en temps réel pendant l'envoi (channel recréé + rafraîchissement forcé)"
 }
 
 

@@ -20,25 +20,25 @@ class BackgroundSyncService {
   static Future<void> init() async {
     FlutterForegroundTask.initCommunicationPort();
 
-    FlutterForegroundTask.init(
+      FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         // IMPORTANT: le channel est créé 1 seule fois sur Android 8+.
         // On utilise un nouveau channelId pour éviter qu'un ancien channel "LOW" reste minimisé
         // (texte/boutons cachés sur certains téléphones).
-        channelId: 'sms_gateway_sending',
-        channelName: 'SMS Gateway',
-        channelDescription: 'Envoi de SMS en arrière-plan (progression, pause, annulation).',
+        channelId: 'sms_gateway_active_v2', // Nouveau channel pour forcer recréation
+        channelName: 'SMS Gateway - Envoi actif',
+        channelDescription: 'Affiche la progression de l''envoi de SMS en temps réel.',
         channelImportance: NotificationChannelImportance.DEFAULT,
         priority: NotificationPriority.DEFAULT,
         showWhen: false,
-        onlyAlertOnce: true,
+        onlyAlertOnce: false, // CRITICAL: permet de rafraîchir la notification à chaque update
       ),
       iosNotificationOptions: IOSNotificationOptions(
         showNotification: false,
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(4000), // Réduit de 8s à 4s pour update plus réactif
+        eventAction: ForegroundTaskEventAction.repeat(3000), // 3 secondes pour réactivité maximale
         autoRunOnBoot: false,
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
