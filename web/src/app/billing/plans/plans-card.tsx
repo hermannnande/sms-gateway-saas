@@ -14,11 +14,11 @@ type Plan = {
   highlight?: boolean | null
 }
 
-// Liens de paiement Moneroo directs
-const MONEROO_PAYMENT_LINKS: Record<string, string> = {
-  'monthly_1': 'https://pay.moneroo.io/plink_p61vil43wczd',  // 9,900 XOF - 1 appareil
-  'monthly_3': 'https://pay.moneroo.io/plink_jdxmvt9qxqrl',  // 15,900 XOF - 3 appareils
-  'monthly_5': 'https://pay.moneroo.io/plink_fstcasdzl6sh',  // 22,900 XOF - 5 appareils
+// Liens de paiement Chariow directs
+const CHARIOW_PAYMENT_LINKS: Record<string, string> = {
+  'monthly_1': 'https://coachingexpert.mychariow.shop/prd_7xnd5l/checkout',  // 9,900 XOF - 1 appareil
+  'monthly_2': 'https://coachingexpert.mychariow.shop/prd_iz04di/checkout',  // 15,900 XOF - 2 appareils
+  'monthly_5': 'https://coachingexpert.mychariow.shop/prd_oaw9yp/checkout',  // Prix à définir - 5 appareils
 }
 
 export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean }) {
@@ -31,10 +31,10 @@ export function PlansCard({ plan, isActive }: { plan: Plan; isActive: boolean })
     setError(null)
 
     try {
-      // Si un lien Moneroo existe pour ce plan, l'utiliser directement
-      const monerooLink = MONEROO_PAYMENT_LINKS[plan.id]
-      if (monerooLink) {
-        window.location.href = monerooLink
+      // Si un lien Chariow existe pour ce plan, l'utiliser directement
+      const chariowLink = CHARIOW_PAYMENT_LINKS[plan.id]
+      if (chariowLink) {
+        window.location.href = chariowLink
         return
       }
 
