@@ -73,6 +73,15 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Récupérer le plan effectif (pour max_devices)
+    let maxDevices: number | null = null
+    try {
+      const { data: plan } = await supabaseClient.rpc('get_effective_plan', { p_org_id: org_id })
+      maxDevices = typeof (plan as any)?.max_devices === 'number' ? (plan as any).max_devices : null
+    } catch (_) {
+      maxDevices = null
+    }
+
     // Generate secure token (32 bytes = 64 hex chars)
     const device_token = randomHex(32)
 
@@ -85,7 +94,7 @@ Deno.serve(async (req) => {
     if (android_id) {
       const { data: existingDevice } = await supabaseClient
         .from('devices')
-        .select('id, name')
+        .select('id, name, android_id')
         .eq('org_id', org_id)
         .eq('android_id', android_id)
         .maybeSingle()
@@ -98,6 +107,7 @@ Deno.serve(async (req) => {
           .update({
             name: device_name,
             token_hash,
+            android_id,
             status: 'offline',
             // NOTE: la table `devices` n'a pas de colonne `updated_at` dans le schéma actuel.
           })
@@ -110,6 +120,52 @@ Deno.serve(async (req) => {
         }
         device = updatedDevice
         console.log('Device updated:', device.id)
+      }
+    }
+
+    // Si pas trouvé par android_id, et que la limite est atteinte, on peut réutiliser le seul device
+    // (cas plan 1 appareil + réinstallation: l'ancien device n'avait pas android_id).
+    if (!device && maxDevices !== null) {
+      const { count: devicesCount } = await supabaseClient
+        .from('devices')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', org_id)
+
+      if (typeof devicesCount === 'number' && devicesCount >= maxDevices) {
+        if (maxDevices === 1) {
+          const { data: onlyDevice } = await supabaseClient
+            .from('devices')
+            .select('id')
+            .eq('org_id', org_id)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+
+          if (onlyDevice?.id) {
+            console.log('Max devices reached (1). Reusing existing device:', onlyDevice.id)
+            const { data: updatedDevice, error: updateError } = await supabaseClient
+              .from('devices')
+              .update({
+                name: device_name,
+                token_hash,
+                android_id: android_id || null,
+                status: 'offline',
+              })
+              .eq('id', onlyDevice.id)
+              .select()
+              .single()
+
+            if (updateError || !updatedDevice) {
+              throw new Error('Erreur mise à jour device: ' + updateError?.message)
+            }
+            device = updatedDevice
+          }
+        }
+
+        // Si on n'a pas pu réutiliser => erreur limite
+        if (!device) {
+          throw new Error(`Limite d'appareils atteinte (${devicesCount}/${maxDevices}). Passez à un plan supérieur.`)
+        }
       }
     }
 
