@@ -25,13 +25,14 @@ class BackgroundSyncService {
         // IMPORTANT: le channel est créé 1 seule fois sur Android 8+.
         // On utilise un nouveau channelId pour éviter qu'un ancien channel "LOW" reste minimisé
         // (texte/boutons cachés sur certains téléphones).
-        channelId: 'sms_gateway_active_v2', // Nouveau channel pour forcer recréation
+        channelId: 'sms_gateway_active_v3', // Nouveau channel pour forcer recréation (cache OEM)
         channelName: 'SMS Gateway - Envoi actif',
         channelDescription: 'Affiche la progression de l''envoi de SMS en temps réel.',
         channelImportance: NotificationChannelImportance.DEFAULT,
         priority: NotificationPriority.DEFAULT,
         showWhen: false,
-        onlyAlertOnce: false, // CRITICAL: permet de rafraîchir la notification à chaque update
+        // Ne pas alerter à chaque update (mais le texte doit quand même changer)
+        onlyAlertOnce: true,
       ),
       iosNotificationOptions: IOSNotificationOptions(
         showNotification: false,
@@ -127,9 +128,12 @@ class BackgroundSyncService {
       }
     } catch (_) {}
 
+    // IMPORTANT: certains téléphones gardent l'ancien channel/texte si on fait juste restartService().
+    // On force un stop+start pour appliquer les nouveaux paramètres de notification.
     if (await FlutterForegroundTask.isRunningService) {
-      await FlutterForegroundTask.restartService();
-      return;
+      await FlutterForegroundTask.stopService();
+      // petite pause pour laisser Android relâcher la notif/service
+      await Future.delayed(const Duration(milliseconds: 250));
     }
 
     await FlutterForegroundTask.startService(
@@ -257,6 +261,14 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     return '[${'█' * filled}${'░' * (width - filled)}]';
   }
 
+  String _hhmmss() {
+    final n = DateTime.now();
+    final hh = n.hour.toString().padLeft(2, '0');
+    final mm = n.minute.toString().padLeft(2, '0');
+    final ss = n.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+
   Map<String, Map<String, dynamic>> _campaignsFromPayload(Map<String, dynamic> payload) {
     final raw = payload['campaigns'];
     if (raw is! List) return <String, Map<String, dynamic>>{};
@@ -284,7 +296,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     await FlutterForegroundTask.updateService(
       notificationTitle: 'SMS Gateway',
-      notificationText: '✅ Actif (en attente)',
+      notificationText: '✅ Actif • ${_hhmmss()} • En attente...',
       notificationButtons: const [
         NotificationButton(id: 'pause', text: 'Pause'),
         NotificationButton(id: 'stop', text: 'Annuler'),
@@ -381,7 +393,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '✅ Actif • En attente de messages...',
+          notificationText: '✅ Actif • ${_hhmmss()} • En attente de messages...',
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
             NotificationButton(id: 'stop', text: 'Annuler'),
