@@ -77,6 +77,10 @@ class AppState {
     required this.subscriptionPeriodEnd,
     required this.smsUsedThisMonth,
     required this.quotaRemaining,
+    required this.campaignIdSending,
+    required this.campaignNameSending,
+    required this.campaignSentCount,
+    required this.campaignTotalCount,
   });
 
   factory AppState.initial() => const AppState(
@@ -102,6 +106,10 @@ class AppState {
         subscriptionPeriodEnd: null,
         smsUsedThisMonth: null,
         quotaRemaining: null,
+        campaignIdSending: null,
+        campaignNameSending: null,
+        campaignSentCount: null,
+        campaignTotalCount: null,
       );
 
   final bool loading;
@@ -126,6 +134,10 @@ class AppState {
   final DateTime? subscriptionPeriodEnd;
   final int? smsUsedThisMonth;
   final int? quotaRemaining;
+  final String? campaignIdSending;
+  final String? campaignNameSending;
+  final int? campaignSentCount;
+  final int? campaignTotalCount;
 
   AppState copyWith({
     bool? loading,
@@ -150,6 +162,10 @@ class AppState {
     DateTime? subscriptionPeriodEnd,
     int? smsUsedThisMonth,
     int? quotaRemaining,
+    String? campaignIdSending,
+    String? campaignNameSending,
+    int? campaignSentCount,
+    int? campaignTotalCount,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -174,6 +190,10 @@ class AppState {
       subscriptionPeriodEnd: subscriptionPeriodEnd ?? this.subscriptionPeriodEnd,
       smsUsedThisMonth: smsUsedThisMonth ?? this.smsUsedThisMonth,
       quotaRemaining: quotaRemaining ?? this.quotaRemaining,
+      campaignIdSending: campaignIdSending ?? this.campaignIdSending,
+      campaignNameSending: campaignNameSending ?? this.campaignNameSending,
+      campaignSentCount: campaignSentCount ?? this.campaignSentCount,
+      campaignTotalCount: campaignTotalCount ?? this.campaignTotalCount,
     );
   }
 }
@@ -3247,12 +3267,226 @@ class _DashboardSection extends StatelessWidget {
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
       children: [
+        // Carte de progression de campagne (si une campagne est en cours)
+        if (appState.campaignIdSending != null)
+          _CampaignProgressCard(appState: appState, notifier: notifier),
+        if (appState.campaignIdSending != null) const SizedBox(height: 20),
         _StatusCardDashboard(appState: appState),
         const SizedBox(height: 20),
         _SyncCard(appState: appState, notifier: notifier),
         const SizedBox(height: 20),
         _MessagesCard(appState: appState),
       ],
+    );
+  }
+}
+
+/// Carte de progression de campagne en cours avec boutons Pause/Reprendre/Annuler
+class _CampaignProgressCard extends StatelessWidget {
+  const _CampaignProgressCard({
+    required this.appState,
+    required this.notifier,
+  });
+
+  final AppState appState;
+  final AppNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final campaignName = appState.campaignNameSending ?? 'Campagne en cours';
+    final sent = appState.campaignSentCount ?? 0;
+    final total = appState.campaignTotalCount ?? 0;
+    final remaining = total - sent;
+    final progress = total > 0 ? (sent / total).clamp(0.0, 1.0) : 0.0;
+    final percentText = total > 0 ? '${(progress * 100).toStringAsFixed(0)}%' : '—';
+
+    return _ModernCard(
+      gradient: const LinearGradient(
+        colors: [Color(0xFF3B82F6), Color(0xFF60A5FA)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // En-tête
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.campaign_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      campaignName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '📤 Envoi en cours...',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.9),
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          // Progression
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '$sent / $total SMS',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          percentText,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 12,
+                        backgroundColor: Colors.white.withOpacity(0.3),
+                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Reste $remaining SMS à envoyer',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          // Boutons de contrôle
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    // TODO: Implémenter pause/reprendre via API
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('⏸️ Pause (à implémenter)')),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF3B82F6),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  icon: const Icon(Icons.pause_rounded, size: 20),
+                  label: const Text(
+                    'Pause',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        title: const Text('Annuler la campagne ?'),
+                        content: const Text(
+                          'Les SMS déjà envoyés ne seront pas annulés. '
+                          'Les SMS restants ne seront pas envoyés.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text('Non'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.of(ctx).pop(true),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.red,
+                            ),
+                            child: const Text('Oui, annuler'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      // TODO: Implémenter annulation via API
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('🚫 Annulation (à implémenter)')),
+                        );
+                      }
+                    }
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white, width: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  icon: const Icon(Icons.cancel_rounded, size: 20),
+                  label: const Text(
+                    'Annuler',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
