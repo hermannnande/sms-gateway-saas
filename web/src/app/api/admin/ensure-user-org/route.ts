@@ -22,6 +22,7 @@ export async function POST(req: Request) {
     const user_id = typeof body?.user_id === 'string' ? body.user_id.trim() : ''
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : ''
     const org_name = typeof body?.org_name === 'string' ? body.org_name.trim() : ''
+    const org_id = typeof body?.org_id === 'string' ? body.org_id.trim() : ''
 
     if (!user_id) {
       return NextResponse.json({ ok: false, error: 'user_id requis' }, { status: 400 })
@@ -44,6 +45,41 @@ export async function POST(req: Request) {
           org: existing.organizations,
           org_id: existing.org_id,
         },
+        { status: 200 }
+      )
+    }
+
+    // Mode: rattacher à une org existante
+    if (org_id) {
+      const { data: org, error: orgErr } = await service
+        .from('organizations')
+        .select('id, name')
+        .eq('id', org_id)
+        .single()
+
+      if (orgErr || !org) {
+        return NextResponse.json({ ok: false, error: 'Organisation introuvable (org_id invalide)' }, { status: 404 })
+      }
+
+      const { error: memberErr } = await service.from('org_members').insert({
+        org_id: org.id,
+        user_id,
+        role: 'ORG_ADMIN',
+      })
+
+      if (memberErr) {
+        // déjà rattaché (ou autre erreur)
+        if (memberErr.code === '23505') {
+          return NextResponse.json(
+            { ok: true, message: 'Compte déjà rattaché (org_members existe déjà)', org, org_id: org.id },
+            { status: 200 }
+          )
+        }
+        throw memberErr
+      }
+
+      return NextResponse.json(
+        { ok: true, message: 'Compte rattaché à une organisation existante', org, org_id: org.id },
         { status: 200 }
       )
     }

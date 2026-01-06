@@ -36,6 +36,8 @@ export function ActivateSubscriptionForm() {
   const [duration, setDuration] = useState(30)
   const [loading, setLoading] = useState(false)
   const [creatingOrg, setCreatingOrg] = useState(false)
+  const [attachOrgId, setAttachOrgId] = useState('')
+  const [newOrgName, setNewOrgName] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [searchResult, setSearchResult] = useState<any>(null)
 
@@ -105,6 +107,7 @@ export function ActivateSubscriptionForm() {
         body: JSON.stringify({
           user_id: searchResult.user.user_id,
           email: searchResult.user.email,
+          org_name: newOrgName.trim() || undefined,
         }),
       })
       const json = await res.json().catch(() => ({}))
@@ -112,6 +115,34 @@ export function ActivateSubscriptionForm() {
         throw new Error(json?.error || `Erreur API (${res.status})`)
       }
       setMessage({ type: 'success', text: `✅ ${json.message || 'Organisation créée'}` })
+      await handleSearch()
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e.message })
+    } finally {
+      setCreatingOrg(false)
+    }
+  }
+
+  async function handleAttachExistingOrg() {
+    if (!searchResult?.user?.user_id) return
+    if (!attachOrgId.trim()) return
+    setCreatingOrg(true)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/admin/ensure-user-org', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: searchResult.user.user_id,
+          email: searchResult.user.email,
+          org_id: attachOrgId.trim(),
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `Erreur API (${res.status})`)
+      }
+      setMessage({ type: 'success', text: `✅ ${json.message || 'Compte rattaché'}` })
       await handleSearch()
     } catch (e: any) {
       setMessage({ type: 'error', text: e.message })
@@ -259,23 +290,57 @@ export function ActivateSubscriptionForm() {
                   <p className="text-sm text-red-700/80 dark:text-red-400/80 mt-1">
                     Ce compte existe, mais il n&apos;est rattaché à aucune organisation. Sans organisation, on ne peut pas activer un abonnement.
                   </p>
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    <button
-                      type="button"
-                      onClick={handleCreateOrg}
-                      disabled={creatingOrg}
-                      className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold text-sm hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {creatingOrg ? 'Création...' : '🛠️ Créer organisation + rattacher'}
-                    </button>
-                    <a
-                      href="/auth/register"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-4 py-2 rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 font-semibold text-sm hover:bg-red-100/50 dark:hover:bg-red-950/30"
-                    >
-                      🔗 Lien inscription client
-                    </a>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div className="p-3 rounded-lg border border-red-200 dark:border-red-800 bg-white/60 dark:bg-red-950/10">
+                      <p className="text-sm font-semibold text-red-800 dark:text-red-300 mb-2">Option A — Rattacher à une org existante</p>
+                      <input
+                        type="text"
+                        value={attachOrgId}
+                        onChange={(e) => setAttachOrgId(e.target.value)}
+                        placeholder="Collez ici l'org_id (depuis /admin/orgs)"
+                        className="w-full px-3 py-2 rounded-lg border border-red-200 dark:border-red-800 bg-background text-sm font-mono"
+                        disabled={creatingOrg}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAttachExistingOrg}
+                        disabled={creatingOrg || !attachOrgId.trim()}
+                        className="mt-2 w-full px-4 py-2 rounded-lg bg-red-700 text-white font-semibold text-sm hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {creatingOrg ? 'Traitement...' : '🔗 Rattacher à cette organisation'}
+                      </button>
+                      <p className="text-xs text-red-700/70 dark:text-red-400/70 mt-2">
+                        Astuce: allez sur <span className="font-mono">/admin/orgs</span>, copiez l&apos;ID de l&apos;org, puis collez-le ici.
+                      </p>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-red-200 dark:border-red-800 bg-white/60 dark:bg-red-950/10">
+                      <p className="text-sm font-semibold text-red-800 dark:text-red-300 mb-2">Option B — Créer une nouvelle org</p>
+                      <input
+                        type="text"
+                        value={newOrgName}
+                        onChange={(e) => setNewOrgName(e.target.value)}
+                        placeholder="Nom de l'organisation (optionnel)"
+                        className="w-full px-3 py-2 rounded-lg border border-red-200 dark:border-red-800 bg-background text-sm"
+                        disabled={creatingOrg}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCreateOrg}
+                        disabled={creatingOrg}
+                        className="mt-2 w-full px-4 py-2 rounded-lg bg-red-600 text-white font-semibold text-sm hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {creatingOrg ? 'Création...' : '🛠️ Créer organisation + rattacher'}
+                      </button>
+                      <a
+                        href="/auth/register"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex items-center justify-center w-full px-4 py-2 rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 font-semibold text-sm hover:bg-red-100/50 dark:hover:bg-red-950/30"
+                      >
+                        🔗 Lien inscription client
+                      </a>
+                    </div>
                   </div>
                 </div>
               </div>
