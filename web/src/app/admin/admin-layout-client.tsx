@@ -10,6 +10,7 @@ export default function AdminLayoutClient({ children }: { children: ReactNode })
 
   const navigation = [
     { name: 'Dashboard', href: '/admin', icon: '📊' },
+    { name: 'Statistiques SMS', href: '/admin/sms-stats', icon: '📨' },
     { name: 'Utilisateurs', href: '/admin/users', icon: '👥' },
     { name: 'Organisations', href: '/admin/orgs', icon: '🏢' },
     { name: 'Abonnements', href: '/admin/subscriptions', icon: '💳' },
