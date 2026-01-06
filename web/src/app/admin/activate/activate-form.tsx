@@ -71,13 +71,7 @@ export function ActivateSubscriptionForm() {
       }
 
       // Chercher les devices
-      const { data: devices, count: devicesCount } = await supabase
-        .from('devices')
-        .select('*', { count: 'exact' })
-        .eq('org_id', member.org_id)
-
-      // Chercher les devices
-      const { data: devices, count: devicesCount } = await supabase
+      const { count: devicesCount } = await supabase
         .from('devices')
         .select('*', { count: 'exact' })
         .eq('org_id', member.org_id)
