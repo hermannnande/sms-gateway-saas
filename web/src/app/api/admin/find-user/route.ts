@@ -64,14 +64,20 @@ export async function GET(req: Request) {
     if (!member?.org_id) {
       return NextResponse.json(
         {
-          ok: false,
-          error: `Compte trouvé (${emailRaw}) mais aucune organisation associée.`,
-          hint: `Demandez au client de se reconnecter sur smsenvoie.com pour finaliser son inscription.`,
+          ok: true,
+          needsOrg: true,
+          warning: `Compte trouvé (${emailRaw}) mais aucune organisation associée.`,
+          hint: `Vous pouvez corriger ça en 1 clic: créer une organisation et rattacher ce compte.`,
           user: {
             user_id: userId,
             email: user.email,
             created_at: user.created_at,
           },
+          org: null,
+          org_id: null,
+          currentSubscription: null,
+          devicesCount: 0,
+          messagesSentThisMonth: 0,
         },
         { status: 200 }
       )

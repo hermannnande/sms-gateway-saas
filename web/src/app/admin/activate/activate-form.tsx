@@ -14,6 +14,8 @@ type FindUserPayload = {
   ok: boolean
   error?: string
   hint?: string
+  warning?: string
+  needsOrg?: boolean
   user?: {
     user_id: string
     email: string
@@ -33,6 +35,7 @@ export function ActivateSubscriptionForm() {
   const [selectedPlan, setSelectedPlan] = useState('monthly_1')
   const [duration, setDuration] = useState(30)
   const [loading, setLoading] = useState(false)
+  const [creatingOrg, setCreatingOrg] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [searchResult, setSearchResult] = useState<any>(null)
 
@@ -72,16 +75,48 @@ export function ActivateSubscriptionForm() {
 
       setSearchResult({
         user: json.user,
-        org: json.org || { id: json.org_id, name: 'Organisation' },
+        org: json.org || null,
         currentSubscription: json.currentSubscription,
         devicesCount: json.devicesCount || 0,
         messagesSentThisMonth: json.messagesSentThisMonth || 0,
+        needsOrg: json.needsOrg === true,
       })
-      setMessage({ type: 'success', text: '✅ Client trouvé avec succès !' })
+      if (json.needsOrg) {
+        const txt = [json.warning || 'Compte trouvé mais org manquante.', json.hint].filter(Boolean).join('\n\n')
+        setMessage({ type: 'error', text: txt })
+      } else {
+        setMessage({ type: 'success', text: '✅ Client trouvé avec succès !' })
+      }
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message })
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleCreateOrg() {
+    if (!searchResult?.user?.user_id) return
+    setCreatingOrg(true)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/admin/ensure-user-org', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: searchResult.user.user_id,
+          email: searchResult.user.email,
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `Erreur API (${res.status})`)
+      }
+      setMessage({ type: 'success', text: `✅ ${json.message || 'Organisation créée'}` })
+      await handleSearch()
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e.message })
+    } finally {
+      setCreatingOrg(false)
     }
   }
 
@@ -216,13 +251,43 @@ export function ActivateSubscriptionForm() {
               </a>
             </div>
 
-            <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg border border-border">
-              <span className="text-2xl">🏢</span>
-              <div className="flex-1">
-                <p className="font-semibold">{searchResult.org.name || 'Organisation'}</p>
-                <p className="text-xs text-muted-foreground font-mono">ID: {searchResult.org.id}</p>
+            {searchResult.needsOrg ? (
+              <div className="flex items-start gap-3 p-4 bg-red-50 dark:bg-red-950/20 border-2 border-red-200 dark:border-red-800 rounded-lg">
+                <span className="text-3xl">⚠️</span>
+                <div className="flex-1">
+                  <p className="font-bold text-lg text-red-700 dark:text-red-400">Organisation manquante</p>
+                  <p className="text-sm text-red-700/80 dark:text-red-400/80 mt-1">
+                    Ce compte existe, mais il n&apos;est rattaché à aucune organisation. Sans organisation, on ne peut pas activer un abonnement.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={handleCreateOrg}
+                      disabled={creatingOrg}
+                      className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold text-sm hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {creatingOrg ? 'Création...' : '🛠️ Créer organisation + rattacher'}
+                    </button>
+                    <a
+                      href="/auth/register"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-4 py-2 rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 font-semibold text-sm hover:bg-red-100/50 dark:hover:bg-red-950/30"
+                    >
+                      🔗 Lien inscription client
+                    </a>
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg border border-border">
+                <span className="text-2xl">🏢</span>
+                <div className="flex-1">
+                  <p className="font-semibold">{searchResult.org?.name || 'Organisation'}</p>
+                  <p className="text-xs text-muted-foreground font-mono">ID: {searchResult.org?.id}</p>
+                </div>
+              </div>
+            )}
 
             {searchResult.currentSubscription ? (
               <div className="flex items-center gap-3 p-4 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950/20 dark:to-emerald-950/20 border-2 border-green-200 dark:border-green-800 rounded-lg">
@@ -271,7 +336,7 @@ export function ActivateSubscriptionForm() {
       )}
 
       {/* Activate Subscription */}
-      {searchResult && (
+      {searchResult && !searchResult.needsOrg && (
         <div className="bg-card rounded-xl border border-border p-6">
           <h2 className="text-xl font-bold mb-4">2. Activer/Renouveler l'abonnement</h2>
           
