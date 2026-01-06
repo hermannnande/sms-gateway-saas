@@ -408,13 +408,13 @@ Toutes les tables `public.*` ont RLS activé avec des policies basées sur:
 - Activation automatique + enregistrement dans `promo_code_redemptions`
 
 #### 3. **Thank You Pages** (paiement externe)
-- Liens Moneroo:
-  - 1 appareil: https://pay.moneroo.io/plink_p61vil43wczd
-  - 3 appareils: https://pay.moneroo.io/plink_jdxmvt9qxqrl
-  - 5 appareils: https://pay.moneroo.io/plink_fstcasdzl6sh
+- Liens Chariow:
+  - 1 appareil: https://coachingexpert.mychariow.shop/prd_7xnd5l/checkout
+  - 2 appareils: https://coachingexpert.mychariow.shop/prd_iz04di/checkout
+  - 5 appareils: https://coachingexpert.mychariow.shop/prd_oaw9yp/checkout
 - Après paiement, redirection vers:
   - `/billing/thank-you/plan-1`
-  - `/billing/thank-you/plan-3`
+  - `/billing/thank-you/plan-2`
   - `/billing/thank-you/plan-5`
 - Client contacte admin WhatsApp (+225 07 78 03 00 75)
 - Admin active manuellement via panel admin
