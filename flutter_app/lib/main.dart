@@ -543,21 +543,27 @@ class AppNotifier extends Notifier<AppState> {
   Future<void> pauseActiveCampaign() async {
     final id = state.campaignIdSending;
     if (id == null || id.isEmpty) return;
-    await ref.read(deviceServiceProvider).campaignControl(action: 'pause', campaignId: id);
+    await ref
+        .read(deviceServiceProvider)
+        .campaignControl(action: 'pause', campaignId: id, deviceToken: state.deviceToken);
     await refreshActiveCampaign(silent: true);
   }
 
   Future<void> resumeActiveCampaign() async {
     final id = state.campaignIdSending;
     if (id == null || id.isEmpty) return;
-    await ref.read(deviceServiceProvider).campaignControl(action: 'resume', campaignId: id);
+    await ref
+        .read(deviceServiceProvider)
+        .campaignControl(action: 'resume', campaignId: id, deviceToken: state.deviceToken);
     await refreshActiveCampaign(silent: true);
   }
 
   Future<void> cancelActiveCampaign() async {
     final id = state.campaignIdSending;
     if (id == null || id.isEmpty) return;
-    await ref.read(deviceServiceProvider).campaignControl(action: 'cancel', campaignId: id);
+    await ref
+        .read(deviceServiceProvider)
+        .campaignControl(action: 'cancel', campaignId: id, deviceToken: state.deviceToken);
     await refreshActiveCampaign(silent: true);
   }
 

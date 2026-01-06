@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.2+25",
+  "latestVersion": "1.0.2+26",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Fix: Pause/Reprendre/Annuler ne renvoie plus 401 (refresh automatique du token)."
+  "notes": "Fix: Pause/Reprendre/Annuler fonctionne même si session expirée (fallback device_token)."
 }
 
 

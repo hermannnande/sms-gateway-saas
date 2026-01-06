@@ -205,6 +205,7 @@ class DeviceService {
   Future<void> campaignControl({
     required String action, // 'pause' | 'resume' | 'cancel'
     required String campaignId,
+    String? deviceToken, // fallback si JWT expiré
   }) async {
     final token = await _getFreshAccessTokenOrThrow();
     if (token.isEmpty) {
@@ -216,7 +217,7 @@ class DeviceService {
     }
     final payload = await _postProxy(
       '/api/mobile/campaign-control',
-      {'action': act, 'campaign_id': campaignId},
+      {'action': act, 'campaign_id': campaignId, 'device_token': deviceToken},
       headers: {'Authorization': 'Bearer $token'},
     );
     if (payload['success'] != true && payload['ok'] != true) {
