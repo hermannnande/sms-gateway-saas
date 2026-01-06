@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.2+30",
+  "latestVersion": "1.0.2+31",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "• Masquer barre progression si campagne terminée\n• Auto-démarrage BackgroundSyncService\n• Réutiliser appareil après réinstall (Android ID)"
+  "notes": "• Fix jumelage réinstall (device_pair sans updated_at)\n• Auto-envoi plus fiable (clear pause/lock + auto-start)\n• Réutiliser appareil via Android ID"
 }
 
 

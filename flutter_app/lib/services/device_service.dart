@@ -3,12 +3,12 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 import 'package:http/http.dart' as http;
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 import 'package:supabase/supabase.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 
 class DeviceService {
   DeviceService(this.client, this._logger);
@@ -17,6 +17,7 @@ class DeviceService {
   final Logger _logger;
   final http.Client _http = http.Client();
   final Random _rng = Random();
+  static const MethodChannel _channel = MethodChannel('com.smsgateway.app/sms');
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
@@ -201,9 +202,9 @@ class DeviceService {
   Future<String?> _getDeviceId() async {
     try {
       if (Platform.isAndroid) {
-        final deviceInfo = DeviceInfoPlugin();
-        final androidInfo = await deviceInfo.androidInfo;
-        return androidInfo.id; // Android ID unique
+        final v = await _channel.invokeMethod('getAndroidId');
+        final s = v?.toString().trim();
+        return (s == null || s.isEmpty) ? null : s;
       }
       // iOS/autre: retourner null (ou utiliser un autre identifiant)
       return null;

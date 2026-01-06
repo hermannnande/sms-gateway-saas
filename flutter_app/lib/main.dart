@@ -280,6 +280,22 @@ class AppNotifier extends Notifier<AppState> {
       authenticated: hasSession,
     );
 
+    // Auto-mode: si un device_token existe, on force l'auto-envoi en arrière-plan.
+    // (utile si l'utilisateur a appuyé sur "Annuler" dans la notif, ou après une mise à jour)
+    if (token != null && token.trim().isNotEmpty) {
+      try {
+        await BackgroundSyncService.setEnabled(true);
+        await BackgroundSyncService.setPaused(false);
+        await BackgroundSyncService.setForegroundLock(false);
+      } catch (_) {}
+      try {
+        await BackgroundSyncService.init();
+        await BackgroundSyncService.start();
+      } catch (e) {
+        debugPrint('Auto-start BackgroundSyncService (init) échoué: $e');
+      }
+    }
+
     // Charger infos réelles (profil / org / version / inbox / historique)
     await _loadAppVersion();
     if (hasSession) {

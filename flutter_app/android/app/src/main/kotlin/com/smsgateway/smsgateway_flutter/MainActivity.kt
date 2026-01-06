@@ -1,6 +1,7 @@
 package com.smsgateway.app
 
 import android.content.Context
+import android.provider.Settings
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import android.util.Log
@@ -64,6 +65,16 @@ class MainActivity : FlutterActivity() {
                         } catch (e: Exception) {
                             Log.e("SMS_GATEWAY", "getSimCards failed", e)
                             result.success(emptyList<Map<String, Any>>())
+                        }
+                    }
+
+                    "getAndroidId" -> {
+                        try {
+                            val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                            result.success(androidId)
+                        } catch (e: Exception) {
+                            Log.e("SMS_GATEWAY", "getAndroidId failed", e)
+                            result.success(null)
                         }
                     }
 

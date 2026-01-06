@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
             name: device_name,
             token_hash,
             status: 'offline',
-            updated_at: new Date().toISOString(),
+            // NOTE: la table `devices` n'a pas de colonne `updated_at` dans le schéma actuel.
           })
           .eq('id', existingDevice.id)
           .select()
