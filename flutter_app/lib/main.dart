@@ -488,6 +488,20 @@ class AppNotifier extends Notifier<AppState> {
       final supabase = ref.read(supabaseClientProvider);
       if (supabase.auth.currentUser == null) return;
 
+      // Assure que la session est fraîche (évite les 401 si le JWT a expiré).
+      try {
+        final s = supabase.auth.currentSession;
+        if (s != null && s.expiresAt != null) {
+          final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+          if (s.expiresAt! <= nowSec + 90) {
+            final rt = s.refreshToken;
+            if (rt != null && rt.trim().isNotEmpty) {
+              await supabase.auth.refreshSession(rt);
+            }
+          }
+        }
+      } catch (_) {}
+
       if (state.orgId == null) {
         await refreshAccountInfo();
       }

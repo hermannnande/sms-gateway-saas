@@ -18,6 +18,37 @@ class DeviceService {
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
+  Future<String> _getFreshAccessTokenOrThrow() async {
+    final session = client.auth.currentSession;
+    if (session == null) {
+      throw Exception('Non authentifié. Connectez-vous d’abord.');
+    }
+
+    // Supabase Session.expiresAt est en secondes epoch.
+    final expiresAt = session.expiresAt;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    // Si le token expire bientôt, on rafraîchit.
+    if (expiresAt != null && expiresAt <= nowSec + 90) {
+      try {
+        final refreshToken = session.refreshToken;
+        if (refreshToken != null && refreshToken.trim().isNotEmpty) {
+          final res = await client.auth.refreshSession(refreshToken);
+          final newToken = res.session?.accessToken?.trim();
+          if (newToken != null && newToken.isNotEmpty) return newToken;
+        }
+      } catch (e) {
+        _logger.w('refreshSession failed (will try existing token): $e');
+      }
+    }
+
+    final token = session.accessToken.trim();
+    if (token.isEmpty) {
+      throw Exception('Non authentifié. Connectez-vous d’abord.');
+    }
+    return token;
+  }
+
   Future<Map<String, dynamic>> _postProxy(
     String path,
     Map<String, dynamic> body, {
@@ -156,10 +187,7 @@ class DeviceService {
   /// Crée un device côté serveur (Edge Function `device_pair`) et renvoie un `device_token`.
   /// Utilise le proxy Web (smsenvoie.com) pour éviter les soucis DNS vers Supabase chez certains opérateurs.
   Future<String> createDeviceToken({required String deviceName}) async {
-    final accessToken = client.auth.currentSession?.accessToken;
-    if (accessToken == null || accessToken.trim().isEmpty) {
-      throw Exception('Non authentifié. Connectez-vous d’abord.');
-    }
+    final accessToken = await _getFreshAccessTokenOrThrow();
     final payload = await _postProxy(
       '/api/mobile/device-pair',
       {'device_name': deviceName},
@@ -178,8 +206,7 @@ class DeviceService {
     required String action, // 'pause' | 'resume' | 'cancel'
     required String campaignId,
   }) async {
-    final session = client.auth.currentSession;
-    final token = session == null ? '' : session.accessToken.trim();
+    final token = await _getFreshAccessTokenOrThrow();
     if (token.isEmpty) {
       throw Exception('Non authentifié. Connectez-vous d’abord.');
     }
