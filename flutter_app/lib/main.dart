@@ -673,32 +673,14 @@ class AppNotifier extends Notifier<AppState> {
       return;
     }
 
-    // IMPORTANT: éviter le double-envoi.
-    // Si le mode "Continuer en arrière-plan" est activé, l'envoi doit être fait
-    // par le Foreground Service (notification). Sinon, la notif reste "en attente"
-    // pendant que l'envoi se fait en écran via syncOnce(), ce qui donne l'impression
-    // que la barre/progression ne marche pas.
-    try {
-      final bgEnabled = await BackgroundSyncService.isEnabled();
-      if (bgEnabled) {
-        final running = await BackgroundSyncService.isRunning();
-        if (!running) {
-          await BackgroundSyncService.setPaused(false);
-          await BackgroundSyncService.start();
-        }
-        state = state.copyWith(
-          syncing: false,
-          lastStatus: '✅ Envoi en arrière-plan actif. Ouvre la notification "SMS Gateway" pour voir la progression.',
-        );
-        return;
-      }
-    } catch (_) {
-      // Si erreur sur le service, on continue en mode foreground (syncOnce) pour ne pas bloquer.
-    }
-
     state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
 
     try {
+      // Verrouille le service arrière-plan pour éviter le double-envoi pendant ce sync manuel.
+      try {
+        await BackgroundSyncService.setForegroundLock(true);
+      } catch (_) {}
+
       final permissionsOk = await ref.read(smsSenderProvider).ensurePermissions();
       if (!permissionsOk) {
         state = state.copyWith(lastStatus: 'Permissions SMS/Phone nécessaires');
@@ -755,6 +737,8 @@ class AppNotifier extends Notifier<AppState> {
       }
 
       final results = <String>[];
+      int okCount = 0;
+      int failCount = 0;
 
       for (final msg in messages) {
         int? subscriptionId;
@@ -779,21 +763,39 @@ class AppNotifier extends Notifier<AppState> {
               error: sendResult.error,
             );
 
-        final label = sendResult.success ? '✅ sent' : '❌ failed';
-        results.add('$label -> ${msg.to}');
+        if (sendResult.success) {
+          okCount++;
+          results.add('✅ sent → ${msg.to}');
+        } else {
+          failCount++;
+          final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
+          results.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
+        }
       }
 
       state = state.copyWith(
         lastMessages: messages,
-        lastStatus: results.join('\n'),
+        lastStatus: 'Résultat: $okCount OK • $failCount échecs\n\n${results.join('\n')}',
       );
 
       // Rafraîchir le quota après envoi (statuts mis à jour côté serveur)
       await refreshDeviceStatus(silent: true);
+
+      // Si le mode arrière-plan est activé, relancer le service après l'envoi manuel.
+      try {
+        final bgEnabled = await BackgroundSyncService.isEnabled();
+        if (bgEnabled) {
+          await BackgroundSyncService.setPaused(false);
+          await BackgroundSyncService.start();
+        }
+      } catch (_) {}
     } catch (e, st) {
       ref.read(loggerProvider).e('syncOnce error', error: e, stackTrace: st);
       state = state.copyWith(lastStatus: 'Erreur sync: $e');
     } finally {
+      try {
+        await BackgroundSyncService.setForegroundLock(false);
+      } catch (_) {}
       state = state.copyWith(syncing: false);
     }
   }

@@ -15,6 +15,7 @@ class BackgroundSyncService {
   static const int serviceId = 701;
   static const String _pausedKey = 'bg_sync_paused';
   static const String _enabledKey = 'bg_sync_enabled';
+  static const String _fgLockKey = 'bg_sync_fg_lock';
 
   static Future<void> init() async {
     FlutterForegroundTask.initCommunicationPort();
@@ -82,6 +83,18 @@ class BackgroundSyncService {
         ],
       );
     }
+  }
+
+  /// Verrou simple pour éviter le double-envoi: si l'utilisateur envoie "en écran"
+  /// (syncOnce), le service arrière-plan doit attendre.
+  static Future<void> setForegroundLock(bool locked) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_fgLockKey, locked);
+  }
+
+  static Future<bool> isForegroundLocked() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_fgLockKey) ?? false;
   }
 
   static Future<void> start() async {
@@ -154,6 +167,11 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   Future<bool> _isPaused() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(BackgroundSyncService._pausedKey) ?? false;
+  }
+
+  Future<bool> _isForegroundLocked() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(BackgroundSyncService._fgLockKey) ?? false;
   }
 
   Future<List<Map<String, dynamic>>> _getSimCards() async {
@@ -284,6 +302,19 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     if (_busy) return;
     _busy = true;
     try {
+      // If foreground sync is running, don't claim/send in background to avoid double-send.
+      final fgLocked = await _isForegroundLocked();
+      if (fgLocked) {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText: '⏳ Envoi en cours via l’app...',
+          notificationButtons: const [
+            NotificationButton(id: 'stop', text: 'Annuler'),
+          ],
+        );
+        return;
+      }
+
       final paused = await _isPaused();
       if (paused) {
         await FlutterForegroundTask.updateService(
