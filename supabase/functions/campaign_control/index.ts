@@ -3,6 +3,8 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { hashToken } from '../_shared/crypto.ts'
+import { normalizeDeviceToken } from '../_shared/device_token.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,8 +19,10 @@ serve(async (req) => {
   }
 
   try {
-    const { action, campaign_id } = await req.json()
+    const body = await req.json()
+    const { action, campaign_id } = body ?? {}
     const act = (action as Action) ?? null
+    const device_token = normalizeDeviceToken(body?.device_token)
 
     if (!act || !['pause', 'resume', 'cancel'].includes(act)) {
       throw new Error('action doit être pause | resume | cancel')
@@ -32,25 +36,42 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
 
-    // Auth user
-    const authHeader = req.headers.get('Authorization') ?? ''
-    const token = authHeader.replace('Bearer ', '')
-    const { data: userData, error: userError } = await supabase.auth.getUser(token)
-    if (userError || !userData?.user) {
-      throw new Error('Non authentifié')
-    }
+    // Résoudre org_id soit via device_token (mobile), soit via JWT user (web)
+    let org_id: string | null = null
+    let via: 'device_token' | 'user_jwt' = 'user_jwt'
 
-    // Find org of user
-    const { data: member, error: memberError } = await supabase
-      .from('org_members')
-      .select('org_id')
-      .eq('user_id', userData.user.id)
-      .single()
-    if (memberError || !member) {
-      throw new Error('Organisation introuvable')
-    }
+    if (device_token) {
+      via = 'device_token'
+      const token_hash = await hashToken(device_token)
+      const { data: device, error: devErr } = await supabase
+        .from('devices')
+        .select('id, org_id')
+        .eq('token_hash', token_hash)
+        .single()
+      if (devErr || !device?.org_id) {
+        throw new Error('Device introuvable (token invalide)')
+      }
+      org_id = device.org_id
+    } else {
+      // Auth user (mode web)
+      const authHeader = req.headers.get('Authorization') ?? ''
+      const token = authHeader.replace('Bearer ', '')
+      const { data: userData, error: userError } = await supabase.auth.getUser(token)
+      if (userError || !userData?.user) {
+        throw new Error('Non authentifié')
+      }
 
-    const org_id = member.org_id
+      // Find org of user
+      const { data: member, error: memberError } = await supabase
+        .from('org_members')
+        .select('org_id')
+        .eq('user_id', userData.user.id)
+        .single()
+      if (memberError || !member) {
+        throw new Error('Organisation introuvable')
+      }
+      org_id = member.org_id
+    }
 
     // Check campaign belongs to org
     const { data: campaign, error: campError } = await supabase
@@ -150,7 +171,7 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ success: true, campaign_id, action: act }),
+      JSON.stringify({ success: true, campaign_id, action: act, via }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 },
     )
   } catch (error) {
