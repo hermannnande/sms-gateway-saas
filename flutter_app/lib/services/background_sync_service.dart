@@ -309,6 +309,24 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         return;
       }
 
+      // Permissions SMS / téléphone: si manquantes, l'envoi échoue en boucle (retry côté serveur).
+      // On l'affiche clairement dans la notification pour éviter le "tourne en boucle".
+      try {
+        final smsOk = await Permission.sms.isGranted;
+        final phoneOk = await Permission.phone.isGranted;
+        if (!smsOk || !phoneOk) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText:
+                '⚠️ Permissions manquantes. Ouvre l’app et autorise SMS/Téléphone, puis relance.',
+            notificationButtons: const [
+              NotificationButton(id: 'stop', text: 'Annuler'),
+            ],
+          );
+          return;
+        }
+      } catch (_) {}
+
       final payload = await _claimPayload(token);
       final rawList = (payload['messages'] as List?) ?? const [];
       final messages =
@@ -342,8 +360,23 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       }
 
       final sims = await _getSimCards();
+      // Si la campagne force une SIM (slot:X) mais on ne peut pas lire les SIMs, prévenir.
+      final requiresSimRouting = messages.any((m) => m.simSlotIndex != null);
+      if (requiresSimRouting && sims.isEmpty) {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMS Gateway',
+          notificationText:
+              '⚠️ SIM non détectée. Autorise la permission Téléphone, puis relance l’app.',
+          notificationButtons: const [
+            NotificationButton(id: 'stop', text: 'Annuler'),
+          ],
+        );
+        return;
+      }
       final batchTotal = messages.length;
       var attempted = 0;
+      var failed = 0;
+      String? lastErr;
 
       // Progression "campagne" (sent_count/total_count) si dispo, sinon fallback batch.
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
@@ -427,6 +460,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           }
         } catch (e) {
           await _updateStatus(token, msg, false, e.toString());
+          failed++;
+          lastErr = e.toString();
         }
 
         // Mettre à jour IMMÉDIATEMENT après l'envoi pour montrer la progression
@@ -435,7 +470,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           final remain = max(totalSum - s, 0);
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMS Gateway',
-            notificationText: '✅ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
+            notificationText: failed > 0
+                ? '⚠️ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • err $failed • reste $remain'
+                : '✅ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
             notificationButtons: const [
               NotificationButton(id: 'pause', text: 'Pause'),
               NotificationButton(id: 'stop', text: 'Annuler'),
@@ -445,7 +482,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           final remain = batchTotal - attempted;
           await FlutterForegroundTask.updateService(
             notificationTitle: 'Envoi SMS en cours',
-            notificationText: '✅ ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
+            notificationText: failed > 0
+                ? '⚠️ ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • err $failed • reste $remain'
+                : '✅ ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
             notificationButtons: const [
               NotificationButton(id: 'pause', text: 'Pause'),
               NotificationButton(id: 'stop', text: 'Annuler'),
@@ -463,11 +502,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         final s = sentNow();
         final remain = max(totalSum - s, 0);
         final isDone = remain == 0;
+        final errShort = (lastErr ?? '').replaceAll('\n', ' ');
+        final errMsg = errShort.isEmpty ? '' : ' • err: ${errShort.substring(0, errShort.length.clamp(0, 60))}';
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: isDone 
-            ? '✅ $campaignLabel terminée • ${_progressBar(s, totalSum)} $s/$totalSum'
-            : '⏳ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
+          notificationText: failed > 0
+              ? '❌ $campaignLabel • erreurs: $failed/$attempted$errMsg'
+              : (isDone
+                  ? '✅ $campaignLabel terminée • ${_progressBar(s, totalSum)} $s/$totalSum'
+                  : '⏳ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain'),
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
             NotificationButton(id: 'stop', text: 'Annuler'),
@@ -476,7 +519,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       } else {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '✅ Batch traité ($attempted/$batchTotal) • En attente...',
+          notificationText: failed > 0
+              ? '❌ Erreurs: $failed/$attempted • Ouvre l’app pour corriger (permissions/SIM)'
+              : '✅ Batch traité ($attempted/$batchTotal) • En attente...',
           notificationButtons: const [
             NotificationButton(id: 'pause', text: 'Pause'),
             NotificationButton(id: 'stop', text: 'Annuler'),

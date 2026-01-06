@@ -4015,9 +4015,10 @@ class _SubscriptionSection extends StatelessWidget {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: LinearProgressIndicator(
-                      value: (quota == null || quota == 0)
+                      // quota == 0 => illimité: ne pas afficher une barre "infinie" (ça donne l'impression de boucle).
+                      value: (quota == null)
                           ? null
-                          : (quota > 0 ? (used / quota).clamp(0.0, 1.0) : null),
+                          : (quota == 0 ? 1.0 : (quota > 0 ? (used / quota).clamp(0.0, 1.0) : null)),
                       minHeight: 8,
                       backgroundColor: Colors.grey.shade200,
                       valueColor: const AlwaysStoppedAnimation<Color>(
