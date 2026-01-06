@@ -23,6 +23,8 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json()
     const device_token = normalizeDeviceToken(body?.device_token)
+    const app_version = body?.app_version || null
+    const user_agent = req.headers.get('User-Agent') || null
 
     if (!device_token) {
       throw new Error('device_token requis')
@@ -32,6 +34,33 @@ Deno.serve(async (req) => {
     const token_hash = await hashToken(device_token)
 
     console.log(`Checking heartbeat for token hash: ${token_hash.slice(0, 8)}...`)
+
+    // Extract IP address (check multiple headers for proxy/cloudflare scenarios)
+    const ip_address = 
+      req.headers.get('CF-Connecting-IP') ||
+      req.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+      req.headers.get('X-Real-IP') ||
+      null
+
+    // Geolocation via IP (free service, no auth required)
+    let country = null
+    let city = null
+    if (ip_address) {
+      try {
+        const geoRes = await fetch(`https://ipapi.co/${ip_address}/json/`, {
+          headers: { 'User-Agent': 'SMS-Gateway-Heartbeat' },
+          signal: AbortSignal.timeout(3000), // 3s timeout
+        })
+        if (geoRes.ok) {
+          const geoData = await geoRes.json()
+          country = geoData.country_name || null
+          city = geoData.city || null
+        }
+      } catch (geoErr) {
+        console.warn('Geolocation failed (non-blocking):', geoErr)
+        // Non-bloquant, on continue sans geo
+      }
+    }
 
     // Create Supabase client with service role (bypass RLS)
     const supabaseClient = createClient(
@@ -50,20 +79,27 @@ Deno.serve(async (req) => {
       throw new Error('Device non trouvé ou token invalide')
     }
 
-    // Update device last_seen + status
+    // Update device last_seen + status + geo + version
+    const updatePayload: Record<string, any> = {
+      last_seen_at: new Date().toISOString(),
+      status: 'online',
+    }
+    if (ip_address) updatePayload.ip_address = ip_address
+    if (country) updatePayload.country = country
+    if (city) updatePayload.city = city
+    if (user_agent) updatePayload.user_agent = user_agent
+    if (app_version) updatePayload.app_version = app_version
+
     const { error: updateError } = await supabaseClient
       .from('devices')
-      .update({
-        last_seen_at: new Date().toISOString(),
-        status: 'online',
-      })
+      .update(updatePayload)
       .eq('id', device.id)
 
     if (updateError) {
       throw new Error('Erreur update device: ' + updateError.message)
     }
 
-    console.log('Heartbeat from device:', device.id, device.name)
+    console.log('Heartbeat from device:', device.id, device.name, country || 'Unknown', city || 'Unknown')
 
     // Plan effectif (ignore anciens plans masqués)
     const { data: plan } = await supabaseClient.rpc('get_effective_plan', { p_org_id: device.org_id })

@@ -493,7 +493,10 @@ class AppNotifier extends Notifier<AppState> {
     final token = state.deviceToken;
     if (token == null || token.isEmpty) return;
     try {
-      final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(deviceToken: token);
+      final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
+        deviceToken: token,
+        appVersion: state.appVersion,
+      );
       final name = payload['device_name']?.toString();
       final ts = payload['timestamp']?.toString();
       final plan = payload['plan'];

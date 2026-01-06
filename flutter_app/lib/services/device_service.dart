@@ -189,9 +189,15 @@ class DeviceService {
     }
   }
 
-  Future<Map<String, dynamic>> sendHeartbeatVerbose({required String deviceToken}) async {
+  Future<Map<String, dynamic>> sendHeartbeatVerbose({
+    required String deviceToken,
+    String? appVersion,
+  }) async {
     try {
-      return await _postProxy('/api/mobile/heartbeat', {'device_token': deviceToken});
+      return await _postProxy('/api/mobile/heartbeat', {
+        'device_token': deviceToken,
+        if (appVersion != null) 'app_version': appVersion,
+      });
     } catch (e) {
       _logger.w('Proxy heartbeat failed: $e');
       throw _humanizeNetworkError(e);
