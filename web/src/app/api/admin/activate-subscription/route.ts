@@ -63,9 +63,10 @@ export async function POST(req: Request) {
         .from('subscriptions')
         .update({
           plan_id: plan_id,
-          period_start: now.toISOString(),
-          period_end: periodEnd.toISOString(),
+          current_period_start: now.toISOString(),
+          current_period_end: periodEnd.toISOString(),
           updated_at: now.toISOString(),
+          provider: 'manual_admin',
         })
         .eq('id', existingSub.id)
 
@@ -82,8 +83,9 @@ export async function POST(req: Request) {
           org_id: org_id,
           plan_id: plan_id,
           status: 'active',
-          period_start: now.toISOString(),
-          period_end: periodEnd.toISOString(),
+          current_period_start: now.toISOString(),
+          current_period_end: periodEnd.toISOString(),
+          provider: 'manual_admin',
         })
         .select()
         .single()
@@ -95,29 +97,31 @@ export async function POST(req: Request) {
       console.log(`✅ Admin activation: new subscription ${newSub.id} created for org ${org_id}`)
     }
 
-    // Enregistrer le paiement manuel dans la table payments
-    await supabase
-      .from('payments')
-      .insert({
-        org_id: org_id,
-        plan_id: plan_id,
-        amount_xof: plan.price_xof,
-        status: 'completed',
+    // Enregistrer le paiement manuel dans la table payments (schema: amount_minor, status: pending/paid/failed, external_reference)
+    // NB: On met paid_at pour marquer le paiement comme effectué.
+    const externalReference = `manual_admin_${org_id}_${Date.now()}`
+    await supabase.from('payments').insert({
+      org_id: org_id,
+      plan_id: plan_id,
+      status: 'paid',
+      amount_minor: plan.price_xof, // XOF => pas de centimes, on garde le même montant
+      currency: 'XOF',
+      external_reference: externalReference,
+      raw_payload: {
         provider: 'manual_admin',
-        provider_payment_id: `manual_${Date.now()}`,
-        metadata: {
-          activated_by: 'admin',
-          activation_method: 'manual',
-          duration_days: duration_days,
-        },
-      })
+        activated_by: adminRole,
+        activation_method: 'manual',
+        duration_days: duration_days,
+      },
+      paid_at: now.toISOString(),
+    })
 
     return NextResponse.json({
       ok: true,
       message: 'Abonnement activé avec succès',
       subscription: {
         plan: plan.name,
-        period_end: periodEnd.toISOString(),
+        current_period_end: periodEnd.toISOString(),
       },
     })
   } catch (error: any) {
