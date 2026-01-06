@@ -7,7 +7,6 @@ import { createClient } from '@/lib/supabase/client'
 export function RegisterForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [orgName, setOrgName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
@@ -45,45 +44,17 @@ export function RegisterForm() {
         password,
       })
       if (signInError) {
+        // Si "Confirm sign up" est activé, il n'y aura pas de session tant que l'email n'est pas confirmé.
         setError(
-          "Compte créé, mais session non disponible. Désactivez 'Confirm sign up' dans Supabase Auth (mode test), puis réessayez."
+          "✅ Compte créé. Veuillez vérifier votre email et confirmer l'inscription, puis revenez vous connecter."
         )
         setLoading(false)
+        router.push('/auth/login')
         return
       }
     }
 
-    // 2. Create organization
-    // IMPORTANT: We cannot rely on `.select()` here because RLS will hide the new org
-    // until the user becomes a member. So we generate the org_id client-side.
-    const orgId = crypto.randomUUID()
-    const { error: orgError } = await supabase.from('organizations').insert({
-      id: orgId,
-      name: orgName,
-    })
-
-    if (orgError) {
-      setError(`Erreur lors de la création de l'organisation: ${orgError.message}`)
-      setLoading(false)
-      return
-    }
-
-    // 3. Add user as ORG_ADMIN
-    const { error: memberError } = await supabase
-      .from('org_members')
-      .insert({
-        org_id: orgId,
-        user_id: authData.user.id,
-        role: 'ORG_ADMIN',
-      })
-
-    if (memberError) {
-      setError(`Erreur lors de l'ajout au groupe: ${memberError.message}`)
-      setLoading(false)
-      return
-    }
-
-    // Redirect to onboarding/billing
+    // L'organisation est créée automatiquement côté DB (trigger sur auth.users).
     router.push('/onboarding')
   }
 
@@ -95,21 +66,6 @@ export function RegisterForm() {
         </div>
       )}
       
-      <div className="space-y-2">
-        <label htmlFor="orgName" className="block text-sm font-bold uppercase tracking-wide">
-          Nom de l'organisation
-        </label>
-        <input
-          id="orgName"
-          type="text"
-          value={orgName}
-          onChange={(e) => setOrgName(e.target.value)}
-          className="w-full px-5 py-3 border-3 border-border rounded-xl focus:outline-none focus:ring-4 focus:ring-primary/20 focus:border-primary transition-all text-lg bg-background"
-          placeholder="Mon Entreprise SA"
-          required
-        />
-      </div>
-
       <div className="space-y-2">
         <label htmlFor="email" className="block text-sm font-bold uppercase tracking-wide">
           Email
