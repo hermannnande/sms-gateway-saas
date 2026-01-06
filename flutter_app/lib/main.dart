@@ -543,27 +543,37 @@ class AppNotifier extends Notifier<AppState> {
   Future<void> pauseActiveCampaign() async {
     final id = state.campaignIdSending;
     if (id == null || id.isEmpty) return;
-    await ref
-        .read(deviceServiceProvider)
-        .campaignControl(action: 'pause', campaignId: id, deviceToken: state.deviceToken);
+    // Optimistic UI: mettre à jour tout de suite le statut (le poll confirmera ensuite)
+    state = state.copyWith(campaignStatusSending: 'paused');
+    await ref.read(deviceServiceProvider).campaignControl(
+          action: 'pause',
+          campaignId: id,
+          deviceToken: state.deviceToken,
+        );
     await refreshActiveCampaign(silent: true);
   }
 
   Future<void> resumeActiveCampaign() async {
     final id = state.campaignIdSending;
     if (id == null || id.isEmpty) return;
-    await ref
-        .read(deviceServiceProvider)
-        .campaignControl(action: 'resume', campaignId: id, deviceToken: state.deviceToken);
+    state = state.copyWith(campaignStatusSending: 'running');
+    await ref.read(deviceServiceProvider).campaignControl(
+          action: 'resume',
+          campaignId: id,
+          deviceToken: state.deviceToken,
+        );
     await refreshActiveCampaign(silent: true);
   }
 
   Future<void> cancelActiveCampaign() async {
     final id = state.campaignIdSending;
     if (id == null || id.isEmpty) return;
-    await ref
-        .read(deviceServiceProvider)
-        .campaignControl(action: 'cancel', campaignId: id, deviceToken: state.deviceToken);
+    state = state.copyWith(campaignStatusSending: 'canceled');
+    await ref.read(deviceServiceProvider).campaignControl(
+          action: 'cancel',
+          campaignId: id,
+          deviceToken: state.deviceToken,
+        );
     await refreshActiveCampaign(silent: true);
   }
 
