@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase/service'
 import { requireAdminApi } from '@/lib/admin/guard-api'
+import { createClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,7 +23,8 @@ export async function POST(req: Request) {
       )
     }
 
-    const supabase = createServiceClient()
+    // No service-role key: rely on RLS + admin_role() policies
+    const supabase = await createClient()
 
     // Vérifier que le plan existe
     const { data: plan } = await supabase.from('plans').select('id').eq('id', plan_id).single()
