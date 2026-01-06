@@ -79,6 +79,7 @@ class AppState {
     required this.quotaRemaining,
     required this.campaignIdSending,
     required this.campaignNameSending,
+    required this.campaignStatusSending,
     required this.campaignSentCount,
     required this.campaignTotalCount,
   });
@@ -108,6 +109,7 @@ class AppState {
         quotaRemaining: null,
         campaignIdSending: null,
         campaignNameSending: null,
+        campaignStatusSending: null,
         campaignSentCount: null,
         campaignTotalCount: null,
       );
@@ -136,6 +138,7 @@ class AppState {
   final int? quotaRemaining;
   final String? campaignIdSending;
   final String? campaignNameSending;
+  final String? campaignStatusSending;
   final int? campaignSentCount;
   final int? campaignTotalCount;
 
@@ -164,6 +167,7 @@ class AppState {
     int? quotaRemaining,
     String? campaignIdSending,
     String? campaignNameSending,
+    String? campaignStatusSending,
     int? campaignSentCount,
     int? campaignTotalCount,
   }) {
@@ -192,6 +196,7 @@ class AppState {
       quotaRemaining: quotaRemaining ?? this.quotaRemaining,
       campaignIdSending: campaignIdSending ?? this.campaignIdSending,
       campaignNameSending: campaignNameSending ?? this.campaignNameSending,
+      campaignStatusSending: campaignStatusSending ?? this.campaignStatusSending,
       campaignSentCount: campaignSentCount ?? this.campaignSentCount,
       campaignTotalCount: campaignTotalCount ?? this.campaignTotalCount,
     );
@@ -475,6 +480,71 @@ class AppNotifier extends Notifier<AppState> {
     } catch (e) {
       if (!silent) setLastStatus('Statut appareil: $e');
     }
+  }
+
+  /// Récupère la campagne "active" la plus récente (running/paused/queued) pour afficher la progression sur le dashboard.
+  Future<void> refreshActiveCampaign({bool silent = true}) async {
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      if (supabase.auth.currentUser == null) return;
+
+      if (state.orgId == null) {
+        await refreshAccountInfo();
+      }
+      final orgId = state.orgId;
+      if (orgId == null) return;
+
+      final row = await supabase
+          .from('campaigns')
+          .select('id,name,status,sent_count,total_count,updated_at')
+          .eq('org_id', orgId)
+          .inFilter('status', ['running', 'paused', 'queued'])
+          .order('updated_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (row == null) {
+        state = state.copyWith(
+          campaignIdSending: null,
+          campaignNameSending: null,
+          campaignStatusSending: null,
+          campaignSentCount: null,
+          campaignTotalCount: null,
+        );
+        return;
+      }
+
+      state = state.copyWith(
+        campaignIdSending: row['id']?.toString(),
+        campaignNameSending: row['name']?.toString(),
+        campaignStatusSending: row['status']?.toString(),
+        campaignSentCount: _safeParseInt(row['sent_count']) ?? 0,
+        campaignTotalCount: _safeParseInt(row['total_count']) ?? 0,
+      );
+    } catch (e) {
+      if (!silent) setLastStatus('Erreur campagne: $e');
+    }
+  }
+
+  Future<void> pauseActiveCampaign() async {
+    final id = state.campaignIdSending;
+    if (id == null || id.isEmpty) return;
+    await ref.read(deviceServiceProvider).campaignControl(action: 'pause', campaignId: id);
+    await refreshActiveCampaign(silent: true);
+  }
+
+  Future<void> resumeActiveCampaign() async {
+    final id = state.campaignIdSending;
+    if (id == null || id.isEmpty) return;
+    await ref.read(deviceServiceProvider).campaignControl(action: 'resume', campaignId: id);
+    await refreshActiveCampaign(silent: true);
+  }
+
+  Future<void> cancelActiveCampaign() async {
+    final id = state.campaignIdSending;
+    if (id == null || id.isEmpty) return;
+    await ref.read(deviceServiceProvider).campaignControl(action: 'cancel', campaignId: id);
+    await refreshActiveCampaign(silent: true);
   }
 
   static int? _safeParseInt(dynamic value) {
@@ -2321,6 +2391,7 @@ class _HomePageState extends ConsumerState<HomePage>
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   Timer? _heartbeatTimer;
   Timer? _autoSyncTimer;
+  Timer? _campaignPollTimer;
   DateTime? _lastHeartbeatSnackAt;
 
   @override
@@ -2342,6 +2413,13 @@ class _HomePageState extends ConsumerState<HomePage>
 
     // Auto-sync: permet de réagir quand une campagne démarre côté web.
     _startAutoSync();
+
+    // Poll campagne active pour afficher une barre de progression dans le dashboard (UI fiable, sans notif Android).
+    scheduleMicrotask(() => ref.read(appProvider.notifier).refreshActiveCampaign(silent: true));
+    _campaignPollTimer?.cancel();
+    _campaignPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
+    });
   }
 
   Future<void> _requestSmsPermissionsOnStart() async {
@@ -2452,6 +2530,7 @@ class _HomePageState extends ConsumerState<HomePage>
   void dispose() {
     _heartbeatTimer?.cancel();
     _autoSyncTimer?.cancel();
+    _campaignPollTimer?.cancel();
     _fabAnimController.dispose();
     super.dispose();
   }
@@ -3282,7 +3361,7 @@ class _DashboardSection extends StatelessWidget {
 }
 
 /// Carte de progression de campagne en cours avec boutons Pause/Reprendre/Annuler
-class _CampaignProgressCard extends StatelessWidget {
+class _CampaignProgressCard extends StatefulWidget {
   const _CampaignProgressCard({
     required this.appState,
     required this.notifier,
@@ -3292,13 +3371,54 @@ class _CampaignProgressCard extends StatelessWidget {
   final AppNotifier notifier;
 
   @override
+  State<_CampaignProgressCard> createState() => _CampaignProgressCardState();
+}
+
+class _CampaignProgressCardState extends State<_CampaignProgressCard> {
+  bool _busy = false;
+
+  Future<void> _runAction(Future<void> Function() fn, String okMsg) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await fn();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(okMsg)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red.shade700),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final campaignName = appState.campaignNameSending ?? 'Campagne en cours';
+    final appState = widget.appState;
+    final notifier = widget.notifier;
+
+    final campaignName = appState.campaignNameSending ?? 'Campagne';
+    final status = (appState.campaignStatusSending ?? '').toLowerCase();
     final sent = appState.campaignSentCount ?? 0;
     final total = appState.campaignTotalCount ?? 0;
-    final remaining = total - sent;
+    final remaining = (total - sent).clamp(0, 1 << 30);
     final progress = total > 0 ? (sent / total).clamp(0.0, 1.0) : 0.0;
     final percentText = total > 0 ? '${(progress * 100).toStringAsFixed(0)}%' : '—';
+
+    final isRunning = status == 'running';
+    final isPaused = status == 'paused';
+    final isQueued = status == 'queued';
+
+    final statusLine = isPaused
+        ? '⏸️ En pause'
+        : isQueued
+            ? '⏳ En attente de démarrage'
+            : '📤 Envoi en cours...';
+
+    final leftLabel = isRunning ? 'Pause' : 'Reprendre';
+    final leftIcon = isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded;
 
     return _ModernCard(
       gradient: const LinearGradient(
@@ -3307,7 +3427,6 @@ class _CampaignProgressCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // En-tête
           Row(
             children: [
               Container(
@@ -3339,7 +3458,7 @@ class _CampaignProgressCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '📤 Envoi en cours...',
+                      statusLine,
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.9),
                         fontSize: 14,
@@ -3351,7 +3470,6 @@ class _CampaignProgressCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          // Progression
           Row(
             children: [
               Expanded(
@@ -3403,17 +3521,21 @@ class _CampaignProgressCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          // Boutons de contrôle
           Row(
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () async {
-                    // TODO: Implémenter pause/reprendre via API
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('⏸️ Pause (à implémenter)')),
-                    );
-                  },
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          if (isRunning) {
+                            await _runAction(() => notifier.pauseActiveCampaign(), '⏸️ Campagne mise en pause');
+                          } else if (isPaused || isQueued) {
+                            await _runAction(() => notifier.resumeActiveCampaign(), '▶️ Campagne relancée');
+                          } else {
+                            await _runAction(() => notifier.resumeActiveCampaign(), '▶️ Campagne relancée');
+                          }
+                        },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white,
                     foregroundColor: const Color(0xFF3B82F6),
@@ -3422,52 +3544,49 @@ class _CampaignProgressCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  icon: const Icon(Icons.pause_rounded, size: 20),
-                  label: const Text(
-                    'Pause',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                  icon: Icon(leftIcon, size: 20),
+                  label: Text(
+                    leftLabel,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        title: const Text('Annuler la campagne ?'),
-                        content: const Text(
-                          'Les SMS déjà envoyés ne seront pas annulés. '
-                          'Les SMS restants ne seront pas envoyés.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(false),
-                            child: const Text('Non'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.of(ctx).pop(true),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.red,
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              title: const Text('Annuler la campagne ?'),
+                              content: const Text(
+                                'Les SMS déjà envoyés ne seront pas annulés. '
+                                'Les SMS restants ne seront pas envoyés.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(false),
+                                  child: const Text('Non'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.of(ctx).pop(true),
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Colors.red,
+                                  ),
+                                  child: const Text('Oui, annuler'),
+                                ),
+                              ],
                             ),
-                            child: const Text('Oui, annuler'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirm == true) {
-                      // TODO: Implémenter annulation via API
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('🚫 Annulation (à implémenter)')),
-                        );
-                      }
-                    }
-                  },
+                          );
+                          if (confirm == true) {
+                            await _runAction(() => notifier.cancelActiveCampaign(), '🚫 Campagne annulée');
+                          }
+                        },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
                     side: const BorderSide(color: Colors.white, width: 2),

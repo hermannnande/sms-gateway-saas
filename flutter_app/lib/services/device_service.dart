@@ -172,6 +172,31 @@ class DeviceService {
     return token;
   }
 
+  /// Contrôle une campagne (pause / resume / cancel) via Edge Function `campaign_control`,
+  /// en passant par le proxy Web (smsenvoie.com) pour la fiabilité réseau.
+  Future<void> campaignControl({
+    required String action, // 'pause' | 'resume' | 'cancel'
+    required String campaignId,
+  }) async {
+    final session = client.auth.currentSession;
+    final token = session == null ? '' : session.accessToken.trim();
+    if (token.isEmpty) {
+      throw Exception('Non authentifié. Connectez-vous d’abord.');
+    }
+    final act = action.trim().toLowerCase();
+    if (!['pause', 'resume', 'cancel'].contains(act)) {
+      throw Exception('Action invalide: $action');
+    }
+    final payload = await _postProxy(
+      '/api/mobile/campaign-control',
+      {'action': act, 'campaign_id': campaignId},
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (payload['success'] != true && payload['ok'] != true) {
+      throw Exception(payload['error']?.toString() ?? 'Erreur contrôle campagne');
+    }
+  }
+
   /// Send heartbeat to keep device status "online"
   Future<void> sendHeartbeat({required String deviceToken}) async {
     try {

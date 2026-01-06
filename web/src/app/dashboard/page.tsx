@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { ActiveCampaignBar } from './active-campaign-bar'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -91,6 +92,20 @@ export default async function DashboardPage() {
     }
   }
 
+  // Campagne active (pour barre Pause/Reprendre/Annuler sur le dashboard)
+  let activeCampaign: any = null
+  if (orgMember) {
+    const { data } = await supabase
+      .from('campaigns')
+      .select('id,name,status,sent_count,total_count,updated_at')
+      .eq('org_id', orgMember.org_id)
+      .in('status', ['running', 'paused', 'queued'])
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    activeCampaign = data
+  }
+
   return (
     <div className="space-y-8">
       {/* Welcome banner */}
@@ -117,6 +132,10 @@ export default async function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {orgMember?.org_id && (
+        <ActiveCampaignBar orgId={orgMember.org_id} initialCampaign={activeCampaign} />
+      )}
 
       {/* Getting Started - Only show if no devices */}
       {stats.devices === 0 && (
