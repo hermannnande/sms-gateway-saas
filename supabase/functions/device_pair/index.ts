@@ -12,7 +12,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { device_name } = await req.json()
+    const { device_name, android_id } = await req.json()
 
     if (!device_name) {
       throw new Error('device_name requis')
@@ -79,23 +79,60 @@ Deno.serve(async (req) => {
     // Hash token for storage
     const token_hash = await sha256Hex(device_token)
 
-    // Create device
-    const { data: device, error: deviceError } = await supabaseClient
-      .from('devices')
-      .insert({
-        org_id,
-        name: device_name,
-        token_hash,
-        status: 'offline',
-      })
-      .select()
-      .single()
+    let device: any = null
 
-    if (deviceError || !device) {
-      throw new Error('Erreur création device: ' + deviceError?.message)
+    // Si android_id est fourni, vérifier si un device existant avec ce android_id existe pour cette org
+    if (android_id) {
+      const { data: existingDevice } = await supabaseClient
+        .from('devices')
+        .select('id, name')
+        .eq('org_id', org_id)
+        .eq('android_id', android_id)
+        .maybeSingle()
+
+      if (existingDevice) {
+        // Réutiliser l'appareil existant : mettre à jour le token_hash et le nom
+        console.log('Existing device found for android_id, reusing:', existingDevice.id)
+        const { data: updatedDevice, error: updateError } = await supabaseClient
+          .from('devices')
+          .update({
+            name: device_name,
+            token_hash,
+            status: 'offline',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingDevice.id)
+          .select()
+          .single()
+
+        if (updateError || !updatedDevice) {
+          throw new Error('Erreur mise à jour device: ' + updateError?.message)
+        }
+        device = updatedDevice
+        console.log('Device updated:', device.id)
+      }
     }
 
-    console.log('Device created:', device.id)
+    // Si pas de device existant trouvé (ou pas d'android_id), créer un nouveau device
+    if (!device) {
+      const { data: newDevice, error: deviceError } = await supabaseClient
+        .from('devices')
+        .insert({
+          org_id,
+          name: device_name,
+          token_hash,
+          android_id: android_id || null,
+          status: 'offline',
+        })
+        .select()
+        .single()
+
+      if (deviceError || !newDevice) {
+        throw new Error('Erreur création device: ' + deviceError?.message)
+      }
+      device = newDevice
+      console.log('Device created:', device.id)
+    }
 
     // Return device info + token (only time we send token!)
     return new Response(

@@ -288,6 +288,19 @@ class AppNotifier extends Notifier<AppState> {
       await refreshOutboxHistory(silent: true);
       await refreshSubscription(silent: true);
     }
+
+    // Auto-démarrer le BackgroundSyncService si un device_token valide existe
+    if (token != null && token.isNotEmpty) {
+      try {
+        await BackgroundSyncService.init();
+        final isRunning = await FlutterForegroundTask.isRunningService;
+        if (!isRunning) {
+          await BackgroundSyncService.start();
+        }
+      } catch (e) {
+        debugPrint('Échec auto-démarrage BackgroundSyncService: $e');
+      }
+    }
   }
 
   Future<void> _loadAppVersion() async {
@@ -3377,9 +3390,14 @@ class _DashboardSection extends StatelessWidget {
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
       children: [
         // Carte de progression de campagne (si une campagne est en cours)
-        if (appState.campaignIdSending != null)
+        if (appState.campaignIdSending != null &&
+            appState.campaignStatusSending != 'completed' &&
+            appState.campaignStatusSending != 'canceled')
           _CampaignProgressCard(appState: appState, notifier: notifier),
-        if (appState.campaignIdSending != null) const SizedBox(height: 20),
+        if (appState.campaignIdSending != null &&
+            appState.campaignStatusSending != 'completed' &&
+            appState.campaignStatusSending != 'canceled')
+          const SizedBox(height: 20),
         _StatusCardDashboard(appState: appState),
         const SizedBox(height: 20),
         _SyncCard(appState: appState, notifier: notifier),

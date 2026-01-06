@@ -1,12 +1,14 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:math';
+import 'dart:io';
 
 import 'package:logger/logger.dart';
 import 'package:http/http.dart' as http;
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 import 'package:supabase/supabase.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 class DeviceService {
   DeviceService(this.client, this._logger);
@@ -195,13 +197,34 @@ class DeviceService {
     }
   }
 
+  /// Obtient un identifiant unique pour cet appareil (Android ID).
+  Future<String?> _getDeviceId() async {
+    try {
+      if (Platform.isAndroid) {
+        final deviceInfo = DeviceInfoPlugin();
+        final androidInfo = await deviceInfo.androidInfo;
+        return androidInfo.id; // Android ID unique
+      }
+      // iOS/autre: retourner null (ou utiliser un autre identifiant)
+      return null;
+    } catch (e) {
+      _logger.w('Impossible d\'obtenir Android ID: $e');
+      return null;
+    }
+  }
+
   /// Crée un device côté serveur (Edge Function `device_pair`) et renvoie un `device_token`.
   /// Utilise le proxy Web (smsenvoie.com) pour éviter les soucis DNS vers Supabase chez certains opérateurs.
+  /// Si un appareil avec le même Android ID existe déjà, il sera réutilisé (avec un nouveau token).
   Future<String> createDeviceToken({required String deviceName}) async {
     final accessToken = await _getFreshAccessTokenOrThrow();
+    final androidId = await _getDeviceId();
     final payload = await _postProxy(
       '/api/mobile/device-pair',
-      {'device_name': deviceName},
+      {
+        'device_name': deviceName,
+        if (androidId != null) 'android_id': androidId,
+      },
       headers: {'Authorization': 'Bearer $accessToken'},
     );
     final token = payload['device_token']?.toString().trim() ?? '';

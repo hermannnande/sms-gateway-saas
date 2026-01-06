@@ -31,6 +31,7 @@ export async function POST(req: Request) {
 
     const body = await req.json()
     const device_name = typeof body?.device_name === 'string' ? body.device_name.trim() : ''
+    const android_id = typeof body?.android_id === 'string' ? body.android_id.trim() : undefined
     if (!device_name) {
       return NextResponse.json({ ok: false, error: 'device_name requis' }, { status: 400 })
     }
@@ -43,7 +44,7 @@ export async function POST(req: Request) {
         apikey: anonKey,
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ device_name }),
+      body: JSON.stringify({ device_name, android_id }),
     })
 
     const text = await upstream.text()

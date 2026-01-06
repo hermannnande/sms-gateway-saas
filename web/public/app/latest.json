@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.2+29",
+  "latestVersion": "1.0.2+30",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "Fix: Pause/Reprendre fiable (pas de service_role Vercel) + Edge Function supporte device_token."
+  "notes": "• Masquer barre progression si campagne terminée\n• Auto-démarrage BackgroundSyncService\n• Réutiliser appareil après réinstall (Android ID)"
 }
 
 
