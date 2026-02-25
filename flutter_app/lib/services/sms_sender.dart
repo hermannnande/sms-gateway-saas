@@ -102,4 +102,3 @@ class SimCard {
     return '$slot$carrierPart';
   }
 }
-

@@ -1,7 +1,7 @@
 {
-  "latestVersion": "1.0.2+31",
+  "latestVersion": "1.0.2+32",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "• Fix jumelage réinstall (device_pair sans updated_at)\n• Auto-envoi plus fiable (clear pause/lock + auto-start)\n• Réutiliser appareil via Android ID"
+  "notes": "• Boutons Pause/Reprendre/Annuler dans la notification contrôlent la campagne côté serveur\n• Meilleure gestion du campaign ID actif"
 }
 
 

@@ -16,6 +16,22 @@ class BackgroundSyncService {
   static const String _pausedKey = 'bg_sync_paused';
   static const String _enabledKey = 'bg_sync_enabled';
   static const String _fgLockKey = 'bg_sync_fg_lock';
+  static const String _activeCampaignIdKey = 'bg_sync_active_campaign_id';
+
+  static Future<void> setActiveCampaignId(String? id) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (id == null || id.isEmpty) {
+      await prefs.remove(_activeCampaignIdKey);
+    } else {
+      await prefs.setString(_activeCampaignIdKey, id);
+    }
+  }
+
+  static Future<String?> getActiveCampaignId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString(_activeCampaignIdKey);
+    return (v == null || v.trim().isEmpty) ? null : v.trim();
+  }
 
   static Future<void> init() async {
     FlutterForegroundTask.initCommunicationPort();
@@ -158,6 +174,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   final _http = http.Client();
   final _rng = Random();
   bool _busy = false;
+  String? _activeCampaignId;
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
@@ -440,6 +457,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final isMultiCampaign = knownCampaignIds.length > 1;
       final activeCampaignId = knownCampaignIds.length == 1 ? knownCampaignIds.first : null;
 
+      // Stocker le campaign ID actif pour que les boutons de notification puissent l'utiliser
+      if (activeCampaignId != null) {
+        await BackgroundSyncService.setActiveCampaignId(activeCampaignId);
+        _activeCampaignId = activeCampaignId;
+      } else if (knownCampaignIds.isNotEmpty) {
+        await BackgroundSyncService.setActiveCampaignId(knownCampaignIds.first);
+        _activeCampaignId = knownCampaignIds.first;
+      }
+
       final campaignLabel = () {
         if (activeCampaignId != null) {
           final name = campaigns[activeCampaignId]?['name']?.toString().trim();
@@ -552,12 +578,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         await Future.delayed(Duration(milliseconds: AppConfig.smsDelayMs));
       }
 
-      // Fin du batch - ne pas revenir sur "en attente" si la campagne continue
-      // On garde la progression affichée pour que l'utilisateur voie l'avancement
+      // Fin du batch
       if (hasCampaignTotals) {
         final s = sentNow();
         final remain = max(totalSum - s, 0);
         final isDone = remain == 0;
+        if (isDone) {
+          _activeCampaignId = null;
+          await BackgroundSyncService.setActiveCampaignId(null);
+        }
         final errShort = (lastErr ?? '').replaceAll('\n', ' ');
         final errMsg = errShort.isEmpty ? '' : ' • err: ${errShort.substring(0, errShort.length.clamp(0, 60))}';
         await FlutterForegroundTask.updateService(
@@ -609,17 +638,48 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   }
 
   Future<void> _handleButton(String id) async {
+    final token = await _loadDeviceToken();
+    final campaignId = _activeCampaignId ?? await BackgroundSyncService.getActiveCampaignId();
+
     if (id == 'pause') {
       await BackgroundSyncService.setPaused(true);
+      // Appeler le serveur pour mettre la campagne en pause
+      if (campaignId != null && token != null) {
+        try {
+          await _postJson(
+            _proxyUri('/api/mobile/campaign-control'),
+            {'action': 'pause', 'campaign_id': campaignId, 'device_token': token},
+          );
+        } catch (_) {}
+      }
       return;
     }
     if (id == 'resume') {
       await BackgroundSyncService.setPaused(false);
+      // Appeler le serveur pour reprendre la campagne
+      if (campaignId != null && token != null) {
+        try {
+          await _postJson(
+            _proxyUri('/api/mobile/campaign-control'),
+            {'action': 'resume', 'campaign_id': campaignId, 'device_token': token},
+          );
+        } catch (_) {}
+      }
       return;
     }
     if (id == 'stop') {
+      // Appeler le serveur pour annuler la campagne
+      if (campaignId != null && token != null) {
+        try {
+          await _postJson(
+            _proxyUri('/api/mobile/campaign-control'),
+            {'action': 'cancel', 'campaign_id': campaignId, 'device_token': token},
+          );
+        } catch (_) {}
+      }
       await BackgroundSyncService.setPaused(false);
       await BackgroundSyncService.setEnabled(false);
+      await BackgroundSyncService.setActiveCampaignId(null);
       await FlutterForegroundTask.stopService();
       return;
     }

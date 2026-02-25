@@ -96,7 +96,8 @@ sms-gateway-saas/
 ├── supabase/
 │   ├── functions/                # Edge Functions (Deno)
 │   │   ├── device_pair/          # Créer un device + device_token
-│   │   ├── claim_messages/       # Appareil récupère messages à envoyer
+│   │   ├── 
+claim_messages/       # Appareil récupère messages à envoyer
 │   │   ├── update_message_status/# Marquer message envoyé/échoué
 │   │   ├── heartbeat/            # Check appareil actif, quota, plan
 │   │   └── campaign_control/     # Pause/Resume campagne
