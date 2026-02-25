@@ -446,7 +446,7 @@ export default function Home() {
           </div>
 
           <div className="mt-16 flex flex-col items-center justify-between gap-4 border-t border-border/50 pt-10 sm:flex-row">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground" suppressHydrationWarning>
               © {new Date().getFullYear()} SMS Gateway. Tous droits réservés.
             </p>
             <div className="flex items-center gap-6 text-sm text-muted-foreground">
