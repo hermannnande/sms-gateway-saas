@@ -1,19 +1,14 @@
 // Edge Function: campaign_control
 // Actions: pause / resume / cancel a campaign job
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import { corsHeaders } from '../_shared/cors.ts'
 import { hashToken } from '../_shared/crypto.ts'
 import { normalizeDeviceToken } from '../_shared/device_token.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
 type Action = 'pause' | 'resume' | 'cancel'
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -36,11 +31,34 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
 
-    // Résoudre org_id soit via device_token (mobile), soit via JWT user (web)
+    // Résoudre org_id: essayer JWT d'abord (plus fiable pour l'app), puis device_token en fallback
     let org_id: string | null = null
     let via: 'device_token' | 'user_jwt' = 'user_jwt'
 
-    if (device_token) {
+    // 1) Essayer JWT user (mode web OU mode app avec session active)
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const jwtToken = authHeader.replace('Bearer ', '').trim()
+    if (jwtToken && jwtToken.length > 50) {
+      try {
+        const { data: userData, error: userError } = await supabase.auth.getUser(jwtToken)
+        if (!userError && userData?.user) {
+          const { data: members } = await supabase
+            .from('org_members')
+            .select('org_id')
+            .eq('user_id', userData.user.id)
+            .limit(1)
+          if (members && members.length > 0) {
+            org_id = members[0].org_id
+            via = 'user_jwt'
+          }
+        }
+      } catch (_) {
+        // JWT invalide ou expiré, on continue avec device_token
+      }
+    }
+
+    // 2) Fallback: device_token
+    if (!org_id && device_token) {
       via = 'device_token'
       const token_hash = await hashToken(device_token)
       const { data: device, error: devErr } = await supabase
@@ -52,25 +70,10 @@ serve(async (req) => {
         throw new Error('Device introuvable (token invalide)')
       }
       org_id = device.org_id
-    } else {
-      // Auth user (mode web)
-      const authHeader = req.headers.get('Authorization') ?? ''
-      const token = authHeader.replace('Bearer ', '')
-      const { data: userData, error: userError } = await supabase.auth.getUser(token)
-      if (userError || !userData?.user) {
-        throw new Error('Non authentifié')
-      }
+    }
 
-      // Find org of user
-      const { data: member, error: memberError } = await supabase
-        .from('org_members')
-        .select('org_id')
-        .eq('user_id', userData.user.id)
-        .single()
-      if (memberError || !member) {
-        throw new Error('Organisation introuvable')
-      }
-      org_id = member.org_id
+    if (!org_id) {
+      throw new Error('Non authentifié: ni JWT ni device_token valide')
     }
 
     // Check campaign belongs to org
@@ -79,8 +82,32 @@ serve(async (req) => {
       .select('id, org_id, status')
       .eq('id', campaign_id)
       .single()
-    if (campError || !campaign || campaign.org_id !== org_id) {
-      throw new Error('Campagne introuvable ou non autorisée')
+
+    if (campError || !campaign) {
+      throw new Error(`Campagne ${campaign_id} introuvable dans la base`)
+    }
+
+    // Si l'org ne correspond pas, essayer de trouver la bonne org via la campagne
+    if (campaign.org_id !== org_id) {
+      // Vérifier si l'utilisateur a accès à l'org de la campagne
+      if (via === 'user_jwt' && jwtToken) {
+        const { data: userData } = await supabase.auth.getUser(jwtToken)
+        if (userData?.user) {
+          const { data: memberCheck } = await supabase
+            .from('org_members')
+            .select('org_id')
+            .eq('user_id', userData.user.id)
+            .eq('org_id', campaign.org_id)
+            .maybeSingle()
+          if (memberCheck) {
+            org_id = campaign.org_id
+          }
+        }
+      }
+      if (campaign.org_id !== org_id) {
+        console.error('org_id mismatch', { campaign_org: campaign.org_id, resolved_org: org_id, via })
+        throw new Error('Campagne introuvable ou non autorisée (org mismatch)')
+      }
     }
 
     const now = new Date().toISOString()

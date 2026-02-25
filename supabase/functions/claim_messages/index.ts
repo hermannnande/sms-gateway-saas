@@ -51,10 +51,67 @@ Deno.serve(async (req) => {
       throw new Error('Device non trouvé ou token invalide')
     }
 
-    const org_id = device.org_id
+    let org_id = device.org_id
     const device_id = device.id
 
     console.log('Device authenticated:', device_id, 'org:', org_id)
+
+    // Auto-fix: si le device est dans une org SANS campagne running,
+    // mais que le même utilisateur a des campagnes dans une AUTRE org,
+    // on déplace le device vers la bonne org.
+    try {
+      const { count: runningCount } = await supabaseClient
+        .from('campaigns')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', org_id)
+        .in('status', ['running', 'queued'])
+
+      if (!runningCount || runningCount === 0) {
+        // Trouver les users membres de l'org du device
+        const { data: deviceOrgMembers } = await supabaseClient
+          .from('org_members')
+          .select('user_id')
+          .eq('org_id', org_id)
+
+        if (deviceOrgMembers && deviceOrgMembers.length > 0) {
+          const userIds = deviceOrgMembers.map(m => m.user_id)
+
+          // Trouver toutes les AUTRES orgs de ces users
+          const { data: allMemberships } = await supabaseClient
+            .from('org_members')
+            .select('org_id, user_id')
+            .in('user_id', userIds)
+
+          const otherOrgIds = [...new Set(
+            (allMemberships ?? [])
+              .map(m => m.org_id)
+              .filter(oid => oid !== org_id)
+          )]
+
+          if (otherOrgIds.length > 0) {
+            // Chercher une org avec des campagnes running
+            const { data: orgWithCampaign } = await supabaseClient
+              .from('campaigns')
+              .select('org_id')
+              .in('org_id', otherOrgIds)
+              .in('status', ['running', 'queued'])
+              .limit(1)
+              .maybeSingle()
+
+            if (orgWithCampaign) {
+              console.warn(`Auto-fixing device org: ${org_id} -> ${orgWithCampaign.org_id}`)
+              await supabaseClient
+                .from('devices')
+                .update({ org_id: orgWithCampaign.org_id })
+                .eq('id', device_id)
+              org_id = orgWithCampaign.org_id
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Auto-fix org check (non-blocking):', e)
+    }
 
     // Update device last_seen + status
     await supabaseClient
