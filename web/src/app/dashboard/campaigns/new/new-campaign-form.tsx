@@ -3,9 +3,54 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { parsePhoneNumberFromString } from 'libphonenumber-js'
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
 import * as XLSX from 'xlsx'
 import { Users, FileText, Database, Send } from 'lucide-react'
+
+/**
+ * Try to parse a phone number in multiple ways to maximize acceptance
+ * of international numbers in any format.
+ */
+function smartParsePhone(raw: string): string | null {
+  let cleaned = raw.replace(/[\s\-().]/g, '').trim()
+  if (!cleaned) return null
+
+  // Replace leading 00 with +
+  if (cleaned.startsWith('00')) cleaned = '+' + cleaned.slice(2)
+  // Ensure + prefix if it looks like a full international number (11-15 digits)
+  if (/^\d{11,15}$/.test(cleaned)) cleaned = '+' + cleaned
+
+  // 1) Try as-is (handles +XXXXXXXXXXXX)
+  let pn = parsePhoneNumberFromString(cleaned)
+  if (pn?.isValid()) return pn.format('E.164')
+
+  // 2) Try adding + if missing
+  if (!cleaned.startsWith('+')) {
+    pn = parsePhoneNumberFromString('+' + cleaned)
+    if (pn?.isValid()) return pn.format('E.164')
+  }
+
+  // 3) Try common country codes for shorter numbers
+  const countryGuesses: { digits: number; countries: CountryCode[] } [] = [
+    { digits: 10, countries: ['CI', 'FR', 'CM', 'SN', 'ML', 'BF', 'GN', 'TG', 'BJ', 'NE', 'MG', 'CD', 'CG', 'GA', 'MA', 'TN', 'DZ'] },
+    { digits: 9,  countries: ['CI', 'FR', 'CM', 'SN', 'BE', 'PT', 'ES', 'IT', 'DE', 'NL', 'CH'] },
+    { digits: 8,  countries: ['CI', 'SN', 'ML', 'BF', 'TG', 'BJ', 'NE', 'GN', 'LU'] },
+    { digits: 11, countries: ['US', 'BR', 'RU', 'NG', 'PK', 'BD'] },
+    { digits: 12, countries: ['CN', 'IN', 'JP'] },
+  ]
+
+  const digitOnly = cleaned.replace(/\D/g, '')
+  for (const guess of countryGuesses) {
+    if (digitOnly.length === guess.digits) {
+      for (const cc of guess.countries) {
+        pn = parsePhoneNumberFromString(cleaned, cc)
+        if (pn?.isValid()) return pn.format('E.164')
+      }
+    }
+  }
+
+  return null
+}
 
 type Template = {
   id: string
@@ -91,22 +136,9 @@ export function NewCampaignForm({
 
       if (!rawPhone) continue
 
-      // Try parsing with libphonenumber
-      let phoneNumber = parsePhoneNumberFromString(rawPhone)
-      // If invalid, try with +225 prefix (Côte d'Ivoire)
-      if (!phoneNumber?.isValid() && /^\d{10}$/.test(rawPhone)) {
-        phoneNumber = parsePhoneNumberFromString('+225' + rawPhone)
-      }
-      // Try with + prefix
-      if (!phoneNumber?.isValid() && /^\d{11,15}$/.test(rawPhone)) {
-        phoneNumber = parsePhoneNumberFromString('+' + rawPhone)
-      }
-
-      if (phoneNumber?.isValid()) {
-        parsedContacts.push({
-          phone_e164: phoneNumber.format('E.164'),
-          name,
-        })
+      const e164 = smartParsePhone(rawPhone)
+      if (e164) {
+        parsedContacts.push({ phone_e164: e164, name })
       } else {
         invalidPhones.push(rawPhone)
       }
@@ -143,16 +175,9 @@ export function NewCampaignForm({
 
       if (!rawPhone) continue
 
-      let phoneNumber = parsePhoneNumberFromString(rawPhone)
-      if (!phoneNumber?.isValid() && /^\d{10}$/.test(rawPhone)) {
-        phoneNumber = parsePhoneNumberFromString('+225' + rawPhone)
-      }
-      if (!phoneNumber?.isValid() && /^\d{11,15}$/.test(rawPhone)) {
-        phoneNumber = parsePhoneNumberFromString('+' + rawPhone)
-      }
-
-      if (phoneNumber?.isValid()) {
-        parsedContacts.push({ phone_e164: phoneNumber.format('E.164'), name })
+      const e164 = smartParsePhone(rawPhone)
+      if (e164) {
+        parsedContacts.push({ phone_e164: e164, name })
       } else {
         invalidPhones.push(rawPhone)
       }
@@ -220,9 +245,9 @@ export function NewCampaignForm({
     const invalid: string[] = []
 
     for (const phone of phones) {
-      const phoneNumber = parsePhoneNumberFromString(phone)
-      if (phoneNumber?.isValid()) {
-        valid.push({ phone_e164: phoneNumber.format('E.164') })
+      const e164 = smartParsePhone(phone)
+      if (e164) {
+        valid.push({ phone_e164: e164 })
       } else {
         invalid.push(phone)
       }
