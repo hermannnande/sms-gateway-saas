@@ -281,22 +281,6 @@ class AppNotifier extends Notifier<AppState> {
       authenticated: hasSession,
     );
 
-    // Auto-mode: si un device_token existe, on force l'auto-envoi en arrière-plan.
-    // (utile si l'utilisateur a appuyé sur "Annuler" dans la notif, ou après une mise à jour)
-    if (token != null && token.trim().isNotEmpty) {
-      try {
-        await BackgroundSyncService.setEnabled(true);
-        await BackgroundSyncService.setPaused(false);
-        await BackgroundSyncService.setForegroundLock(false);
-      } catch (_) {}
-      try {
-        await BackgroundSyncService.init();
-        await BackgroundSyncService.start();
-      } catch (e) {
-        debugPrint('Auto-start BackgroundSyncService (init) échoué: $e');
-      }
-    }
-
     // Charger infos réelles (profil / org / version / inbox / historique)
     await _loadAppVersion();
     if (hasSession) {
@@ -306,16 +290,18 @@ class AppNotifier extends Notifier<AppState> {
       await refreshSubscription(silent: true);
     }
 
-    // Auto-démarrer le BackgroundSyncService si un device_token valide existe
+    // Auto-démarrer le BackgroundSyncService UNE SEULE FOIS
     if (token != null && token.isNotEmpty) {
       try {
+        await BackgroundSyncService.setEnabled(true);
+        await BackgroundSyncService.setForegroundLock(false);
         await BackgroundSyncService.init();
         final isRunning = await FlutterForegroundTask.isRunningService;
         if (!isRunning) {
           await BackgroundSyncService.start();
         }
       } catch (e) {
-        debugPrint('Échec auto-démarrage BackgroundSyncService: $e');
+        debugPrint('\u00c9chec auto-d\u00e9marrage BackgroundSyncService: $e');
       }
     }
   }
@@ -562,6 +548,19 @@ class AppNotifier extends Notifier<AppState> {
         campaignSentCount: _safeParseInt(row['sent_count']) ?? 0,
         campaignTotalCount: _safeParseInt(row['total_count']) ?? 0,
       );
+
+      // Auto-ensure background service is running when a campaign is active
+      final status = row['status']?.toString();
+      if ((status == 'running' || status == 'queued') && (state.deviceToken?.isNotEmpty ?? false)) {
+        try {
+          final bgRunning = await BackgroundSyncService.isRunning();
+          if (!bgRunning) {
+            await BackgroundSyncService.setEnabled(true);
+            await BackgroundSyncService.init();
+            await BackgroundSyncService.start();
+          }
+        } catch (_) {}
+      }
     } catch (e) {
       if (!silent) setLastStatus('Erreur campagne: $e');
     }
@@ -2496,11 +2495,17 @@ class _HomePageState extends ConsumerState<HomePage>
     // Auto-sync: permet de réagir quand une campagne démarre côté web.
     _startAutoSync();
 
-    // Poll campagne active pour afficher une barre de progression dans le dashboard (UI fiable, sans notif Android).
+    // Poll campagne active + auto-trigger sync if campaign running but 0 sent
     scheduleMicrotask(() => ref.read(appProvider.notifier).refreshActiveCampaign(silent: true));
     _campaignPollTimer?.cancel();
     _campaignPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
+      final notif = ref.read(appProvider.notifier);
+      notif.refreshActiveCampaign(silent: true);
+      // Auto-refresh outbox so dashboard shows latest messages
+      final st = ref.read(appProvider);
+      if (st.campaignStatusSending == 'running' && st.outboxHistory.isEmpty) {
+        notif.refreshOutboxHistory(silent: true);
+      }
     });
   }
 
@@ -4052,6 +4057,11 @@ class _MessagesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final outbox = appState.outboxHistory;
+    final lastBatch = appState.lastMessages;
+    final hasOutbox = outbox.isNotEmpty;
+    final displayList = hasOutbox ? outbox : lastBatch;
+
     return _ModernCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4067,61 +4077,135 @@ class _MessagesCard extends StatelessWidget {
                   color: Colors.black87,
                 ),
               ),
-              if (appState.lastMessages.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF16A34A).withOpacity(0.1),
+              Row(
+                children: [
+                  if (displayList.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF16A34A).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${displayList.length}',
+                        style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                    ),
+                  const SizedBox(width: 8),
+                  InkWell(
                     borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    '${appState.lastMessages.length}',
-                    style: const TextStyle(
-                      color: Color(0xFF16A34A),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
+                    onTap: () {
+                      final container = ProviderScope.containerOf(context);
+                      container.read(sectionProvider.notifier).state = AppSection.history;
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3B82F6).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'Voir tout',
+                        style: TextStyle(color: Color(0xFF3B82F6), fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
                     ),
                   ),
-                ),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 16),
-          if (appState.lastMessages.isEmpty)
+          if (displayList.isEmpty)
             Center(
               child: Padding(
                 padding: const EdgeInsets.all(32.0),
                 child: Column(
                   children: [
-                    Icon(
-                      Icons.inbox_rounded,
-                      size: 64,
-                      color: Colors.grey.shade300,
-                    ),
+                    Icon(Icons.inbox_rounded, size: 64, color: Colors.grey.shade300),
                     const SizedBox(height: 16),
                     Text(
-                      'Aucun message traité',
-                      style: TextStyle(
-                        color: Colors.grey.shade600,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
+                      'Aucun message trait\u00e9',
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 16, fontWeight: FontWeight.w500),
                     ),
                   ],
                 ),
               ),
             )
+          else if (hasOutbox)
+            ...outbox.take(10).map((m) {
+              Color badgeBg;
+              Color badgeText;
+              String label;
+              switch (m.status) {
+                case 'sent':
+                  badgeBg = Colors.green.shade50;
+                  badgeText = Colors.green.shade700;
+                  label = 'Envoy\u00e9';
+                  break;
+                case 'failed':
+                  badgeBg = Colors.red.shade50;
+                  badgeText = Colors.red.shade700;
+                  label = '\u00c9chec';
+                  break;
+                case 'sending':
+                  badgeBg = Colors.orange.shade50;
+                  badgeText = Colors.orange.shade700;
+                  label = 'En cours';
+                  break;
+                default:
+                  badgeBg = Colors.blue.shade50;
+                  badgeText = Colors.blue.shade700;
+                  label = 'En attente';
+              }
+              final preview = m.body.length > 50 ? '${m.body.substring(0, 50)}\u2026' : m.body;
+              return Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(m.toPhoneE164, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                          const SizedBox(height: 4),
+                          Text(preview, style: TextStyle(color: Colors.grey.shade700, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(18)),
+                      child: Text(label, style: TextStyle(color: badgeText, fontWeight: FontWeight.w700, fontSize: 11)),
+                    ),
+                  ],
+                ),
+              );
+            })
           else
-            ...appState.lastMessages.asMap().entries.map((entry) {
+            ...lastBatch.asMap().entries.map((entry) {
               final index = entry.key;
               final message = entry.value;
-              return _MessageTile(
-                message: message,
-                index: index,
-              );
+              return _MessageTile(message: message, index: index);
             }),
+          if (displayList.length > 10) ...[
+            const SizedBox(height: 12),
+            Center(
+              child: TextButton.icon(
+                onPressed: () {
+                  final container = ProviderScope.containerOf(context);
+                  container.read(sectionProvider.notifier).state = AppSection.history;
+                },
+                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                label: const Text('Voir l\'historique complet'),
+              ),
+            ),
+          ],
         ],
       ),
     );

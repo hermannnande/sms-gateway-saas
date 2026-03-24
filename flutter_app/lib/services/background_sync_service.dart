@@ -85,13 +85,15 @@ class BackgroundSyncService {
   static Future<void> setPaused(bool paused) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_pausedKey, paused);
-    if (await FlutterForegroundTask.isRunningService) {
+    // Only update notification when PAUSING.
+    // When un-pausing, _tick() will update the notification with real status on next cycle.
+    if (paused && await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMS Gateway',
-        notificationText: paused ? '\u23f8\ufe0f En pause' : '\u2705 Actif (en attente)',
-        notificationButtons: [
-          NotificationButton(id: paused ? 'resume' : 'pause', text: paused ? 'Reprendre' : 'Pause'),
-          const NotificationButton(id: 'stop', text: 'Annuler campagne'),
+        notificationText: '\u23f8\ufe0f En pause',
+        notificationButtons: const [
+          NotificationButton(id: 'resume', text: 'Reprendre'),
+          NotificationButton(id: 'stop', text: 'Annuler campagne'),
         ],
       );
     }
