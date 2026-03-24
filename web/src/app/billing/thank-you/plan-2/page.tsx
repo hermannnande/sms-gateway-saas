@@ -1,7 +1,7 @@
 import { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'Merci pour votre paiement - Plan 2 appareils | SMS Gateway',
+  title: 'Merci pour votre paiement - Plan 2 appareils | SMSenvoie',
   description: 'Votre paiement a été reçu. Nous allons activer votre abonnement sous peu.',
 }
 

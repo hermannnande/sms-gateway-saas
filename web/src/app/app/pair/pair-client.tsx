@@ -34,7 +34,7 @@ export default function PairClient() {
       <div className="w-full max-w-md bg-card border border-border rounded-xl p-6 shadow-sm">
         <h1 className="text-xl font-bold mb-2">Connexion appareil</h1>
         <p className="text-sm text-muted-foreground mb-4">
-          Nous allons ouvrir l’app SMS Gateway pour connecter votre appareil.
+          Nous allons ouvrir l’app SMSenvoie pour connecter votre appareil.
         </p>
 
         {deviceName && (

@@ -17,7 +17,7 @@ export default function LoginPage() {
             </div>
           </div>
           <h1 className="text-4xl font-black mb-2">
-            <span className="gradient-text">SMS Gateway</span>
+            <span className="gradient-text">SMSenvoie</span>
           </h1>
           <p className="text-muted-foreground">Connectez-vous à votre espace</p>
         </div>

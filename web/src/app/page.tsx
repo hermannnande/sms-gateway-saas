@@ -110,8 +110,8 @@ export default function Home() {
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
             </span>
-            <span className="hidden sm:inline">Plateforme SMS Gateway</span>
-            <span className="sm:hidden">SMS Gateway</span>
+            <span className="hidden sm:inline">Plateforme SMSenvoie</span>
+            <span className="sm:hidden">SMSenvoie</span>
             <span className="hidden sm:inline text-primary/60">•</span>
             <span className="hidden sm:inline text-primary/80">Commerce & B2B</span>
           </div>
@@ -394,7 +394,7 @@ export default function Home() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 text-xl text-primary-foreground shadow-brutal-primary">
                   📱
                 </div>
-                <div className="text-xl font-black tracking-tight">SMS Gateway</div>
+                <div className="text-xl font-black tracking-tight">SMSenvoie</div>
               </div>
               <p className="text-sm leading-relaxed text-muted-foreground">
                 Plateforme professionnelle d&apos;envoi SMS via Android Gateway. Boostez vos ventes et fidélisez vos clients.
@@ -447,7 +447,7 @@ export default function Home() {
 
           <div className="mt-16 flex flex-col items-center justify-between gap-4 border-t border-border/50 pt-10 sm:flex-row">
             <p className="text-sm text-muted-foreground" suppressHydrationWarning>
-              © {new Date().getFullYear()} SMS Gateway. Tous droits réservés.
+              © {new Date().getFullYear()} SMSenvoie. Tous droits réservés.
             </p>
             <div className="flex items-center gap-6 text-sm text-muted-foreground">
               <span className="flex items-center gap-2">

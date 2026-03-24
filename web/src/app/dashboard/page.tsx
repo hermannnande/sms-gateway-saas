@@ -509,7 +509,7 @@ export default async function DashboardPage() {
       <div className="glass-card rounded-3xl p-8 border-4 border-green-500/30 bg-gradient-to-br from-green-500/10 to-blue-500/10 text-center animate-fade-in">
         <div className="text-6xl mb-4 animate-float">🎉</div>
         <h3 className="text-3xl font-black mb-2">
-          <span className="gradient-text">Plateforme SMS Gateway complète !</span>
+          <span className="gradient-text">Plateforme SMSenvoie complète !</span>
         </h3>
         <p className="text-muted-foreground text-lg">
           Toutes les 8 étapes sont terminées. Prêt pour production.

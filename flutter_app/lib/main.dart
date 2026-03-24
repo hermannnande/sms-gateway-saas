@@ -3317,7 +3317,7 @@ class _AppDrawer extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'SMS Gateway',
+                            'SMSenvoie',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 18,

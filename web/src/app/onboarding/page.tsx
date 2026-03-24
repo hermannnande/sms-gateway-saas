@@ -60,7 +60,7 @@ export default async function OnboardingPage() {
             <span className="text-4xl">🎉</span>
           </div>
           <h1 className="text-4xl md:text-5xl font-bold mb-4">
-            Bienvenue sur SMS Gateway !
+            Bienvenue sur SMSenvoie !
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Votre compte est créé avec le <span className="font-semibold text-primary">plan Gratuit</span> : 1 appareil + 100 SMS offerts.
@@ -138,7 +138,7 @@ export default async function OnboardingPage() {
                   <div className="p-4 bg-muted/50 rounded-lg">
                     <p className="text-sm font-semibold mb-2">📷 Sur l&apos;App Android</p>
                     <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-                      <li>Ouvrez l&apos;app SMS Gateway</li>
+                      <li>Ouvrez l&apos;app SMSenvoie</li>
                       <li>Cliquez sur <span className="font-semibold">Scanner</span></li>
                       <li>Scannez le QR code affiché sur le web</li>
                     </ol>

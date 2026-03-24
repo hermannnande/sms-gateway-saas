@@ -61,8 +61,8 @@ export default function DashboardLayout({
                 📱
               </div>
               <div>
-                <h1 className="font-semibold text-lg text-primary">SMS Gateway</h1>
-                <p className="text-xs text-muted-foreground">Plateforme SaaS</p>
+                <h1 className="font-semibold text-lg text-primary">SMSenvoie</h1>
+                <p className="text-xs text-muted-foreground">Plateforme SMS</p>
               </div>
             </Link>
           </div>

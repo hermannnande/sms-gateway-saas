@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { RedeemPromoForm } from './redeem-promo-form'
 
 export const metadata = {
-  title: 'Activer un code promo | SMS Gateway',
+  title: 'Activer un code promo | SMSenvoie',
 }
 
 export default async function RedeemPromoPage() {

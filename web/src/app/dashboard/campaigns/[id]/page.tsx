@@ -66,7 +66,7 @@ export default async function CampaignPage({ params }: { params: { id: string } 
       <nav className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4">
           <a href="/dashboard" className="text-xl font-bold text-primary">
-            SMS Gateway
+            SMSenvoie
           </a>
         </div>
       </nav>

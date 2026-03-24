@@ -15,12 +15,12 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SMS Gateway SaaS - Envoi SMS en masse",
+  title: "SMSenvoie - Envoi SMS en masse",
   description: "Plateforme professionnelle d'envoi de SMS via Android Gateway. Multi-SIM, temps réel, anti-spam.",
-  keywords: ["SMS", "Gateway", "Android", "Envoi SMS", "Bulk SMS", "API SMS"],
-  authors: [{ name: "SMS Gateway Team" }],
+  keywords: ["SMSenvoie", "SMS", "Gateway", "Android", "Envoi SMS", "Bulk SMS", "API SMS"],
+  authors: [{ name: "SMSenvoie" }],
   openGraph: {
-    title: "SMS Gateway SaaS",
+    title: "SMSenvoie",
     description: "Plateforme professionnelle d'envoi de SMS",
     type: "website",
   },
