@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.7+41",
+  "latestVersion": "1.0.8+42",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Correction installation Play Protect\n• Priorite des campagnes\n• Parsing international ameliore"
+  "notes": "• Nouveau nom: SMSenvoie\n• Nouvelle icone\n• Correction Play Protect\n• Priorite campagnes\n• Parsing international"
 }

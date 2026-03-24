@@ -30,8 +30,8 @@ final loggerProvider = Provider<Logger>((_) => Logger());
 
 final supabaseClientProvider = Provider<SupabaseClient>(
   (ref) => SupabaseClient(
-    AppConfig.supabaseUrl,
-    AppConfig.supabaseAnonKey,
+  AppConfig.supabaseUrl,
+  AppConfig.supabaseAnonKey,
   ),
 );
 
@@ -955,8 +955,8 @@ class AppNotifier extends Notifier<AppState> {
       }
 
       final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
-            deviceToken: token,
-            limit: AppConfig.claimBatchSize,
+        deviceToken: token,
+        limit: AppConfig.claimBatchSize,
             // La SIM est décidée côté campagne web (via sim_slot_index),
             // claim_messages_atomic renvoie ensuite sim_subscription_id = "slot:X".
             simSubscriptionId: null,
@@ -1019,11 +1019,11 @@ class AppNotifier extends Notifier<AppState> {
               subscriptionIdOverride: subscriptionId,
             );
         await ref.read(deviceServiceProvider).updateMessageStatus(
-              deviceToken: token,
-              message: msg,
-              success: sendResult.success,
-              error: sendResult.error,
-            );
+          deviceToken: token,
+          message: msg,
+          success: sendResult.success,
+          error: sendResult.error,
+        );
 
         if (sendResult.success) {
           okCount++;
@@ -1575,9 +1575,9 @@ class _PairingPageState extends ConsumerState<PairingPage>
               opacity: _fadeAnimation,
               child: SlideTransition(
                 position: _slideAnimation,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
                     // Hero Icon
                     Center(
                       child: Hero(
@@ -1664,10 +1664,10 @@ class _PairingPageState extends ConsumerState<PairingPage>
                                       fontWeight: FontWeight.w600,
                                       color: Colors.black87,
                                     ),
-                              ),
-                              const SizedBox(height: 16),
-                              TextField(
-                                controller: _controller,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
                                 maxLines: 3,
                                 style: const TextStyle(
                                   fontSize: 13,
@@ -1694,20 +1694,20 @@ class _PairingPageState extends ConsumerState<PairingPage>
                     const SizedBox(height: 24),
                     
                     // Action Buttons
-                    Row(
-                      children: [
+            Row(
+              children: [
                         Expanded(
                           child: _AnimatedButton(
-                            onPressed: _saving ? null : _scanQr,
+                  onPressed: _saving ? null : _scanQr,
                             icon: Icons.qr_code_scanner_rounded,
                             label: 'Scanner QR',
                             isPrimary: false,
                           ),
-                        ),
-                        const SizedBox(width: 12),
+                ),
+                const SizedBox(width: 12),
                         Expanded(
                           child: _AnimatedButton(
-                            onPressed: _saving ? null : _save,
+                  onPressed: _saving ? null : _save,
                             icon: Icons.check_circle_rounded,
                             label: _saving ? 'Enregistrement...' : 'Valider',
                             isPrimary: true,
@@ -2235,7 +2235,7 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
                 overlayColor: WidgetStateProperty.all(Colors.white.withOpacity(0.1)),
               ),
               child: _loading
-                  ? const SizedBox(
+                      ? const SizedBox(
                       height: 22,
                       width: 22,
                       child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
@@ -2257,9 +2257,9 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
                     height: 1.4,
                   ),
             ),
-          ),
-        ],
-      ),
+                ),
+              ],
+            ),
     );
   }
 
@@ -2269,8 +2269,8 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const SizedBox(height: 12),
-          Text(
+            const SizedBox(height: 12),
+              Text(
             'Scannez le QR session depuis la web app pour vous connecter en 1 geste.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -2377,15 +2377,15 @@ class _QrScannerPageState extends State<QrScannerPage> {
         children: [
           // Scanner
           MobileScanner(
-            onDetect: (capture) {
+        onDetect: (capture) {
               if (_scanned) return;
-              final code = capture.barcodes.first.rawValue;
-              if (code != null && code.isNotEmpty) {
+          final code = capture.barcodes.first.rawValue;
+          if (code != null && code.isNotEmpty) {
                 setState(() => _scanned = true);
                 HapticFeedback.heavyImpact();
-                Navigator.of(context).pop(code);
-              }
-            },
+            Navigator.of(context).pop(code);
+          }
+        },
           ),
           
           // Overlay avec cadre
@@ -3343,7 +3343,7 @@ class _AppDrawer extends StatelessWidget {
               
               // Navigation items
               Expanded(
-                child: ListView(
+        child: ListView(
                   physics: const BouncingScrollPhysics(),
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   children: [
@@ -3549,7 +3549,7 @@ class _UpdateBanner extends StatelessWidget {
     final notes = appState.updateNotes;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: const LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)]),
         borderRadius: BorderRadius.circular(16),
@@ -3559,7 +3559,7 @@ class _UpdateBanner extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+          children: [
           Row(
             children: [
               Container(
@@ -3584,8 +3584,8 @@ class _UpdateBanner extends StatelessWidget {
                 style: IconButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.2)),
               ),
             ],
-          ),
-          const SizedBox(height: 12),
+            ),
+            const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -3781,9 +3781,9 @@ class _DashStatTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: color.withOpacity(0.15)),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -4459,8 +4459,8 @@ class _SyncCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                 ),
               ),
-              icon: appState.syncing
-                  ? const SizedBox(
+                    icon: appState.syncing
+                        ? const SizedBox(
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
@@ -4605,9 +4605,9 @@ class _MessagesSection extends StatelessWidget {
                               Text(
                                 preview,
                                 style: TextStyle(color: Colors.grey.shade700),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
                                 _formatDateTimeFr(m.receivedAt),
                                 style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                               ),
@@ -4733,11 +4733,11 @@ class _HistorySectionState extends ConsumerState<_HistorySection> {
                 icon: _loading
                     ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.refresh_rounded, color: Colors.white),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
+            ),
+            const SizedBox(height: 12),
 
         // Search bar
         Container(
@@ -4965,11 +4965,11 @@ class _HistorySectionState extends ConsumerState<_HistorySection> {
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ],
-          ),
+                    ),
+            ),
+          ],
         ),
+      ),
       ],
     );
   }
@@ -5195,7 +5195,7 @@ class _SubscriptionSection extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(12),
@@ -5208,9 +5208,9 @@ class _SubscriptionSection extends StatelessWidget {
                   ),
                   const SizedBox(width: 16),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
                         Text(
                           'Plan: $planName',
                           style: TextStyle(
@@ -5310,7 +5310,7 @@ class _SubscriptionSection extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+            const SizedBox(height: 8),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: LinearProgressIndicator(
