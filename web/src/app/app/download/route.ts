@@ -24,8 +24,8 @@ export async function GET(req: Request) {
     // non-bloquant: on ne bloque jamais le téléchargement si le tracking échoue
   }
 
-  // Redirect to static file
-  const target = new URL('/sms-gateway.apk', url.origin)
+  // Redirect to static file in /app/ folder
+  const target = new URL('/app/sms-gateway.apk', url.origin)
   const res = NextResponse.redirect(target, { status: 302 })
   res.headers.set('Cache-Control', 'no-store')
   return res

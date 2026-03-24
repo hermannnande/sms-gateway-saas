@@ -22,8 +22,8 @@ class AppConfig {
   /// Format JSON: { "latestVersion": "1.0.1+3", "apkUrl": "https://.../sms-gateway.apk", "notes": "..." }
   static const appUpdateManifestUrl = 'https://smsenvoie.com/app/latest.json';
 
-  /// URL directe de téléchargement APK (public).
-  static const apkDownloadUrl = 'https://smsenvoie.com/app/download?source=update';
+  /// URL directe de t\u00e9l\u00e9chargement APK (public).
+  static const apkDownloadUrl = 'https://smsenvoie.com/app/sms-gateway.apk';
 
   /// Page d'aide (optionnel) liée à la mise à jour.
   static const appUpdateHelpUrl = 'https://smsenvoie.com/onboarding';

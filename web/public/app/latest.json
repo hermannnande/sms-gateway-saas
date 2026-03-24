@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.3+36",
-  "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "• SMS demarrent automatiquement des le lancement de campagne\n• Plus besoin de cliquer Synchroniser\n• Le service se debloque tout seul si une campagne est active"
+  "latestVersion": "1.0.3+37",
+  "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
+  "notes": "• Fix telechargement mise a jour\n• SMS demarrent automatiquement\n• Plus besoin de cliquer Synchroniser"
 }
