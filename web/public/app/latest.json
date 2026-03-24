@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.6+40",
+  "latestVersion": "1.0.7+41",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Liste noire : detection automatique des SMS STOP\n• Priorite des campagnes (normale/haute/urgente)\n• Permissions reception SMS ajoutees"
+  "notes": "• Correction installation Play Protect\n• Priorite des campagnes\n• Parsing international ameliore"
 }
