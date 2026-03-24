@@ -79,7 +79,7 @@ export default async function CampaignsPage({
   let campaignsQuery = supabase
     .from('campaigns')
     .select(
-      'id, name, status, created_at, total_count, sent_count, sim_slot_index, templates(name), campaign_jobs(status, created_at)'
+      'id, name, status, created_at, total_count, sent_count, sim_slot_index, priority, templates(name), campaign_jobs(status, created_at)'
     )
     .eq('org_id', orgMember.org_id)
     .order('created_at', { ascending: false })

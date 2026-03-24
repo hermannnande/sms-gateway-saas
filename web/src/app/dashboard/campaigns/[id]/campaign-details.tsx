@@ -11,6 +11,7 @@ type Campaign = {
   total_count?: number
   sent_count?: number
   sim_slot_index?: number | null
+  priority?: number
   campaign_jobs?: { status: string; created_at: string }[] | null
   templates: { name: string; body: string } | null
 }
@@ -219,6 +220,13 @@ export function CampaignDetails({
                   ? 'SIM 1'
                   : 'SIM 2'}
             </span>
+            {' • '}
+            Priorité: <PrioritySelector
+              campaignId={campaign.id}
+              currentPriority={campaign.priority ?? 0}
+              disabled={campaign.status === 'done' || campaign.status === 'canceled'}
+              onChanged={(p) => setCampaign({ ...campaign, priority: p })}
+            />
           </p>
           <div className="mt-2">
             <span
@@ -417,6 +425,53 @@ export function CampaignDetails({
         </div>
       )}
     </div>
+  )
+}
+
+function PrioritySelector({
+  campaignId, currentPriority, disabled, onChanged,
+}: {
+  campaignId: string; currentPriority: number; disabled?: boolean;
+  onChanged: (p: number) => void;
+}) {
+  const [saving, setSaving] = useState(false)
+
+  const options = [
+    { value: 0, label: 'Normale', icon: '🟢' },
+    { value: 1, label: 'Haute', icon: '🟡' },
+    { value: 2, label: 'Urgente', icon: '🔴' },
+  ]
+
+  const current = options.find(o => o.value === currentPriority) ?? options[0]
+
+  async function change(newPriority: number) {
+    if (newPriority === currentPriority || saving || disabled) return
+    setSaving(true)
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('campaigns')
+        .update({ priority: newPriority })
+        .eq('id', campaignId)
+      if (!error) onChanged(newPriority)
+    } catch (_) {}
+    setSaving(false)
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <select
+        value={currentPriority}
+        onChange={(e) => change(Number(e.target.value))}
+        disabled={disabled || saving}
+        className="text-sm font-semibold bg-transparent border border-border rounded-lg px-2 py-0.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.icon} {o.label}</option>
+        ))}
+      </select>
+      {saving && <span className="text-xs text-muted-foreground">...</span>}
+    </span>
   )
 }
 

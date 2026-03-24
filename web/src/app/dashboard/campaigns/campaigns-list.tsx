@@ -13,6 +13,7 @@ type Campaign = {
   total_count?: number
   sent_count?: number
   sim_slot_index?: number | null
+  priority?: number
   campaign_jobs?: { status: string; created_at: string }[] | null
   templates: { name: string } | null
 }
@@ -225,6 +226,15 @@ export function CampaignsList({
                           : 'SIM 2'}
                       </span>
                     </span>
+                    {(campaign.priority ?? 0) > 0 && (
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border ${
+                        campaign.priority === 2
+                          ? 'bg-red-100 text-red-700 border-red-300'
+                          : 'bg-yellow-100 text-yellow-700 border-yellow-300'
+                      }`}>
+                        {campaign.priority === 2 ? '🔴 Urgente' : '🟡 Haute'}
+                      </span>
+                    )}
                     {campaign.campaign_jobs && campaign.campaign_jobs.length > 0 && (
                       <span className="flex items-center gap-1.5">
                         <span>🗂️</span>

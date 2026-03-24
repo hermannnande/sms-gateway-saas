@@ -27,7 +27,8 @@ export function NewCampaignForm({
   const [messageBody, setMessageBody] = useState('')
   const [contactInputMode, setContactInputMode] = useState<ContactInputMode>('manual')
   const [manualContacts, setManualContacts] = useState('')
-  const [simSlotIndex, setSimSlotIndex] = useState<number | null>(null) // null = Auto, 0 = SIM1, 1 = SIM2
+  const [simSlotIndex, setSimSlotIndex] = useState<number | null>(null)
+  const [priority, setPriority] = useState<number>(0)
   const [fileContacts, setFileContacts] = useState<
     { phone_e164: string; name?: string }[]
   >([])
@@ -221,8 +222,7 @@ export function NewCampaignForm({
           name,
           template_id: templateId || null,
           sim_slot_index: simSlotIndex,
-          // IMPORTANT: claim_messages_atomic ne claim que les campagnes en 'running'
-          // Donc on démarre immédiatement la campagne (le pause/resume reste possible).
+          priority,
           status: 'running',
           created_by: userData.user.id,
           total_count: contactsToProcess.length,
@@ -444,6 +444,38 @@ export function NewCampaignForm({
           </p>
         </div>
 
+        {/* Priorité */}
+        <div>
+          <label htmlFor="priority" className="block text-sm font-semibold mb-2 text-foreground">
+            🚦 Priorité de la campagne
+          </label>
+          <div className="flex gap-2">
+            {[
+              { value: 0, label: 'Normale', icon: '🟢', desc: 'Ordre standard (FIFO)', color: 'border-green-300 bg-green-50 text-green-800' },
+              { value: 1, label: 'Haute', icon: '🟡', desc: 'Passe avant les campagnes normales', color: 'border-yellow-300 bg-yellow-50 text-yellow-800' },
+              { value: 2, label: 'Urgente', icon: '🔴', desc: 'Envoyée en premier', color: 'border-red-300 bg-red-50 text-red-800' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setPriority(opt.value)}
+                className={`flex-1 flex flex-col items-center gap-1 p-4 rounded-xl border-2 transition-all ${
+                  priority === opt.value
+                    ? `${opt.color} ring-2 ring-offset-1 ring-primary shadow-sm`
+                    : 'border-border bg-background hover:bg-muted/50'
+                }`}
+              >
+                <span className="text-2xl">{opt.icon}</span>
+                <span className="text-sm font-semibold">{opt.label}</span>
+                <span className="text-[10px] text-muted-foreground text-center leading-tight">{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Si plusieurs campagnes sont actives, les messages de la campagne avec la priorité la plus haute seront envoyés en premier.
+          </p>
+        </div>
+
         {/* Template */}
         <div>
           <label htmlFor="template" className="block text-sm font-semibold mb-3 text-foreground">
@@ -510,6 +542,8 @@ export function NewCampaignForm({
               </p>
               <p className="text-xs text-blue-700 mt-1">
                 SIM: <span className="font-semibold">{simSlotIndex === null ? 'Auto' : simSlotIndex === 0 ? 'SIM 1' : 'SIM 2'}</span>
+                {' • '}
+                Priorité: <span className="font-semibold">{priority === 2 ? '🔴 Urgente' : priority === 1 ? '🟡 Haute' : '🟢 Normale'}</span>
               </p>
               <p className="text-xs text-blue-600 mt-1">
                 Estimation : ~{smsCount * totalContactsToSend} SMS au total ({smsCount} SMS par contact)
