@@ -394,6 +394,8 @@ class AppNotifier extends Notifier<AppState> {
     bool silent = true,
     String? status,
     String? phoneQuery,
+    String? bodyQuery,
+    String? simFilter,
     int page = 0,
     int pageSize = 20,
   }) async {
@@ -402,7 +404,6 @@ class AppNotifier extends Notifier<AppState> {
       final user = supabase.auth.currentUser;
       if (user == null) return;
 
-      // Assurer org_id
       if (state.orgId == null) {
         await refreshAccountInfo();
       }
@@ -422,6 +423,12 @@ class AppNotifier extends Notifier<AppState> {
       if (phoneQuery != null && phoneQuery.trim().isNotEmpty) {
         q = q.ilike('to_phone_e164', '%${phoneQuery.trim()}%');
       }
+      if (bodyQuery != null && bodyQuery.trim().isNotEmpty) {
+        q = q.ilike('body_final', '%${bodyQuery.trim()}%');
+      }
+      if (simFilter != null && simFilter.isNotEmpty && simFilter != 'all') {
+        q = q.eq('sim_subscription_id', simFilter);
+      }
 
       final from = page * pageSize;
       final to = from + pageSize - 1;
@@ -435,6 +442,36 @@ class AppNotifier extends Notifier<AppState> {
       state = state.copyWith(outboxHistory: list);
     } catch (e) {
       if (!silent) setLastStatus('Erreur historique: $e');
+    }
+  }
+
+  Future<Map<String, int>> fetchMessageCounts() async {
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      if (supabase.auth.currentUser == null) return {};
+      if (state.orgId == null) await refreshAccountInfo();
+      final orgId = state.orgId;
+      if (orgId == null) return {};
+
+      final results = <String, int>{};
+      for (final s in ['queued', 'sending', 'sent', 'failed']) {
+        final rows = await supabase
+            .from('messages')
+            .select('id')
+            .eq('org_id', orgId)
+            .eq('status', s)
+            .limit(10001);
+        results[s] = (rows as List).length;
+      }
+      final all = await supabase
+          .from('messages')
+          .select('id')
+          .eq('org_id', orgId)
+          .limit(10001);
+      results['all'] = (all as List).length;
+      return results;
+    } catch (_) {
+      return {};
     }
   }
 
@@ -2868,7 +2905,7 @@ class _HomePageState extends ConsumerState<HomePage>
       case AppSection.messages:
         return 'Messages';
       case AppSection.history:
-        return 'Historique';
+        return 'Messages';
       case AppSection.subscription:
         return 'Mon abonnement';
       case AppSection.devices:
@@ -3572,7 +3609,7 @@ class _UpdateBanner extends StatelessWidget {
   }
 }
 
-class _DashboardSection extends StatelessWidget {
+class _DashboardSection extends StatefulWidget {
   const _DashboardSection({
     required this.appState,
     required this.notifier,
@@ -3582,11 +3619,57 @@ class _DashboardSection extends StatelessWidget {
   final AppNotifier notifier;
 
   @override
+  State<_DashboardSection> createState() => _DashboardSectionState();
+}
+
+class _DashboardSectionState extends State<_DashboardSection> {
+  Map<String, int> _counts = {};
+  bool _loadingCounts = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCounts();
+  }
+
+  Future<void> _loadCounts() async {
+    if (_loadingCounts) return;
+    setState(() => _loadingCounts = true);
+    try {
+      final c = await widget.notifier.fetchMessageCounts();
+      if (mounted) setState(() => _counts = c);
+    } catch (_) {}
+    if (mounted) setState(() => _loadingCounts = false);
+  }
+
+  void _goToHistoryWithFilter(String status) {
+    final container = ProviderScope.containerOf(context);
+    container.read(sectionProvider.notifier).state = AppSection.history;
+    container.read(_historyFilterProvider.notifier).state = status;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final appState = widget.appState;
+    final notifier = widget.notifier;
     final hasCampaign = appState.campaignIdSending != null &&
         appState.campaignStatusSending != 'completed' &&
         appState.campaignStatusSending != 'canceled';
     final hasUpdate = appState.updateVersion != null;
+
+    final sent = appState.campaignSentCount ?? 0;
+    final total = appState.campaignTotalCount ?? 0;
+    final pending = (total - sent).clamp(0, 999999);
+    final used = appState.smsUsedThisMonth ?? 0;
+    final quota = appState.planSmsQuotaMonth ?? 0;
+    final remaining = appState.quotaRemaining ?? (quota - used).clamp(0, 999999);
+
+    final cAll = _counts['all'] ?? 0;
+    final cSent = _counts['sent'] ?? 0;
+    final cQueued = _counts['queued'] ?? 0;
+    final cFailed = _counts['failed'] ?? 0;
+    final cSending = _counts['sending'] ?? 0;
+
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
@@ -3594,16 +3677,240 @@ class _DashboardSection extends StatelessWidget {
         if (hasUpdate) _UpdateBanner(appState: appState, notifier: notifier),
         if (hasUpdate) const SizedBox(height: 12),
         if (hasCampaign) _CampaignProgressCard(appState: appState, notifier: notifier),
-        if (hasCampaign) const SizedBox(height: 20),
-        _StatusCardDashboard(appState: appState),
-        const SizedBox(height: 20),
+        if (hasCampaign) const SizedBox(height: 16),
+
+        // Stats overview row
+        Row(
+          children: [
+            Expanded(child: _DashStatTile(
+              icon: Icons.email_rounded, label: 'Total', value: '$cAll',
+              color: const Color(0xFF3B82F6),
+              onTap: () => _goToHistoryWithFilter('all'),
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: _DashStatTile(
+              icon: Icons.check_circle_rounded, label: 'Envoy\u00e9s', value: '$cSent',
+              color: const Color(0xFF16A34A),
+              onTap: () => _goToHistoryWithFilter('sent'),
+            )),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(child: _DashStatTile(
+              icon: Icons.hourglass_top_rounded, label: 'En attente', value: '$cQueued',
+              color: Colors.orange,
+              onTap: () => _goToHistoryWithFilter('queued'),
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: _DashStatTile(
+              icon: Icons.error_rounded, label: '\u00c9checs', value: '$cFailed',
+              color: Colors.red,
+              onTap: () => _goToHistoryWithFilter('failed'),
+            )),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(child: _DashStatTile(
+              icon: Icons.send_rounded, label: 'En cours', value: '$cSending',
+              color: const Color(0xFF8B5CF6),
+              onTap: () => _goToHistoryWithFilter('sending'),
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: _DashStatTile(
+              icon: Icons.data_usage_rounded, label: 'Quota', value: '$remaining',
+              color: const Color(0xFF0EA5E9),
+              onTap: () {
+                final container = ProviderScope.containerOf(context);
+                container.read(sectionProvider.notifier).state = AppSection.subscription;
+              },
+            )),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _loadingCounts ? null : _loadCounts,
+            icon: _loadingCounts
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.refresh_rounded, size: 16),
+            label: Text(_loadingCounts ? 'Chargement...' : 'Actualiser'),
+            style: TextButton.styleFrom(foregroundColor: Colors.grey.shade600),
+          ),
+        ),
+        const SizedBox(height: 12),
+
         _QueueManagementCard(appState: appState, notifier: notifier),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         _SyncCard(appState: appState, notifier: notifier),
-        const SizedBox(height: 20),
-        _MessagesCard(appState: appState),
+        const SizedBox(height: 16),
+        _DashRecentMessages(appState: appState, onViewAll: () => _goToHistoryWithFilter('all')),
       ],
     );
+  }
+}
+
+final _historyFilterProvider = StateProvider<String>((_) => 'all');
+
+class _DashStatTile extends StatelessWidget {
+  const _DashStatTile({
+    required this.icon, required this.label, required this.value,
+    required this.color, this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: color.withOpacity(0.15)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                value,
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color),
+              ),
+              const SizedBox(height: 4),
+              Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DashRecentMessages extends StatelessWidget {
+  const _DashRecentMessages({required this.appState, required this.onViewAll});
+  final AppState appState;
+  final VoidCallback onViewAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final outbox = appState.outboxHistory;
+    return _ModernCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Derniers messages', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: onViewAll,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF3B82F6).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text('Voir tout', style: TextStyle(color: Color(0xFF3B82F6), fontWeight: FontWeight.bold, fontSize: 13)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (outbox.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    Icon(Icons.inbox_rounded, size: 48, color: Colors.grey.shade300),
+                    const SizedBox(height: 12),
+                    Text('Aucun message', style: TextStyle(color: Colors.grey.shade500, fontSize: 15)),
+                  ],
+                ),
+              ),
+            )
+          else
+            ...outbox.take(5).map((m) => _compactMessageRow(m)),
+        ],
+      ),
+    );
+  }
+
+  Widget _compactMessageRow(OutboxMessage m) {
+    final statusInfo = _statusBadge(m.status);
+    final preview = m.body.length > 40 ? '${m.body.substring(0, 40)}\u2026' : m.body;
+    final time = m.sentAt ?? m.createdAt;
+    final hh = time.hour.toString().padLeft(2, '0');
+    final mm = time.minute.toString().padLeft(2, '0');
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: statusInfo.$2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(m.toPhoneE164, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                Text(preview, style: TextStyle(color: Colors.grey.shade600, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: statusInfo.$3, borderRadius: BorderRadius.circular(10)),
+                child: Text(statusInfo.$1, style: TextStyle(color: statusInfo.$2, fontSize: 10, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(height: 4),
+              Text('$hh:$mm', style: TextStyle(color: Colors.grey.shade500, fontSize: 10)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  (String, Color, Color) _statusBadge(String status) {
+    switch (status) {
+      case 'sent': return ('Envoy\u00e9', Colors.green.shade700, Colors.green.shade50);
+      case 'failed': return ('\u00c9chec', Colors.red.shade700, Colors.red.shade50);
+      case 'sending': return ('En cours', Colors.orange.shade700, Colors.orange.shade50);
+      default: return ('En attente', Colors.blue.shade700, Colors.blue.shade50);
+    }
   }
 }
 
@@ -4209,166 +4516,7 @@ class _SyncCard extends StatelessWidget {
   }
 }
 
-class _MessagesCard extends StatelessWidget {
-  const _MessagesCard({required this.appState});
-  final AppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    final outbox = appState.outboxHistory;
-    final lastBatch = appState.lastMessages;
-    final hasOutbox = outbox.isNotEmpty;
-    final displayList = hasOutbox ? outbox : lastBatch;
-
-    return _ModernCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Derniers messages',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-              Row(
-                children: [
-                  if (displayList.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF16A34A).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        '${displayList.length}',
-                        style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold, fontSize: 14),
-                      ),
-                    ),
-                  const SizedBox(width: 8),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: () {
-                      final container = ProviderScope.containerOf(context);
-                      container.read(sectionProvider.notifier).state = AppSection.history;
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3B82F6).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'Voir tout',
-                        style: TextStyle(color: Color(0xFF3B82F6), fontWeight: FontWeight.bold, fontSize: 13),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (displayList.isEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.inbox_rounded, size: 64, color: Colors.grey.shade300),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Aucun message trait\u00e9',
-                      style: TextStyle(color: Colors.grey.shade600, fontSize: 16, fontWeight: FontWeight.w500),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else if (hasOutbox)
-            ...outbox.take(10).map((m) {
-              Color badgeBg;
-              Color badgeText;
-              String label;
-              switch (m.status) {
-                case 'sent':
-                  badgeBg = Colors.green.shade50;
-                  badgeText = Colors.green.shade700;
-                  label = 'Envoy\u00e9';
-                  break;
-                case 'failed':
-                  badgeBg = Colors.red.shade50;
-                  badgeText = Colors.red.shade700;
-                  label = '\u00c9chec';
-                  break;
-                case 'sending':
-                  badgeBg = Colors.orange.shade50;
-                  badgeText = Colors.orange.shade700;
-                  label = 'En cours';
-                  break;
-                default:
-                  badgeBg = Colors.blue.shade50;
-                  badgeText = Colors.blue.shade700;
-                  label = 'En attente';
-              }
-              final preview = m.body.length > 50 ? '${m.body.substring(0, 50)}\u2026' : m.body;
-              return Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(m.toPhoneE164, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-                          const SizedBox(height: 4),
-                          Text(preview, style: TextStyle(color: Colors.grey.shade700, fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(18)),
-                      child: Text(label, style: TextStyle(color: badgeText, fontWeight: FontWeight.w700, fontSize: 11)),
-                    ),
-                  ],
-                ),
-              );
-            })
-          else
-            ...lastBatch.asMap().entries.map((entry) {
-              final index = entry.key;
-              final message = entry.value;
-              return _MessageTile(message: message, index: index);
-            }),
-          if (displayList.length > 10) ...[
-            const SizedBox(height: 12),
-            Center(
-              child: TextButton.icon(
-                onPressed: () {
-                  final container = ProviderScope.containerOf(context);
-                  container.read(sectionProvider.notifier).state = AppSection.history;
-                },
-                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                label: const Text('Voir l\'historique complet'),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
+// _MessagesCard removed -- replaced by _DashRecentMessages in dashboard
 
 class _MessagesSection extends StatelessWidget {
   const _MessagesSection({required this.appState, required this.notifier});
@@ -4478,21 +4626,26 @@ class _MessagesSection extends StatelessWidget {
   }
 }
 
-class _HistorySection extends StatefulWidget {
+class _HistorySection extends ConsumerStatefulWidget {
   const _HistorySection({required this.appState, required this.notifier});
   final AppState appState;
   final AppNotifier notifier;
 
   @override
-  State<_HistorySection> createState() => _HistorySectionState();
+  ConsumerState<_HistorySection> createState() => _HistorySectionState();
 }
 
-class _HistorySectionState extends State<_HistorySection> {
+class _HistorySectionState extends ConsumerState<_HistorySection> {
   String _status = 'all';
-  String _query = '';
+  String _phoneQuery = '';
+  String _bodyQuery = '';
+  String _simFilter = 'all';
   int _page = 0;
-  static const int _pageSize = 20;
+  static const int _pageSize = 50;
   bool _loading = false;
+  bool _showFilters = false;
+  final _phoneController = TextEditingController();
+  final _bodyController = TextEditingController();
 
   Future<void> _load({bool resetPage = false}) async {
     if (_loading) return;
@@ -4504,7 +4657,9 @@ class _HistorySectionState extends State<_HistorySection> {
       await widget.notifier.refreshOutboxHistory(
         silent: false,
         status: _status,
-        phoneQuery: _query,
+        phoneQuery: _phoneQuery,
+        bodyQuery: _bodyQuery,
+        simFilter: _simFilter,
         page: _page,
         pageSize: _pageSize,
       );
@@ -4516,204 +4671,499 @@ class _HistorySectionState extends State<_HistorySection> {
   @override
   void initState() {
     super.initState();
-    // Charger la page 1 si vide
-    if (widget.appState.outboxHistory.isEmpty) {
-      scheduleMicrotask(() => _load());
-    }
+    scheduleMicrotask(() {
+      final initialFilter = ref.read(_historyFilterProvider);
+      if (initialFilter != 'all') {
+        setState(() => _status = initialFilter);
+        ref.read(_historyFilterProvider.notifier).state = 'all';
+      }
+      _load();
+    });
+  }
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    _bodyController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final list = widget.appState.outboxHistory;
+    final sims = widget.appState.availableSims;
+
+    final statusCounts = <String, int>{};
+    for (final m in list) {
+      statusCounts[m.status] = (statusCounts[m.status] ?? 0) + 1;
+    }
+
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
+      padding: const EdgeInsets.only(top: 120, left: 16, right: 16, bottom: 20),
       children: [
-        _ModernCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        // Header with count
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [Color(0xFF3B82F6), Color(0xFF60A5FA)]),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
             children: [
-              const Text(
-                'Historique des envois',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+              const Icon(Icons.email_rounded, color: Colors.white, size: 28),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Messages (${list.length}${list.length >= _pageSize ? '+' : ''})',
+                      style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      'Page ${_page + 1} \u2022 $_pageSize par page',
+                      style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-
-              // Filtres
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search_rounded),
-                        hintText: 'Rechercher un numéro (+225...)',
-                        isDense: true,
-                      ),
-                      onChanged: (v) {
-                        _query = v;
-                      },
-                      onSubmitted: (_) => _load(resetPage: true),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  DropdownButton<String>(
-                    value: _status,
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('Tous')),
-                      DropdownMenuItem(value: 'queued', child: Text('En attente')),
-                      DropdownMenuItem(value: 'sending', child: Text('En cours')),
-                      DropdownMenuItem(value: 'sent', child: Text('Envoyé')),
-                      DropdownMenuItem(value: 'failed', child: Text('Échec')),
-                      DropdownMenuItem(value: 'skipped_optout', child: Text('Opt-out')),
-                    ],
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setState(() => _status = v);
-                      _load(resetPage: true);
-                    },
-                  ),
-                ],
+              IconButton(
+                onPressed: _loading ? null : () => _load(resetPage: true),
+                icon: _loading
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.refresh_rounded, color: Colors.white),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _loading ? null : () => _load(resetPage: true),
-                      icon: _loading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh_rounded),
-                      label: Text(_loading ? 'Chargement…' : 'Actualiser'),
-                    ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Search bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.search_rounded, color: Colors.grey.shade400),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _phoneController,
+                  decoration: const InputDecoration(
+                    hintText: 'Rechercher un num\u00e9ro...',
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(vertical: 8),
                   ),
-                ],
+                  onChanged: (v) => _phoneQuery = v,
+                  onSubmitted: (_) => _load(resetPage: true),
+                ),
               ),
+              IconButton(
+                icon: Icon(
+                  _showFilters ? Icons.filter_list_off_rounded : Icons.filter_list_rounded,
+                  color: _showFilters ? const Color(0xFF3B82F6) : Colors.grey.shade500,
+                ),
+                onPressed: () => setState(() => _showFilters = !_showFilters),
+                tooltip: 'Filtres avanc\u00e9s',
+              ),
+              FilledButton(
+                onPressed: _loading ? null : () => _load(resetPage: true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF3B82F6),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text('Rechercher'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
 
-              const SizedBox(height: 16),
-
-              // Liste
-              if (list.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Text(
-                    'Aucun historique disponible pour le moment.',
-                    style: TextStyle(color: Colors.grey.shade700),
+        // Advanced filters
+        if (_showFilters)
+          Container(
+            padding: const EdgeInsets.all(14),
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Filtres avanc\u00e9s', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade800)),
+                const SizedBox(height: 12),
+                // Message body search
+                TextField(
+                  controller: _bodyController,
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.message_rounded, size: 20),
+                    hintText: 'Rechercher dans le contenu...',
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.grey.shade300)),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                   ),
-                )
-              else
-                ...list.map((m) {
-                  Color badgeBg;
-                  Color badgeText;
-                  String label;
-                  switch (m.status) {
-                    case 'sent':
-                      badgeBg = Colors.green.shade50;
-                      badgeText = Colors.green.shade700;
-                      label = 'Envoyé';
-                      break;
-                    case 'failed':
-                      badgeBg = Colors.red.shade50;
-                      badgeText = Colors.red.shade700;
-                      label = 'Échec';
-                      break;
-                    case 'sending':
-                      badgeBg = Colors.orange.shade50;
-                      badgeText = Colors.orange.shade700;
-                      label = 'En cours';
-                      break;
-                    default:
-                      badgeBg = Colors.blue.shade50;
-                      badgeText = Colors.blue.shade700;
-                      label = 'En attente';
-                  }
-
-                  final preview = m.body.length > 70 ? '${m.body.substring(0, 70)}…' : m.body;
-                  return Container(
-                    margin: const EdgeInsets.only(top: 10),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(m.toPhoneE164, style: const TextStyle(fontWeight: FontWeight.w700)),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: badgeBg,
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: Text(
-                                label,
-                                style: TextStyle(color: badgeText, fontWeight: FontWeight.w700, fontSize: 12),
-                              ),
-                            ),
+                  onChanged: (v) => _bodyQuery = v,
+                  onSubmitted: (_) => _load(resetPage: true),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    // SIM filter
+                    if (sims.isNotEmpty) ...[
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: _simFilter,
+                          decoration: InputDecoration(
+                            labelText: 'SIM',
+                            isDense: true,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          ),
+                          items: [
+                            const DropdownMenuItem(value: 'all', child: Text('Toutes les SIM')),
+                            ...sims.map((s) => DropdownMenuItem(
+                              value: s.subscriptionId.toString(),
+                              child: Text(s.displayName.isNotEmpty ? s.displayName : 'SIM ${s.simSlotIndex + 1}'),
+                            )),
                           ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(preview, style: TextStyle(color: Colors.grey.shade700)),
-                        if (m.lastError != null && m.lastError!.isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text('Erreur: ${m.lastError}', style: TextStyle(color: Colors.red.shade700, fontSize: 12)),
-                        ],
-                        const SizedBox(height: 8),
-                        Text(
-                          _formatDateTimeFr(m.sentAt ?? m.createdAt),
-                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-
-              const SizedBox(height: 16),
-
-              // Pagination (simple)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: (_loading || _page == 0)
-                        ? null
-                        : () {
-                            setState(() => _page -= 1);
-                            _load();
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => _simFilter = v);
+                            _load(resetPage: true);
                           },
-                    icon: const Icon(Icons.chevron_left_rounded),
-                    label: const Text('Précédent'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _phoneQuery = '';
+                      _bodyQuery = '';
+                      _simFilter = 'all';
+                      _status = 'all';
+                      _phoneController.clear();
+                      _bodyController.clear();
+                    });
+                    _load(resetPage: true);
+                  },
+                  icon: const Icon(Icons.clear_all_rounded, size: 18),
+                  label: const Text('R\u00e9initialiser les filtres'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.grey.shade600,
+                    side: BorderSide(color: Colors.grey.shade300),
                   ),
-                  Text('Page ${_page + 1}', style: TextStyle(color: Colors.grey.shade700)),
-                  OutlinedButton.icon(
-                    onPressed: (_loading || list.length < _pageSize)
-                        ? null
-                        : () {
-                            setState(() => _page += 1);
-                            _load();
-                          },
-                    icon: const Icon(Icons.chevron_right_rounded),
-                    label: const Text('Suivant'),
-                  ),
-                ],
+                ),
+              ],
+            ),
+          ),
+
+        // Status filter chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _filterChip('Tous', 'all', null),
+              _filterChip('En attente', 'queued', Colors.blue),
+              _filterChip('En cours', 'sending', Colors.orange),
+              _filterChip('Envoy\u00e9s', 'sent', Colors.green),
+              _filterChip('\u00c9checs', 'failed', Colors.red),
+              _filterChip('Opt-out', 'skipped_optout', Colors.grey),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // Results header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Expanded(flex: 3, child: Text('Destinataire', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.grey.shade700))),
+              Expanded(flex: 3, child: Text('Message', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.grey.shade700))),
+              Expanded(flex: 2, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.grey.shade700), textAlign: TextAlign.center)),
+              Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.grey.shade700), textAlign: TextAlign.right)),
+            ],
+          ),
+        ),
+
+        // Message list
+        if (_loading && list.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (list.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(40),
+            child: Column(
+              children: [
+                Icon(Icons.inbox_rounded, size: 64, color: Colors.grey.shade300),
+                const SizedBox(height: 16),
+                Text('Aucun message trouv\u00e9', style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
+                const SizedBox(height: 8),
+                Text('Essayez de modifier vos filtres', style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
+              ],
+            ),
+          )
+        else
+          ...list.asMap().entries.map((entry) {
+            final i = entry.key;
+            final m = entry.value;
+            return _messageRow(m, i);
+          }),
+
+        const SizedBox(height: 12),
+
+        // Pagination
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              OutlinedButton.icon(
+                onPressed: (_loading || _page == 0)
+                    ? null
+                    : () { setState(() => _page -= 1); _load(); },
+                icon: const Icon(Icons.chevron_left_rounded, size: 18),
+                label: const Text('Pr\u00e9c\u00e9dent'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3B82F6).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text('Page ${_page + 1}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF3B82F6))),
+              ),
+              OutlinedButton.icon(
+                onPressed: (_loading || list.length < _pageSize)
+                    ? null
+                    : () { setState(() => _page += 1); _load(); },
+                icon: const Icon(Icons.chevron_right_rounded, size: 18),
+                label: const Text('Suivant'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
               ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  Widget _filterChip(String label, String value, Color? color) {
+    final selected = _status == value;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: FilterChip(
+        selected: selected,
+        label: Text(label, style: TextStyle(fontSize: 12, fontWeight: selected ? FontWeight.bold : FontWeight.w500)),
+        selectedColor: (color ?? const Color(0xFF3B82F6)).withOpacity(0.15),
+        backgroundColor: Colors.grey.shade100,
+        checkmarkColor: color ?? const Color(0xFF3B82F6),
+        side: BorderSide(
+          color: selected ? (color ?? const Color(0xFF3B82F6)) : Colors.grey.shade300,
+        ),
+        onSelected: (_) {
+          setState(() => _status = value);
+          _load(resetPage: true);
+        },
+      ),
+    );
+  }
+
+  Widget _messageRow(OutboxMessage m, int index) {
+    final statusInfo = _statusInfo(m.status);
+    final preview = m.body.length > 35 ? '${m.body.substring(0, 35)}\u2026' : m.body;
+    final time = m.sentAt ?? m.createdAt;
+    final simLabel = m.simSubscriptionId != null ? 'SIM ${m.simSubscriptionId}' : '';
+
+    return InkWell(
+      onTap: () => _showMessageDetail(m),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: index.isEven ? Colors.white : Colors.grey.shade50,
+          border: Border(bottom: BorderSide(color: Colors.grey.shade200, width: 0.5)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(m.toPhoneE164, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  if (simLabel.isNotEmpty)
+                    Text(simLabel, style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
+                ],
+              ),
+            ),
+            Expanded(
+              flex: 3,
+              child: Text(preview, style: TextStyle(color: Colors.grey.shade700, fontSize: 12), maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
+            Expanded(
+              flex: 2,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: statusInfo.$3,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(statusInfo.$1, style: TextStyle(color: statusInfo.$2, fontWeight: FontWeight.w700, fontSize: 10)),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Text(
+                _shortDate(time),
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMessageDetail(OutboxMessage m) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        final statusInfo = _statusInfo(m.status);
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55,
+          minChildSize: 0.3,
+          maxChildSize: 0.85,
+          builder: (_, scrollCtrl) => ListView(
+            controller: scrollCtrl,
+            padding: const EdgeInsets.all(24),
+            children: [
+              Center(
+                child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2))),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: statusInfo.$3, borderRadius: BorderRadius.circular(12)),
+                    child: Icon(
+                      m.status == 'sent' ? Icons.check_circle_rounded
+                          : m.status == 'failed' ? Icons.error_rounded
+                          : m.status == 'sending' ? Icons.send_rounded
+                          : Icons.hourglass_top_rounded,
+                      color: statusInfo.$2, size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(m.toPhoneE164, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(color: statusInfo.$3, borderRadius: BorderRadius.circular(12)),
+                          child: Text(statusInfo.$1, style: TextStyle(color: statusInfo.$2, fontWeight: FontWeight.w700, fontSize: 12)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              _detailRow('Message', m.body),
+              if (m.simSubscriptionId != null) _detailRow('SIM', 'SIM ${m.simSubscriptionId}'),
+              _detailRow('Cr\u00e9\u00e9', _formatDateTimeFr(m.createdAt)),
+              if (m.sentAt != null) _detailRow('Envoy\u00e9', _formatDateTimeFr(m.sentAt!)),
+              _detailRow('Tentatives', '${m.tryCount}'),
+              if (m.lastError != null && m.lastError!.isNotEmpty)
+                _detailRow('Erreur', m.lastError!, isError: true),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _detailRow(String label, String value, {bool isError = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.grey.shade600)),
+          const SizedBox(height: 4),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isError ? Colors.red.shade50 : Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isError ? Colors.red.shade200 : Colors.grey.shade200),
+            ),
+            child: Text(value, style: TextStyle(color: isError ? Colors.red.shade700 : Colors.black87, fontSize: 14)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  (String, Color, Color) _statusInfo(String status) {
+    switch (status) {
+      case 'sent': return ('Envoy\u00e9', Colors.green.shade700, Colors.green.shade50);
+      case 'failed': return ('\u00c9chec', Colors.red.shade700, Colors.red.shade50);
+      case 'sending': return ('En cours', Colors.orange.shade700, Colors.orange.shade50);
+      case 'skipped_optout': return ('Opt-out', Colors.grey.shade700, Colors.grey.shade100);
+      default: return ('En attente', Colors.blue.shade700, Colors.blue.shade50);
+    }
+  }
+
+  String _shortDate(DateTime d) {
+    final now = DateTime.now();
+    final diff = now.difference(d);
+    if (diff.inMinutes < 1) return '\u00e0 l\'instant';
+    if (diff.inHours < 1) return 'il y a ${diff.inMinutes}m';
+    if (diff.inDays < 1) {
+      final hh = d.hour.toString().padLeft(2, '0');
+      final mm = d.minute.toString().padLeft(2, '0');
+      return '$hh:$mm';
+    }
+    final dd = d.day.toString().padLeft(2, '0');
+    final mo = d.month.toString().padLeft(2, '0');
+    return '$dd/$mo/${d.year}';
   }
 }
 

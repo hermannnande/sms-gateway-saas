@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.4+38",
+  "latestVersion": "1.0.5+39",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• SMS demarrent automatiquement a la creation de campagne\n• Fix cache SharedPreferences isolate background\n• Kick immediat du service d'arriere-plan"
+  "notes": "• Nouveau tableau de bord avec statistiques\n• Page Messages complete avec filtres et recherche\n• Filtre par SIM, status, contenu, numero\n• Detail message en bottom sheet\n• SMS demarrent automatiquement"
 }
