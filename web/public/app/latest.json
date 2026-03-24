@@ -1,8 +1,5 @@
 {
-  "latestVersion": "1.0.2+32",
+  "latestVersion": "1.0.3+33",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "• Boutons Pause/Reprendre/Annuler dans la notification contrôlent la campagne côté serveur\n• Meilleure gestion du campaign ID actif"
+  "notes": "• Correction boutons Pause/Reprendre dans la notification (race condition fix)\n• Annuler campagne ne tue plus le service en arriere-plan\n• Forcer l'envoi: debloquer les SMS coinces\n• Relancer les echecs: remettre en file d'attente\n• Carte file d'attente SMS dans le dashboard\n• Fix: la carte campagne disparait correctement quand terminee"
 }
-
-
-

@@ -290,6 +290,13 @@ class DeviceService {
     }
   }
 
+  /// Reset failed messages to queued for retry.
+  Future<Map<String, dynamic>> retryFailed({required String deviceToken}) async {
+    return await _postProxy('/api/mobile/retry-failed', {
+      'device_token': deviceToken,
+    });
+  }
+
   /// Send heartbeat to keep device status "online"
   Future<void> sendHeartbeat({required String deviceToken}) async {
     try {

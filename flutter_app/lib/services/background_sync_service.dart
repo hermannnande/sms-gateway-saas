@@ -38,16 +38,12 @@ class BackgroundSyncService {
 
       FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-        // IMPORTANT: le channel est créé 1 seule fois sur Android 8+.
-        // On utilise un nouveau channelId pour éviter qu'un ancien channel "LOW" reste minimisé
-        // (texte/boutons cachés sur certains téléphones).
-        channelId: 'sms_gateway_active_v3', // Nouveau channel pour forcer recréation (cache OEM)
+        channelId: 'sms_gateway_active_v4',
         channelName: 'SMS Gateway - Envoi actif',
-        channelDescription: 'Affiche la progression de l''envoi de SMS en temps réel.',
+        channelDescription: 'Affiche la progression et les controles d\'envoi SMS.',
         channelImportance: NotificationChannelImportance.DEFAULT,
         priority: NotificationPriority.DEFAULT,
         showWhen: false,
-        // Ne pas alerter à chaque update (mais le texte doit quand même changer)
         onlyAlertOnce: true,
       ),
       iosNotificationOptions: IOSNotificationOptions(
@@ -55,7 +51,7 @@ class BackgroundSyncService {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(3000), // 3 secondes pour réactivité maximale
+        eventAction: ForegroundTaskEventAction.repeat(3000),
         autoRunOnBoot: false,
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
@@ -89,21 +85,18 @@ class BackgroundSyncService {
   static Future<void> setPaused(bool paused) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_pausedKey, paused);
-    // Update notification immediately if running.
     if (await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMS Gateway',
-        notificationText: paused ? '⏸️ Pause' : '✅ Actif (en attente)',
+        notificationText: paused ? '\u23f8\ufe0f En pause' : '\u2705 Actif (en attente)',
         notificationButtons: [
           NotificationButton(id: paused ? 'resume' : 'pause', text: paused ? 'Reprendre' : 'Pause'),
-          const NotificationButton(id: 'stop', text: 'Annuler'),
+          const NotificationButton(id: 'stop', text: 'Annuler campagne'),
         ],
       );
     }
   }
 
-  /// Verrou simple pour éviter le double-envoi: si l'utilisateur envoie "en écran"
-  /// (syncOnce), le service arrière-plan doit attendre.
   static Future<void> setForegroundLock(bool locked) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_fgLockKey, locked);
@@ -115,7 +108,6 @@ class BackgroundSyncService {
   }
 
   static Future<void> start() async {
-    // Android 13+: notification permission for foreground notification
     try {
       final s = await Permission.notification.status;
       if (s.isPermanentlyDenied) {
@@ -132,33 +124,28 @@ class BackgroundSyncService {
       await FlutterForegroundTask.requestNotificationPermission();
     }
 
-    // Optionnel: demander d'ignorer l'optimisation batterie (beaucoup d'OEM tuent les services sinon)
     try {
       final b = await Permission.ignoreBatteryOptimizations.status;
       if (b.isPermanentlyDenied) {
         await openAppSettings();
-        // on continue quand même, mais le service risque d'être tué par l'OS
       }
       if (!b.isGranted) {
         await Permission.ignoreBatteryOptimizations.request();
       }
     } catch (_) {}
 
-    // IMPORTANT: certains téléphones gardent l'ancien channel/texte si on fait juste restartService().
-    // On force un stop+start pour appliquer les nouveaux paramètres de notification.
     if (await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.stopService();
-      // petite pause pour laisser Android relâcher la notif/service
       await Future.delayed(const Duration(milliseconds: 250));
     }
 
     await FlutterForegroundTask.startService(
       serviceId: serviceId,
       notificationTitle: 'SMS Gateway',
-      notificationText: '✅ Actif (en attente)',
+      notificationText: '\u2705 Actif (en attente)',
       notificationButtons: const [
         NotificationButton(id: 'pause', text: 'Pause'),
-        NotificationButton(id: 'stop', text: 'Annuler'),
+        NotificationButton(id: 'stop', text: 'Annuler campagne'),
       ],
       callback: startCallback,
     );
@@ -239,13 +226,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           }
           return decoded;
         }
-        throw Exception('Réponse serveur inattendue');
+        throw Exception('R\u00e9ponse serveur inattendue');
       } catch (e) {
         if (attempt >= maxAttempts) rethrow;
         await Future.delayed(Duration(milliseconds: 400 * (1 << (attempt - 1)) + _rng.nextInt(250)));
       }
     }
-    throw Exception('Erreur réseau');
+    throw Exception('Erreur r\u00e9seau');
   }
 
   Future<Map<String, dynamic>> _claimPayload(String deviceToken) async {
@@ -266,14 +253,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           'error': error,
         },
       );
-    } catch (_) {
-      // non-bloquant
-    }
+    } catch (_) {}
   }
 
   String _progressBar(int done, int total) {
     if (total <= 0) return '';
-    final width = 10;
+    const width = 10;
     final filled = ((done / total) * width).clamp(0, width).floor();
     return '[${'█' * filled}${'░' * (width - filled)}]';
   }
@@ -309,21 +294,32 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     return int.tryParse(v.toString()) ?? fallback;
   }
 
+  List<NotificationButton> _activeButtons() {
+    return const [
+      NotificationButton(id: 'pause', text: 'Pause'),
+      NotificationButton(id: 'stop', text: 'Annuler campagne'),
+    ];
+  }
+
+  List<NotificationButton> _pausedButtons() {
+    return const [
+      NotificationButton(id: 'resume', text: 'Reprendre'),
+      NotificationButton(id: 'stop', text: 'Annuler campagne'),
+    ];
+  }
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    _activeCampaignId = await BackgroundSyncService.getActiveCampaignId();
     await FlutterForegroundTask.updateService(
       notificationTitle: 'SMS Gateway',
-      notificationText: '✅ Actif • ${_hhmmss()} • En attente...',
-      notificationButtons: const [
-        NotificationButton(id: 'pause', text: 'Pause'),
-        NotificationButton(id: 'stop', text: 'Annuler'),
-      ],
+      notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 En attente...',
+      notificationButtons: _activeButtons(),
     );
   }
 
   @override
   void onRepeatEvent(DateTime timestamp) {
-    // Run async without blocking the event loop
     unawaited(_tick());
   }
 
@@ -331,15 +327,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     if (_busy) return;
     _busy = true;
     try {
-      // If foreground sync is running, don't claim/send in background to avoid double-send.
       final fgLocked = await _isForegroundLocked();
       if (fgLocked) {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '⏳ Envoi en cours via l’app...',
-          notificationButtons: const [
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
+          notificationText: '\u23f3 Envoi en cours via l\'app...',
+          notificationButtons: _activeButtons(),
         );
         return;
       }
@@ -348,11 +341,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       if (paused) {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '⏸️ Pause',
-          notificationButtons: const [
-            NotificationButton(id: 'resume', text: 'Reprendre'),
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
+          notificationText: '\u23f8\ufe0f En pause',
+          notificationButtons: _pausedButtons(),
         );
         return;
       }
@@ -361,27 +351,20 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       if (token == null) {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '⚠️ Aucun appareil jumelé',
-          notificationButtons: const [
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
+          notificationText: '\u26a0\ufe0f Aucun appareil jumel\u00e9',
+          notificationButtons: _activeButtons(),
         );
         return;
       }
 
-      // Permissions SMS / téléphone: si manquantes, l'envoi échoue en boucle (retry côté serveur).
-      // On l'affiche clairement dans la notification pour éviter le "tourne en boucle".
       try {
         final smsOk = await Permission.sms.isGranted;
         final phoneOk = await Permission.phone.isGranted;
         if (!smsOk || !phoneOk) {
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMS Gateway',
-            notificationText:
-                '⚠️ Permissions manquantes. Ouvre l’app et autorise SMS/Téléphone, puis relance.',
-            notificationButtons: const [
-              NotificationButton(id: 'stop', text: 'Annuler'),
-            ],
+            notificationText: '\u26a0\ufe0f Permissions manquantes. Ouvre l\'app et autorise SMS/T\u00e9l\u00e9phone.',
+            notificationButtons: _activeButtons(),
           );
           return;
         }
@@ -397,52 +380,37 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final plan = payload['plan'];
       final planQuota = plan is Map && plan['sms_quota_month'] is int ? plan['sms_quota_month'] as int : null;
 
-      // DEBUG: Afficher combien de messages ont été récupérés
       if (messages.isEmpty) {
         if (quotaReached && (planQuota ?? 0) > 0) {
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMS Gateway',
-            notificationText: '🚫 Quota atteint (0 SMS restant ce mois)',
-            notificationButtons: const [
-              NotificationButton(id: 'stop', text: 'Annuler'),
-            ],
+            notificationText: '\ud83d\udeab Quota atteint (0 SMS restant ce mois)',
+            notificationButtons: _activeButtons(),
           );
           return;
         }
-        // DEBUG: Indiquer clairement qu'il n'y a pas de messages à envoyer
         final debugInfo = quotaReached ? 'quota=$remaining' : 'pas de campagne';
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '✅ Actif • ${_hhmmss()} • Aucun msg ($debugInfo)',
-          notificationButtons: const [
-            NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
+          notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 Aucun msg ($debugInfo)',
+          notificationButtons: _activeButtons(),
         );
         return;
       }
 
-      // DEBUG: Afficher combien de messages on va envoyer
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMS Gateway',
-        notificationText: '🔄 ${messages.length} msg récupérés, envoi imminent...',
-        notificationButtons: const [
-          NotificationButton(id: 'pause', text: 'Pause'),
-          NotificationButton(id: 'stop', text: 'Annuler'),
-        ],
+        notificationText: '\ud83d\udd04 ${messages.length} msg r\u00e9cup\u00e9r\u00e9s, envoi imminent...',
+        notificationButtons: _activeButtons(),
       );
 
       final sims = await _getSimCards();
-      // Si la campagne force une SIM (slot:X) mais on ne peut pas lire les SIMs, prévenir.
       final requiresSimRouting = messages.any((m) => m.simSlotIndex != null);
       if (requiresSimRouting && sims.isEmpty) {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText:
-              '⚠️ SIM non détectée. Autorise la permission Téléphone, puis relance l’app.',
-          notificationButtons: const [
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
+          notificationText: '\u26a0\ufe0f SIM non d\u00e9tect\u00e9e. Autorise la permission T\u00e9l\u00e9phone.',
+          notificationButtons: _activeButtons(),
         );
         return;
       }
@@ -451,13 +419,11 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var failed = 0;
       String? lastErr;
 
-      // Progression "campagne" (sent_count/total_count) si dispo, sinon fallback batch.
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
       final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
       final isMultiCampaign = knownCampaignIds.length > 1;
       final activeCampaignId = knownCampaignIds.length == 1 ? knownCampaignIds.first : null;
 
-      // Stocker le campaign ID actif pour que les boutons de notification puissent l'utiliser
       if (activeCampaignId != null) {
         await BackgroundSyncService.setActiveCampaignId(activeCampaignId);
         _activeCampaignId = activeCampaignId;
@@ -497,32 +463,24 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       }
 
       for (final msg in messages) {
-        // Check pause mid-batch
         if (await _isPaused()) break;
 
         attempted++;
 
-        // Mettre à jour la notification AVANT d'envoyer le SMS (pour montrer "Envoi en cours...")
         if (hasCampaignTotals) {
           final s = sentNow();
           final remain = max(totalSum - s, 0);
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMS Gateway',
-            notificationText: '📤 Envoi... • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
-            notificationButtons: const [
-              NotificationButton(id: 'pause', text: 'Pause'),
-              NotificationButton(id: 'stop', text: 'Annuler'),
-            ],
+            notificationText: '\ud83d\udce4 Envoi... \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 reste $remain',
+            notificationButtons: _activeButtons(),
           );
         } else {
           final remain = batchTotal - attempted;
           await FlutterForegroundTask.updateService(
             notificationTitle: 'Envoi SMS en cours',
-            notificationText: '📤 Envoi... • ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
-            notificationButtons: const [
-              NotificationButton(id: 'pause', text: 'Pause'),
-              NotificationButton(id: 'stop', text: 'Annuler'),
-            ],
+            notificationText: '\ud83d\udce4 Envoi... \u2022 ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal \u2022 reste $remain',
+            notificationButtons: _activeButtons(),
           );
         }
 
@@ -535,7 +493,6 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           });
           await _updateStatus(token, msg, true, null);
 
-          // Mettre à jour la progression locale (le backend incrémente aussi sent_count).
           final cid = msg.campaignId;
           if (cid != null && campaigns.containsKey(cid)) {
             sentDeltaByCampaign[cid] = (sentDeltaByCampaign[cid] ?? 0) + 1;
@@ -546,80 +503,91 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           lastErr = e.toString();
         }
 
-        // Mettre à jour IMMÉDIATEMENT après l'envoi pour montrer la progression
         if (hasCampaignTotals) {
           final s = sentNow();
           final remain = max(totalSum - s, 0);
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMS Gateway',
             notificationText: failed > 0
-                ? '⚠️ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • err $failed • reste $remain'
-                : '✅ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain',
-            notificationButtons: const [
-              NotificationButton(id: 'pause', text: 'Pause'),
-              NotificationButton(id: 'stop', text: 'Annuler'),
-            ],
+                ? '\u26a0\ufe0f $campaignLabel \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 err $failed \u2022 reste $remain'
+                : '\u2705 $campaignLabel \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 reste $remain',
+            notificationButtons: _activeButtons(),
           );
         } else {
           final remain = batchTotal - attempted;
           await FlutterForegroundTask.updateService(
             notificationTitle: 'Envoi SMS en cours',
             notificationText: failed > 0
-                ? '⚠️ ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • err $failed • reste $remain'
-                : '✅ ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal • reste $remain',
-            notificationButtons: const [
-              NotificationButton(id: 'pause', text: 'Pause'),
-              NotificationButton(id: 'stop', text: 'Annuler'),
-            ],
+                ? '\u26a0\ufe0f ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal \u2022 err $failed \u2022 reste $remain'
+                : '\u2705 ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal \u2022 reste $remain',
+            notificationButtons: _activeButtons(),
           );
         }
 
-        // Délai entre chaque SMS pour que la notif soit VISIBLE (configurable dans config.dart)
         await Future.delayed(Duration(milliseconds: AppConfig.smsDelayMs));
       }
 
-      // Fin du batch
+      // Check if we broke out because user pressed Pause
+      final pausedAfterLoop = await _isPaused();
+
       if (hasCampaignTotals) {
         final s = sentNow();
         final remain = max(totalSum - s, 0);
-        final isDone = remain == 0;
+        final isDone = remain == 0 && !pausedAfterLoop;
         if (isDone) {
           _activeCampaignId = null;
           await BackgroundSyncService.setActiveCampaignId(null);
         }
         final errShort = (lastErr ?? '').replaceAll('\n', ' ');
-        final errMsg = errShort.isEmpty ? '' : ' • err: ${errShort.substring(0, errShort.length.clamp(0, 60))}';
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'SMS Gateway',
-          notificationText: failed > 0
-              ? '❌ $campaignLabel • erreurs: $failed/$attempted$errMsg'
-              : (isDone
-                  ? '✅ $campaignLabel terminée • ${_progressBar(s, totalSum)} $s/$totalSum'
-                  : '⏳ $campaignLabel • ${_progressBar(s, totalSum)} $s/$totalSum • reste $remain'),
-          notificationButtons: const [
-            NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
-        );
+        final errMsg = errShort.isEmpty ? '' : ' \u2022 err: ${errShort.substring(0, errShort.length.clamp(0, 60))}';
+
+        if (pausedAfterLoop) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '\u23f8\ufe0f $campaignLabel \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 En pause',
+            notificationButtons: _pausedButtons(),
+          );
+        } else if (failed > 0) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '\u274c $campaignLabel \u2022 erreurs: $failed/$attempted$errMsg',
+            notificationButtons: _activeButtons(),
+          );
+        } else if (isDone) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '\u2705 $campaignLabel termin\u00e9e \u2022 $s/$totalSum SMS envoy\u00e9s',
+            notificationButtons: _activeButtons(),
+          );
+        } else {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '\u23f3 $campaignLabel \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 reste $remain',
+            notificationButtons: _activeButtons(),
+          );
+        }
       } else {
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'SMS Gateway',
-          notificationText: failed > 0
-              ? '❌ Erreurs: $failed/$attempted • Ouvre l’app pour corriger (permissions/SIM)'
-              : '✅ Batch traité ($attempted/$batchTotal) • En attente...',
-          notificationButtons: const [
-            NotificationButton(id: 'pause', text: 'Pause'),
-            NotificationButton(id: 'stop', text: 'Annuler'),
-          ],
-        );
+        if (pausedAfterLoop) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: '\u23f8\ufe0f Batch $attempted/$batchTotal \u2022 En pause',
+            notificationButtons: _pausedButtons(),
+          );
+        } else {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMS Gateway',
+            notificationText: failed > 0
+                ? '\u274c Erreurs: $failed/$attempted \u2022 Ouvre l\'app pour corriger'
+                : '\u2705 Batch trait\u00e9 ($attempted/$batchTotal) \u2022 En attente...',
+            notificationButtons: _activeButtons(),
+          );
+        }
       }
     } catch (e) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMS Gateway',
         notificationText: 'Erreur sync: ${e.toString()}',
-        notificationButtons: const [
-          NotificationButton(id: 'stop', text: 'Annuler'),
-        ],
+        notificationButtons: _activeButtons(),
       );
     } finally {
       _busy = false;
@@ -633,7 +601,6 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    // Cleanup
     _http.close();
   }
 
@@ -642,8 +609,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     final campaignId = _activeCampaignId ?? await BackgroundSyncService.getActiveCampaignId();
 
     if (id == 'pause') {
-      await BackgroundSyncService.setPaused(true);
-      // Appeler le serveur pour mettre la campagne en pause
+      // Set local paused flag first so _tick sees it immediately
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(BackgroundSyncService._pausedKey, true);
+      // Update notification with Reprendre button
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: '\u23f8\ufe0f En pause',
+        notificationButtons: _pausedButtons(),
+      );
+      // Also pause on server (non-blocking)
       if (campaignId != null && token != null) {
         try {
           await _postJson(
@@ -654,9 +629,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       }
       return;
     }
+
     if (id == 'resume') {
-      await BackgroundSyncService.setPaused(false);
-      // Appeler le serveur pour reprendre la campagne
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(BackgroundSyncService._pausedKey, false);
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: '\u2705 Reprise en cours...',
+        notificationButtons: _activeButtons(),
+      );
       if (campaignId != null && token != null) {
         try {
           await _postJson(
@@ -667,8 +648,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       }
       return;
     }
+
     if (id == 'stop') {
-      // Appeler le serveur pour annuler la campagne
+      // Cancel the active campaign but keep the service running for future campaigns
       if (campaignId != null && token != null) {
         try {
           await _postJson(
@@ -677,13 +659,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           );
         } catch (_) {}
       }
-      await BackgroundSyncService.setPaused(false);
-      await BackgroundSyncService.setEnabled(false);
+      _activeCampaignId = null;
       await BackgroundSyncService.setActiveCampaignId(null);
-      await FlutterForegroundTask.stopService();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(BackgroundSyncService._pausedKey, false);
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'SMS Gateway',
+        notificationText: '\u2705 Campagne annul\u00e9e \u2022 En attente...',
+        notificationButtons: _activeButtons(),
+      );
       return;
     }
   }
 }
-
-

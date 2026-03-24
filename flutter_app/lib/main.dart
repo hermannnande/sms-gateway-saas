@@ -170,6 +170,7 @@ class AppState {
     String? campaignStatusSending,
     int? campaignSentCount,
     int? campaignTotalCount,
+    bool clearCampaign = false,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -194,11 +195,11 @@ class AppState {
       subscriptionPeriodEnd: subscriptionPeriodEnd ?? this.subscriptionPeriodEnd,
       smsUsedThisMonth: smsUsedThisMonth ?? this.smsUsedThisMonth,
       quotaRemaining: quotaRemaining ?? this.quotaRemaining,
-      campaignIdSending: campaignIdSending ?? this.campaignIdSending,
-      campaignNameSending: campaignNameSending ?? this.campaignNameSending,
-      campaignStatusSending: campaignStatusSending ?? this.campaignStatusSending,
-      campaignSentCount: campaignSentCount ?? this.campaignSentCount,
-      campaignTotalCount: campaignTotalCount ?? this.campaignTotalCount,
+      campaignIdSending: clearCampaign ? null : (campaignIdSending ?? this.campaignIdSending),
+      campaignNameSending: clearCampaign ? null : (campaignNameSending ?? this.campaignNameSending),
+      campaignStatusSending: clearCampaign ? null : (campaignStatusSending ?? this.campaignStatusSending),
+      campaignSentCount: clearCampaign ? null : (campaignSentCount ?? this.campaignSentCount),
+      campaignTotalCount: clearCampaign ? null : (campaignTotalCount ?? this.campaignTotalCount),
     );
   }
 }
@@ -550,13 +551,7 @@ class AppNotifier extends Notifier<AppState> {
           .maybeSingle();
 
       if (row == null) {
-        state = state.copyWith(
-          campaignIdSending: null,
-          campaignNameSending: null,
-          campaignStatusSending: null,
-          campaignSentCount: null,
-          campaignTotalCount: null,
-        );
+        state = state.copyWith(clearCampaign: true);
         return;
       }
 
@@ -606,7 +601,32 @@ class AppNotifier extends Notifier<AppState> {
           campaignId: id,
           deviceToken: state.deviceToken,
         );
+    state = state.copyWith(clearCampaign: true);
     await refreshActiveCampaign(silent: true);
+  }
+
+  /// Force immediate sync: clears all stuck states and triggers send.
+  Future<void> forceSyncNow() async {
+    try {
+      await BackgroundSyncService.setPaused(false);
+      await BackgroundSyncService.setForegroundLock(false);
+      await BackgroundSyncService.setEnabled(true);
+    } catch (_) {}
+    try {
+      await BackgroundSyncService.init();
+      await BackgroundSyncService.start();
+    } catch (_) {}
+    await syncOnce();
+  }
+
+  /// Reset failed messages to queued so they get retried.
+  Future<int> retryFailedMessages() async {
+    final token = state.deviceToken;
+    if (token == null || token.isEmpty) throw Exception('Pas d\'appareil jumel\u00e9');
+    final result = await ref.read(deviceServiceProvider).retryFailed(deviceToken: token);
+    final count = result['count'];
+    await refreshOutboxHistory(silent: true);
+    return count is int ? count : 0;
   }
 
   static int? _safeParseInt(dynamic value) {
@@ -3392,7 +3412,6 @@ class _AppDrawer extends StatelessWidget {
   }
 }
 
-// Dashboard (contenu d'origine regroupé)
 class _DashboardSection extends StatelessWidget {
   const _DashboardSection({
     required this.appState,
@@ -3404,20 +3423,18 @@ class _DashboardSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasCampaign = appState.campaignIdSending != null &&
+        appState.campaignStatusSending != 'completed' &&
+        appState.campaignStatusSending != 'canceled';
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
       children: [
-        // Carte de progression de campagne (si une campagne est en cours)
-        if (appState.campaignIdSending != null &&
-            appState.campaignStatusSending != 'completed' &&
-            appState.campaignStatusSending != 'canceled')
-          _CampaignProgressCard(appState: appState, notifier: notifier),
-        if (appState.campaignIdSending != null &&
-            appState.campaignStatusSending != 'completed' &&
-            appState.campaignStatusSending != 'canceled')
-          const SizedBox(height: 20),
+        if (hasCampaign) _CampaignProgressCard(appState: appState, notifier: notifier),
+        if (hasCampaign) const SizedBox(height: 20),
         _StatusCardDashboard(appState: appState),
+        const SizedBox(height: 20),
+        _QueueManagementCard(appState: appState, notifier: notifier),
         const SizedBox(height: 20),
         _SyncCard(appState: appState, notifier: notifier),
         const SizedBox(height: 20),
@@ -3672,6 +3689,174 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Queue management card: force send, retry failed, queue status
+class _QueueManagementCard extends StatefulWidget {
+  const _QueueManagementCard({required this.appState, required this.notifier});
+  final AppState appState;
+  final AppNotifier notifier;
+
+  @override
+  State<_QueueManagementCard> createState() => _QueueManagementCardState();
+}
+
+class _QueueManagementCardState extends State<_QueueManagementCard> {
+  bool _forceBusy = false;
+  bool _retryBusy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final sent = widget.appState.campaignSentCount ?? 0;
+    final total = widget.appState.campaignTotalCount ?? 0;
+    final pending = (total - sent).clamp(0, 999999);
+    final used = widget.appState.smsUsedThisMonth ?? 0;
+    final quota = widget.appState.planSmsQuotaMonth ?? 0;
+    final remaining = widget.appState.quotaRemaining ?? (quota - used).clamp(0, 999999);
+
+    return _ModernCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B5CF6).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.queue_rounded, color: Color(0xFF8B5CF6), size: 24),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'File d\'attente SMS',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _QueueStat(label: 'En attente', value: '$pending', color: Colors.orange),
+              const SizedBox(width: 12),
+              _QueueStat(label: 'Envoy\u00e9s', value: '$sent', color: Colors.green),
+              const SizedBox(width: 12),
+              _QueueStat(label: 'Quota restant', value: '$remaining', color: Colors.blue),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (_forceBusy || widget.appState.syncing)
+                      ? null
+                      : () async {
+                          setState(() => _forceBusy = true);
+                          HapticFeedback.mediumImpact();
+                          try {
+                            await widget.notifier.forceSyncNow();
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Envoi forc\u00e9 lanc\u00e9')),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red.shade700),
+                              );
+                            }
+                          } finally {
+                            if (mounted) setState(() => _forceBusy = false);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF8B5CF6),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: _forceBusy
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.bolt_rounded, size: 20),
+                  label: Text(_forceBusy ? 'Envoi...' : 'Forcer l\'envoi', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _retryBusy
+                      ? null
+                      : () async {
+                          setState(() => _retryBusy = true);
+                          HapticFeedback.mediumImpact();
+                          try {
+                            final count = await widget.notifier.retryFailedMessages();
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('$count message(s) remis en file d\'attente')),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red.shade700),
+                              );
+                            }
+                          } finally {
+                            if (mounted) setState(() => _retryBusy = false);
+                          }
+                        },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.orange.shade700,
+                    side: BorderSide(color: Colors.orange.shade300),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: _retryBusy
+                      ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange.shade700))
+                      : const Icon(Icons.replay_rounded, size: 20),
+                  label: Text(_retryBusy ? 'Relance...' : 'Relancer \u00e9checs', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QueueStat extends StatelessWidget {
+  const _QueueStat({required this.label, required this.value, required this.color});
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Column(
+          children: [
+            Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color)),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(fontSize: 11, color: color.withOpacity(0.8), fontWeight: FontWeight.w500), textAlign: TextAlign.center),
+          ],
+        ),
       ),
     );
   }
