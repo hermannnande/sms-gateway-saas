@@ -171,6 +171,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   Future<String?> _loadDeviceToken() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     final v = prefs.getString('device_token');
     if (v == null) return null;
     return v.trim().isEmpty ? null : v.trim();
@@ -178,11 +179,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   Future<bool> _isPaused() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     return prefs.getBool(BackgroundSyncService._pausedKey) ?? false;
   }
 
   Future<bool> _isForegroundLocked() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     return prefs.getBool(BackgroundSyncService._fgLockKey) ?? false;
   }
 
@@ -325,6 +328,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   @override
   void onRepeatEvent(DateTime timestamp) {
     unawaited(_tick());
+  }
+
+  @override
+  void onReceiveTaskData(Object data) {
+    if (data == 'kick') {
+      unawaited(_tick());
+    }
   }
 
   Future<void> _checkUpdateInBackground() async {

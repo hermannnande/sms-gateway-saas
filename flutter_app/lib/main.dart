@@ -580,6 +580,8 @@ class AppNotifier extends Notifier<AppState> {
             await BackgroundSyncService.init();
             await BackgroundSyncService.start();
           }
+          // Kick the background service to process immediately
+          FlutterForegroundTask.sendDataToTask('kick');
         } catch (_) {}
       }
     } catch (e) {
@@ -2621,7 +2623,6 @@ class _HomePageState extends ConsumerState<HomePage>
     if (!appState.authenticated) return;
     if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
 
-    // If a campaign is running, make sure the service is active
     final hasActiveCampaign = appState.campaignStatusSending == 'running' ||
         appState.campaignStatusSending == 'queued';
 
@@ -2635,13 +2636,21 @@ class _HomePageState extends ConsumerState<HomePage>
           await BackgroundSyncService.init();
           await BackgroundSyncService.start();
         }
+        // Kick the background isolate so it re-reads prefs immediately
+        FlutterForegroundTask.sendDataToTask('kick');
       } catch (_) {}
-    }
 
-    // Fallback: if background not running at all, do a manual sync
-    final bgRunning = await BackgroundSyncService.isRunning();
-    if (!bgRunning && !appState.syncing) {
-      ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      // If campaign running but 0 SMS sent after service is active, do a direct sync as kickstart
+      final sentCount = appState.campaignSentCount ?? 0;
+      if (sentCount == 0 && !appState.syncing) {
+        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      }
+    } else {
+      // No active campaign: fallback if bg not running at all
+      final bgRunning = await BackgroundSyncService.isRunning();
+      if (!bgRunning && !appState.syncing) {
+        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      }
     }
   }
 
