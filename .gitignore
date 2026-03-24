@@ -34,6 +34,7 @@ captures/
 .externalNativeBuild
 .cxx
 *.apk
+!web/public/**/*.apk
 !web/public/*.apk
 *.aab
 
