@@ -10,6 +10,7 @@ import 'package:logger/logger.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/inbox_message.dart';
@@ -82,6 +83,9 @@ class AppState {
     required this.campaignStatusSending,
     required this.campaignSentCount,
     required this.campaignTotalCount,
+    required this.updateVersion,
+    required this.updateUrl,
+    required this.updateNotes,
   });
 
   factory AppState.initial() => const AppState(
@@ -112,6 +116,9 @@ class AppState {
         campaignStatusSending: null,
         campaignSentCount: null,
         campaignTotalCount: null,
+        updateVersion: null,
+        updateUrl: null,
+        updateNotes: null,
       );
 
   final bool loading;
@@ -141,6 +148,9 @@ class AppState {
   final String? campaignStatusSending;
   final int? campaignSentCount;
   final int? campaignTotalCount;
+  final String? updateVersion;
+  final String? updateUrl;
+  final String? updateNotes;
 
   AppState copyWith({
     bool? loading,
@@ -171,6 +181,10 @@ class AppState {
     int? campaignSentCount,
     int? campaignTotalCount,
     bool clearCampaign = false,
+    String? updateVersion,
+    String? updateUrl,
+    String? updateNotes,
+    bool clearUpdate = false,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -200,6 +214,9 @@ class AppState {
       campaignStatusSending: clearCampaign ? null : (campaignStatusSending ?? this.campaignStatusSending),
       campaignSentCount: clearCampaign ? null : (campaignSentCount ?? this.campaignSentCount),
       campaignTotalCount: clearCampaign ? null : (campaignTotalCount ?? this.campaignTotalCount),
+      updateVersion: clearUpdate ? null : (updateVersion ?? this.updateVersion),
+      updateUrl: clearUpdate ? null : (updateUrl ?? this.updateUrl),
+      updateNotes: clearUpdate ? null : (updateNotes ?? this.updateNotes),
     );
   }
 }
@@ -309,7 +326,11 @@ class AppNotifier extends Notifier<AppState> {
   Future<void> _loadAppVersion() async {
     try {
       final info = await PackageInfo.fromPlatform();
-      state = state.copyWith(appVersion: '${info.version}+${info.buildNumber}');
+      final version = '${info.version}+${info.buildNumber}';
+      state = state.copyWith(appVersion: version);
+      // Store for background service update comparison
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('app_current_version', version);
     } catch (_) {}
   }
 
@@ -626,6 +647,37 @@ class AppNotifier extends Notifier<AppState> {
     final count = result['count'];
     await refreshOutboxHistory(silent: true);
     return count is int ? count : 0;
+  }
+
+  /// Checks for app update and stores result in state for UI banner.
+  Future<void> checkForUpdate({bool silent = true}) async {
+    try {
+      final update = await ref.read(appUpdateServiceProvider).checkForUpdate();
+      if (update != null) {
+        state = state.copyWith(
+          updateVersion: update.latestVersion,
+          updateUrl: update.apkUrl,
+          updateNotes: update.notes,
+        );
+      } else {
+        state = state.copyWith(clearUpdate: true);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> dismissUpdate() async {
+    final version = state.updateVersion;
+    if (version != null) {
+      await ref.read(appUpdateServiceProvider).ignoreVersion(version);
+    }
+    state = state.copyWith(clearUpdate: true);
+  }
+
+  Future<void> launchUpdate() async {
+    final url = state.updateUrl;
+    if (url != null && url.isNotEmpty) {
+      await ref.read(appUpdateServiceProvider).openApkDownload(url);
+    }
   }
 
   static int? _safeParseInt(dynamic value) {
@@ -2473,6 +2525,7 @@ class _HomePageState extends ConsumerState<HomePage>
   Timer? _heartbeatTimer;
   Timer? _autoSyncTimer;
   Timer? _campaignPollTimer;
+  Timer? _updateCheckTimer;
   DateTime? _lastHeartbeatSnackAt;
 
   @override
@@ -2486,6 +2539,12 @@ class _HomePageState extends ConsumerState<HomePage>
     
     // Start heartbeat timer to keep device "online"
     _startHeartbeat();
+
+    // Check for updates now + every 5 minutes
+    scheduleMicrotask(() => ref.read(appProvider.notifier).checkForUpdate());
+    _updateCheckTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      ref.read(appProvider.notifier).checkForUpdate();
+    });
 
     // Demander les permissions dès l’arrivée sur le dashboard (sans refresh).
     scheduleMicrotask(_requestSmsPermissionsOnStart);
@@ -2618,6 +2677,7 @@ class _HomePageState extends ConsumerState<HomePage>
     _heartbeatTimer?.cancel();
     _autoSyncTimer?.cancel();
     _campaignPollTimer?.cancel();
+    _updateCheckTimer?.cancel();
     _fabAnimController.dispose();
     super.dispose();
   }
@@ -3417,6 +3477,77 @@ class _AppDrawer extends StatelessWidget {
   }
 }
 
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({required this.appState, required this.notifier});
+  final AppState appState;
+  final AppNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final version = appState.updateVersion ?? '';
+    final notes = appState.updateNotes;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)]),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: const Color(0xFFF59E0B).withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.system_update_rounded, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Mise \u00e0 jour $version', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                    if (notes != null && notes.isNotEmpty)
+                      Text(notes, style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: () => notifier.dismissUpdate(),
+                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                style: IconButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.2)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                HapticFeedback.mediumImpact();
+                notifier.launchUpdate();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: const Color(0xFFF59E0B),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: const Icon(Icons.download_rounded, size: 20),
+              label: const Text('T\u00e9l\u00e9charger la mise \u00e0 jour', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DashboardSection extends StatelessWidget {
   const _DashboardSection({
     required this.appState,
@@ -3431,10 +3562,13 @@ class _DashboardSection extends StatelessWidget {
     final hasCampaign = appState.campaignIdSending != null &&
         appState.campaignStatusSending != 'completed' &&
         appState.campaignStatusSending != 'canceled';
+    final hasUpdate = appState.updateVersion != null;
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
       children: [
+        if (hasUpdate) _UpdateBanner(appState: appState, notifier: notifier),
+        if (hasUpdate) const SizedBox(height: 12),
         if (hasCampaign) _CampaignProgressCard(appState: appState, notifier: notifier),
         if (hasCampaign) const SizedBox(height: 20),
         _StatusCardDashboard(appState: appState),

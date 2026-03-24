@@ -164,6 +164,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   final _rng = Random();
   bool _busy = false;
   String? _activeCampaignId;
+  int _tickCount = 0;
+  bool _updateAvailable = false;
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
@@ -325,9 +327,34 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     unawaited(_tick());
   }
 
+  Future<void> _checkUpdateInBackground() async {
+    try {
+      final res = await _http.get(
+        Uri.parse(AppConfig.appUpdateManifestUrl),
+        headers: const {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 8));
+      if (res.statusCode >= 400) return;
+      final json = jsonDecode(res.body) as Map<String, dynamic>;
+      final latest = (json['latestVersion'] as String?)?.trim() ?? '';
+      if (latest.isEmpty) return;
+      final prefs = await SharedPreferences.getInstance();
+      final current = prefs.getString('app_current_version') ?? '';
+      if (current.isNotEmpty && latest != current && latest.compareTo(current) > 0) {
+        _updateAvailable = true;
+      }
+    } catch (_) {}
+  }
+
   Future<void> _tick() async {
     if (_busy) return;
     _busy = true;
+    _tickCount++;
+
+    // Check for app updates every ~100 ticks (~5 min)
+    if (_tickCount % 100 == 1) {
+      unawaited(_checkUpdateInBackground());
+    }
+
     try {
       final fgLocked = await _isForegroundLocked();
       if (fgLocked) {
@@ -392,9 +419,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           return;
         }
         final debugInfo = quotaReached ? 'quota=$remaining' : 'pas de campagne';
+        final updateHint = _updateAvailable ? ' \u2022 MAJ dispo!' : '';
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMS Gateway',
-          notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 Aucun msg ($debugInfo)',
+          notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 Aucun msg ($debugInfo)$updateHint',
           notificationButtons: _activeButtons(),
         );
         return;
