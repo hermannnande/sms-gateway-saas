@@ -46,6 +46,121 @@ export function NewCampaignForm({
     }
   }, [selectedTemplate])
 
+  const parseTextFile = (text: string) => {
+    const parsedContacts: { phone_e164: string; name?: string }[] = []
+    const invalidPhones: string[] = []
+
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (lines.length === 0) return { parsedContacts, invalidPhones }
+
+    // Auto-detect separator: comma, semicolon, or tab
+    const firstLine = lines[0]
+    const sep = firstLine.includes(';') ? ';' : firstLine.includes('\t') ? '\t' : ','
+
+    const headers = firstLine.split(sep).map((h) => h.trim().toLowerCase().replace(/["']/g, ''))
+
+    // Try to find phone column by various names
+    const phoneAliases = ['phone', 'telephone', 'tel', 'mobile', 'numero', 'numéro', 'phone_e164', 'number', 'n°']
+    const nameAliases = ['name', 'nom', 'prenom', 'prénom', 'firstname', 'first_name', 'contact']
+
+    let phoneIndex = -1
+    let nameIndex = -1
+
+    for (const alias of phoneAliases) {
+      const idx = headers.findIndex((h) => h.includes(alias))
+      if (idx !== -1) { phoneIndex = idx; break }
+    }
+    for (const alias of nameAliases) {
+      const idx = headers.findIndex((h) => h.includes(alias))
+      if (idx !== -1) { nameIndex = idx; break }
+    }
+
+    // If no header detected, assume first column is phone (and no header row)
+    const hasHeader = phoneIndex !== -1
+    if (!hasHeader) {
+      phoneIndex = 0
+      nameIndex = headers.length > 1 ? 1 : -1
+    }
+
+    const startLine = hasHeader ? 1 : 0
+
+    for (let i = startLine; i < lines.length; i++) {
+      const values = lines[i].split(sep).map((v) => v.trim().replace(/["']/g, ''))
+      const rawPhone = values[phoneIndex]?.trim()
+      const name = nameIndex !== -1 ? values[nameIndex]?.trim() : undefined
+
+      if (!rawPhone) continue
+
+      // Try parsing with libphonenumber
+      let phoneNumber = parsePhoneNumberFromString(rawPhone)
+      // If invalid, try with +225 prefix (Côte d'Ivoire)
+      if (!phoneNumber?.isValid() && /^\d{10}$/.test(rawPhone)) {
+        phoneNumber = parsePhoneNumberFromString('+225' + rawPhone)
+      }
+      // Try with + prefix
+      if (!phoneNumber?.isValid() && /^\d{11,15}$/.test(rawPhone)) {
+        phoneNumber = parsePhoneNumberFromString('+' + rawPhone)
+      }
+
+      if (phoneNumber?.isValid()) {
+        parsedContacts.push({
+          phone_e164: phoneNumber.format('E.164'),
+          name,
+        })
+      } else {
+        invalidPhones.push(rawPhone)
+      }
+    }
+
+    return { parsedContacts, invalidPhones }
+  }
+
+  const parseExcelFile = (data: ArrayBuffer) => {
+    const parsedContacts: { phone_e164: string; name?: string }[] = []
+    const invalidPhones: string[] = []
+
+    const workbook = XLSX.read(data, { type: 'array' })
+    const sheetName = workbook.SheetNames[0]
+    const worksheet = workbook.Sheets[sheetName]
+    const json = XLSX.utils.sheet_to_json(worksheet, { defval: '' }) as Record<string, any>[]
+
+    if (json.length === 0) return { parsedContacts, invalidPhones, empty: true }
+
+    // Find phone and name columns by matching header names
+    const keys = Object.keys(json[0])
+    const phoneAliases = ['phone', 'telephone', 'tel', 'mobile', 'numero', 'numéro', 'phone_e164', 'number']
+    const nameAliases = ['name', 'nom', 'prenom', 'prénom', 'firstname', 'first_name', 'contact']
+
+    let phoneKey = keys.find((k) => phoneAliases.some((a) => k.toLowerCase().includes(a)))
+    const nameKey = keys.find((k) => nameAliases.some((a) => k.toLowerCase().includes(a)))
+
+    // If no phone column found, use first column
+    if (!phoneKey) phoneKey = keys[0]
+
+    for (const row of json) {
+      const rawPhone = row[phoneKey]?.toString().trim()
+      const name = nameKey ? row[nameKey]?.toString().trim() : undefined
+
+      if (!rawPhone) continue
+
+      let phoneNumber = parsePhoneNumberFromString(rawPhone)
+      if (!phoneNumber?.isValid() && /^\d{10}$/.test(rawPhone)) {
+        phoneNumber = parsePhoneNumberFromString('+225' + rawPhone)
+      }
+      if (!phoneNumber?.isValid() && /^\d{11,15}$/.test(rawPhone)) {
+        phoneNumber = parsePhoneNumberFromString('+' + rawPhone)
+      }
+
+      if (phoneNumber?.isValid()) {
+        parsedContacts.push({ phone_e164: phoneNumber.format('E.164'), name })
+      } else {
+        invalidPhones.push(rawPhone)
+      }
+    }
+
+    return { parsedContacts, invalidPhones, empty: false }
+  }
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -55,81 +170,41 @@ export function NewCampaignForm({
     setFileInvalidPhones([])
 
     try {
+      const ext = file.name.split('.').pop()?.toLowerCase()
+      const isText = ext === 'csv' || ext === 'txt'
+
       const reader = new FileReader()
-      reader.onload = async (event) => {
+      reader.onload = (event) => {
         const data = event.target?.result
+        if (!data) { setError('Impossible de lire le fichier.'); return }
 
-        let parsedContacts: { phone_e164: string; name?: string }[] = []
-        const invalidPhones: string[] = []
+        let result: { parsedContacts: { phone_e164: string; name?: string }[]; invalidPhones: string[]; empty?: boolean }
 
-        if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
-          const text = data as string
-          const lines = text.split('\n').filter(Boolean)
-          const headers = lines[0].split(',').map((h) => h.trim().toLowerCase())
-          const phoneIndex = headers.indexOf('phone')
-          const nameIndex = headers.indexOf('name')
-
-          if (phoneIndex === -1) {
-            setError('Le fichier doit contenir une colonne "phone".')
-            return
-          }
-
-          for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].split(',')
-            const phone = values[phoneIndex]?.trim()
-            const name = nameIndex !== -1 ? values[nameIndex]?.trim() : undefined
-
-            if (phone) {
-              const phoneNumber = parsePhoneNumberFromString(phone)
-              if (phoneNumber?.isValid()) {
-                parsedContacts.push({
-                  phone_e164: phoneNumber.format('E.164'),
-                  name,
-                })
-              } else {
-                invalidPhones.push(phone)
-              }
-            }
-          }
-        } else if (file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
-          const workbook = XLSX.read(data, { type: 'array' })
-          const sheetName = workbook.SheetNames[0]
-          const worksheet = workbook.Sheets[sheetName]
-          const json = XLSX.utils.sheet_to_json(worksheet) as any[]
-
-          if (json.length === 0) {
+        if (isText) {
+          result = parseTextFile(data as string)
+        } else if (ext === 'xls' || ext === 'xlsx') {
+          result = parseExcelFile(data as ArrayBuffer)
+          if (result.empty) {
             setError('Le fichier Excel est vide ou mal formaté.')
             return
-          }
-
-          for (const row of json) {
-            const phone = row.phone?.toString().trim()
-            const name = row.name?.toString().trim()
-
-            if (phone) {
-              const phoneNumber = parsePhoneNumberFromString(phone)
-              if (phoneNumber?.isValid()) {
-                parsedContacts.push({
-                  phone_e164: phoneNumber.format('E.164'),
-                  name,
-                })
-              } else {
-                invalidPhones.push(phone)
-              }
-            }
           }
         } else {
           setError('Format de fichier non supporté. Utilisez CSV, TXT, XLS ou XLSX.')
           return
         }
 
-        setFileInvalidPhones(invalidPhones)
-        if (parsedContacts.length === 0) {
-          setError('Aucun contact valide trouvé dans le fichier.')
+        setFileInvalidPhones(result.invalidPhones)
+        if (result.parsedContacts.length === 0) {
+          setError(`Aucun contact valide trouvé dans le fichier. ${result.invalidPhones.length} numéro(s) invalide(s) détecté(s).`)
         }
-        setFileContacts(parsedContacts)
+        setFileContacts(result.parsedContacts)
       }
-      reader.readAsArrayBuffer(file)
+
+      if (isText) {
+        reader.readAsText(file, 'UTF-8')
+      } else {
+        reader.readAsArrayBuffer(file)
+      }
     } catch (err: any) {
       setError(`Erreur lors de la lecture du fichier: ${err.message}`)
     }
