@@ -12,7 +12,7 @@ const navigation = [
   { name: 'Contacts', href: '/dashboard/contacts', icon: '👥' },
   { name: 'Templates', href: '/dashboard/templates', icon: '📝' },
   { name: 'Appareils', href: '/dashboard/devices', icon: '📱' },
-  { name: 'Opt-outs', href: '/dashboard/optouts', icon: '🚫' },
+  { name: 'Liste noire', href: '/dashboard/optouts', icon: '🚫' },
   { name: 'Profil', href: '/dashboard/profile', icon: '👤' },
   { name: 'Facturation', href: '/billing/plans', icon: '💳' },
 ]
