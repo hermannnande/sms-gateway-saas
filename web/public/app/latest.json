@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.3+35",
+  "latestVersion": "1.0.3+36",
   "apkUrl": "https://smsenvoie.com/app/download?source=update",
-  "notes": "• Mise a jour automatique: notification + banniere dans l'app\n• Verification toutes les 5 min en arriere-plan\n• Fix notification qui reste 'en attente'\n• SMS demarrent automatiquement"
+  "notes": "• SMS demarrent automatiquement des le lancement de campagne\n• Plus besoin de cliquer Synchroniser\n• Le service se debloque tout seul si une campagne est active"
 }

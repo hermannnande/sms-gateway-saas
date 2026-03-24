@@ -307,16 +307,14 @@ class AppNotifier extends Notifier<AppState> {
       await refreshSubscription(silent: true);
     }
 
-    // Auto-démarrer le BackgroundSyncService UNE SEULE FOIS
+    // Auto-d\u00e9marrer le BackgroundSyncService UNE SEULE FOIS
     if (token != null && token.isNotEmpty) {
       try {
         await BackgroundSyncService.setEnabled(true);
+        await BackgroundSyncService.setPaused(false);
         await BackgroundSyncService.setForegroundLock(false);
         await BackgroundSyncService.init();
-        final isRunning = await FlutterForegroundTask.isRunningService;
-        if (!isRunning) {
-          await BackgroundSyncService.start();
-        }
+        await BackgroundSyncService.start();
       } catch (e) {
         debugPrint('\u00c9chec auto-d\u00e9marrage BackgroundSyncService: $e');
       }
@@ -570,13 +568,15 @@ class AppNotifier extends Notifier<AppState> {
         campaignTotalCount: _safeParseInt(row['total_count']) ?? 0,
       );
 
-      // Auto-ensure background service is running when a campaign is active
+      // Auto-ensure background service is running + unpaused when a campaign is active
       final status = row['status']?.toString();
       if ((status == 'running' || status == 'queued') && (state.deviceToken?.isNotEmpty ?? false)) {
         try {
+          await BackgroundSyncService.setEnabled(true);
+          await BackgroundSyncService.setPaused(false);
+          await BackgroundSyncService.setForegroundLock(false);
           final bgRunning = await BackgroundSyncService.isRunning();
           if (!bgRunning) {
-            await BackgroundSyncService.setEnabled(true);
             await BackgroundSyncService.init();
             await BackgroundSyncService.start();
           }
@@ -2603,31 +2603,46 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   void _startAutoSync() {
-    // Premier check après 5s
-    Future<void>.delayed(const Duration(seconds: 5), () {
+    // Premier check apr\u00e8s 3s : forcer le service background s'il y a une campagne
+    Future<void>.delayed(const Duration(seconds: 3), () {
       if (!mounted) return;
-      BackgroundSyncService.isEnabled().then((enabled) {
-        if (!mounted) return;
-        if (enabled) return; // le service background gère déjà l'envoi
-        final appState = ref.read(appProvider);
-        if (appState.authenticated && (appState.deviceToken?.isNotEmpty ?? false)) {
-          ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
-        }
-      });
+      _ensureBackgroundSending();
     });
 
     _autoSyncTimer?.cancel();
-    _autoSyncTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-      BackgroundSyncService.isEnabled().then((enabled) {
-        if (!mounted) return;
-        if (enabled) return; // le service background gère déjà l'envoi
-        final appState = ref.read(appProvider);
-        if (!appState.authenticated) return;
-        if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
-        if (appState.syncing) return;
-        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
-      });
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted) return;
+      _ensureBackgroundSending();
     });
+  }
+
+  Future<void> _ensureBackgroundSending() async {
+    final appState = ref.read(appProvider);
+    if (!appState.authenticated) return;
+    if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
+
+    // If a campaign is running, make sure the service is active
+    final hasActiveCampaign = appState.campaignStatusSending == 'running' ||
+        appState.campaignStatusSending == 'queued';
+
+    if (hasActiveCampaign) {
+      try {
+        await BackgroundSyncService.setEnabled(true);
+        await BackgroundSyncService.setPaused(false);
+        await BackgroundSyncService.setForegroundLock(false);
+        final running = await BackgroundSyncService.isRunning();
+        if (!running) {
+          await BackgroundSyncService.init();
+          await BackgroundSyncService.start();
+        }
+      } catch (_) {}
+    }
+
+    // Fallback: if background not running at all, do a manual sync
+    final bgRunning = await BackgroundSyncService.isRunning();
+    if (!bgRunning && !appState.syncing) {
+      ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+    }
   }
 
   void _startHeartbeat() {
