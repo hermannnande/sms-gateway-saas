@@ -30,7 +30,7 @@ android {
         // IMPORTANT: package de l'application installée sur le téléphone.
         // On le change pour éviter les conflits avec une ancienne version (Kotlin/ancien build).
         applicationId = "com.smsgateway.gateway"
-        minSdk = 23
+        minSdkVersion = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName

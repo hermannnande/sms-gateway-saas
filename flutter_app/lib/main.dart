@@ -86,6 +86,7 @@ class AppState {
     required this.updateVersion,
     required this.updateUrl,
     required this.updateNotes,
+    required this.permissionsOk,
   });
 
   factory AppState.initial() => const AppState(
@@ -119,6 +120,7 @@ class AppState {
         updateVersion: null,
         updateUrl: null,
         updateNotes: null,
+        permissionsOk: false,
       );
 
   final bool loading;
@@ -151,6 +153,7 @@ class AppState {
   final String? updateVersion;
   final String? updateUrl;
   final String? updateNotes;
+  final bool permissionsOk;
 
   AppState copyWith({
     bool? loading,
@@ -185,6 +188,7 @@ class AppState {
     String? updateUrl,
     String? updateNotes,
     bool clearUpdate = false,
+    bool? permissionsOk,
   }) {
     return AppState(
       loading: loading ?? this.loading,
@@ -217,6 +221,7 @@ class AppState {
       updateVersion: clearUpdate ? null : (updateVersion ?? this.updateVersion),
       updateUrl: clearUpdate ? null : (updateUrl ?? this.updateUrl),
       updateNotes: clearUpdate ? null : (updateNotes ?? this.updateNotes),
+      permissionsOk: permissionsOk ?? this.permissionsOk,
     );
   }
 }
@@ -242,6 +247,17 @@ class AppNotifier extends Notifier<AppState> {
 
   void setLastStatus(String? message) {
     state = state.copyWith(lastStatus: message);
+  }
+
+  Future<void> checkPermissions() async {
+    try {
+      final sms = await Permission.sms.status;
+      final phone = await Permission.phone.status;
+      final ok = sms.isGranted && phone.isGranted;
+      state = state.copyWith(permissionsOk: ok);
+    } catch (_) {
+      state = state.copyWith(permissionsOk: false);
+    }
   }
 
   Future<void> init() async {
@@ -298,7 +314,8 @@ class AppNotifier extends Notifier<AppState> {
       authenticated: hasSession,
     );
 
-    // Charger infos réelles (profil / org / version / inbox / historique)
+    await checkPermissions();
+
     await _loadAppVersion();
     if (hasSession) {
       await refreshAccountInfo();
@@ -811,44 +828,15 @@ class AppNotifier extends Notifier<AppState> {
     );
   }
 
-  Future<void> _requestAllPermissionsAfterLogin() async {
-    // SMS permissions (obligatoire pour envoyer)
-    try {
-      await ref.read(smsSenderProvider).ensurePermissions();
-    } catch (_) {}
+  Future<void> _postLoginSetup() async {
+    await checkPermissions();
 
-    // Notifications (Android 13+, nécessaire pour la notification foreground)
-    try {
-      await Permission.notification.request();
-    } catch (_) {}
-
-    // Battery optimization (pour éviter que le service soit tué)
-    bool batteryOptimizationGranted = false;
-    try {
-      final status = await Permission.ignoreBatteryOptimizations.status;
-      if (!status.isGranted) {
-        final result = await Permission.ignoreBatteryOptimizations.request();
-        batteryOptimizationGranted = result.isGranted;
-      } else {
-        batteryOptimizationGranted = true;
-      }
-    } catch (_) {}
-
-    // Si la permission batterie n'est pas accordée, afficher un message
-    if (!batteryOptimizationGranted) {
-      state = state.copyWith(
-        lastStatus: 'Autorisation arriere-plan requise pour que l\'envoi continue meme quand l\'app est fermee.',
-      );
-    }
-
-    // Si on a un appareil jumelé ET "Continuer en arrière‑plan" activé → démarrer le service
     try {
       if (state.deviceToken != null && state.deviceToken!.isNotEmpty) {
         final enabled = await BackgroundSyncService.isEnabled();
         if (enabled) {
           await BackgroundSyncService.start();
         } else {
-          // Activer automatiquement le mode arrière-plan après connexion
           await BackgroundSyncService.setEnabled(true);
           await BackgroundSyncService.setPaused(false);
           await BackgroundSyncService.start();
@@ -879,8 +867,7 @@ class AppNotifier extends Notifier<AppState> {
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
     
-    // IMPORTANT: demander toutes les permissions après connexion
-    await _requestAllPermissionsAfterLogin();
+    await _postLoginSetup();
   }
 
   Future<void> recoverSessionFromQrJson({
@@ -901,9 +888,8 @@ class AppNotifier extends Notifier<AppState> {
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
-    
-    // IMPORTANT: demander toutes les permissions après connexion
-    await _requestAllPermissionsAfterLogin();
+
+    await _postLoginSetup();
   }
 
   Future<void> signInWithRefreshToken({
@@ -923,9 +909,8 @@ class AppNotifier extends Notifier<AppState> {
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
-    
-    // IMPORTANT: demander toutes les permissions après connexion
-    await _requestAllPermissionsAfterLogin();
+
+    await _postLoginSetup();
   }
 
   Future<void> syncOnce({bool silentIfEmpty = false}) async {
@@ -943,9 +928,12 @@ class AppNotifier extends Notifier<AppState> {
         await BackgroundSyncService.setForegroundLock(true);
       } catch (_) {}
 
-      final permissionsOk = await ref.read(smsSenderProvider).ensurePermissions();
-      if (!permissionsOk) {
-        state = state.copyWith(lastStatus: 'Permissions SMS/Phone nécessaires');
+      final permsOk = await ref.read(smsSenderProvider).ensurePermissions();
+      if (!permsOk) {
+        state = state.copyWith(
+          permissionsOk: false,
+          lastStatus: 'Permissions SMS/Phone necessaires',
+        );
         return;
       }
 
@@ -1202,7 +1190,7 @@ class _MyAppState extends ConsumerState<MyApp> {
       ),
       useMaterial3: true,
       fontFamily: 'SF Pro Display',
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
@@ -1301,9 +1289,11 @@ class _MyAppState extends ConsumerState<MyApp> {
         },
         child: !appState.authenticated
             ? const AuthPage(key: ValueKey('auth'))
-            : appState.deviceToken == null
-                ? const PairingPage(key: ValueKey('pairing'))
-                : const HomePage(key: ValueKey('home')),
+            : !appState.permissionsOk
+                ? const PermissionsPage(key: ValueKey('permissions'))
+                : appState.deviceToken == null
+                    ? const PairingPage(key: ValueKey('pairing'))
+                    : const HomePage(key: ValueKey('home')),
       ),
     );
   }
@@ -1740,6 +1730,321 @@ class _PairingPageState extends ConsumerState<PairingPage>
   }
 }
 
+// ---------------------------------------------------------------------------
+// Permissions Page - shown at first launch or when essential permissions missing
+// ---------------------------------------------------------------------------
+
+class _PermissionItem {
+  _PermissionItem({
+    required this.permission,
+    required this.label,
+    required this.description,
+    required this.icon,
+    required this.required_,
+    this.status = PermissionStatus.denied,
+  });
+
+  final Permission permission;
+  final String label;
+  final String description;
+  final IconData icon;
+  final bool required_;
+  PermissionStatus status;
+}
+
+class PermissionsPage extends ConsumerStatefulWidget {
+  const PermissionsPage({super.key});
+
+  @override
+  ConsumerState<PermissionsPage> createState() => _PermissionsPageState();
+}
+
+class _PermissionsPageState extends ConsumerState<PermissionsPage> with WidgetsBindingObserver {
+  late List<_PermissionItem> _items;
+  bool _requesting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _items = [
+      _PermissionItem(
+        permission: Permission.sms,
+        label: 'Envoi de SMS',
+        description: 'Permet d\'envoyer les SMS de vos campagnes',
+        icon: Icons.sms_rounded,
+        required_: true,
+      ),
+      _PermissionItem(
+        permission: Permission.phone,
+        label: 'Telephone',
+        description: 'Detecter les cartes SIM et gerer les appels',
+        icon: Icons.phone_android_rounded,
+        required_: true,
+      ),
+      _PermissionItem(
+        permission: Permission.notification,
+        label: 'Notifications',
+        description: 'Afficher la progression de l\'envoi en temps reel',
+        icon: Icons.notifications_active_rounded,
+        required_: false,
+      ),
+      _PermissionItem(
+        permission: Permission.ignoreBatteryOptimizations,
+        label: 'Arriere-plan',
+        description: 'Continuer l\'envoi meme quand l\'app est fermee',
+        icon: Icons.battery_charging_full_rounded,
+        required_: false,
+      ),
+    ];
+    _refreshStatuses();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshStatuses();
+    }
+  }
+
+  Future<void> _refreshStatuses() async {
+    for (final item in _items) {
+      try {
+        item.status = await item.permission.status;
+      } catch (_) {}
+    }
+    if (mounted) setState(() {});
+  }
+
+  bool get _essentialGranted =>
+      _items.where((i) => i.required_).every((i) => i.status.isGranted);
+
+  Future<void> _requestAll() async {
+    setState(() => _requesting = true);
+
+    for (final item in _items) {
+      if (item.status.isGranted) continue;
+      try {
+        if (item.status.isPermanentlyDenied) {
+          await openAppSettings();
+          await Future.delayed(const Duration(seconds: 1));
+          await _refreshStatuses();
+          continue;
+        }
+        final result = await item.permission.request();
+        item.status = result;
+      } catch (_) {}
+    }
+
+    await _refreshStatuses();
+    setState(() => _requesting = false);
+  }
+
+  Future<void> _requestSingle(_PermissionItem item) async {
+    try {
+      if (item.status.isPermanentlyDenied) {
+        await openAppSettings();
+        return;
+      }
+      final result = await item.permission.request();
+      item.status = result;
+      await _refreshStatuses();
+    } catch (_) {}
+  }
+
+  void _continue() {
+    ref.read(appProvider.notifier).checkPermissions();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final green = const Color(0xFF16A34A);
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            children: [
+              const SizedBox(height: 40),
+
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: green.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Icon(Icons.security_rounded, size: 40, color: green),
+              ),
+              const SizedBox(height: 24),
+
+              const Text(
+                'Autorisations requises',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Pour fonctionner correctement, SMSenvoie a besoin\ndes autorisations suivantes :',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade600, height: 1.4),
+              ),
+              const SizedBox(height: 32),
+
+              Expanded(
+                child: ListView.separated(
+                  itemCount: _items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final item = _items[index];
+                    final granted = item.status.isGranted;
+                    final denied = item.status.isPermanentlyDenied;
+
+                    return Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: granted
+                            ? green.withValues(alpha: 0.05)
+                            : Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: granted ? green.withValues(alpha: 0.3) : Colors.grey.shade200,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: granted
+                                  ? green.withValues(alpha: 0.15)
+                                  : Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Icon(
+                              item.icon,
+                              color: granted ? green : Colors.grey.shade500,
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        item.label,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                    if (item.required_)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: granted ? green.withValues(alpha: 0.1) : Colors.red.shade50,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          granted ? 'OK' : 'Requis',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: granted ? green : Colors.red.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  item.description,
+                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          if (granted)
+                            Icon(Icons.check_circle_rounded, color: green, size: 28)
+                          else
+                            SizedBox(
+                              height: 34,
+                              child: TextButton(
+                                onPressed: () => _requestSingle(item),
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  backgroundColor: denied ? Colors.orange.shade50 : green.withValues(alpha: 0.1),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                                child: Text(
+                                  denied ? 'Parametres' : 'Autoriser',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: denied ? Colors.orange.shade800 : green,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: FilledButton.icon(
+                  onPressed: _requesting ? null : (_essentialGranted ? _continue : _requestAll),
+                  icon: Icon(_essentialGranted ? Icons.arrow_forward_rounded : Icons.shield_rounded),
+                  label: Text(
+                    _essentialGranted
+                        ? 'Continuer'
+                        : (_requesting ? 'Autorisation en cours...' : 'Tout autoriser'),
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _essentialGranted ? green : green.withValues(alpha: 0.85),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                ),
+              ),
+
+              if (!_essentialGranted) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Les permissions SMS et Telephone sont obligatoires',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                ),
+              ],
+
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AuthPage extends ConsumerStatefulWidget {
   const AuthPage({super.key});
 
@@ -1768,58 +2073,6 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
     super.dispose();
   }
 
-  Future<void> _checkBatteryPermissionAndShowDialog() async {
-    // Attendre un peu pour que les autres dialogs de permissions se ferment
-    await Future.delayed(const Duration(milliseconds: 800));
-    
-    if (!mounted) return;
-    
-    try {
-      final status = await Permission.ignoreBatteryOptimizations.status;
-      if (!status.isGranted) {
-        // ignore: use_build_context_synchronously
-        if (!mounted) return;
-        
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Row(
-              children: [
-                Icon(Icons.battery_alert_rounded, color: Colors.orange.shade700, size: 28),
-                const SizedBox(width: 12),
-                const Text('Autorisation arrière-plan'),
-              ],
-            ),
-            content: const Text(
-              'Pour que l\'envoi de SMS continue meme quand l\'app est fermee, '
-              'vous devez autoriser l\'app a ignorer l\'optimisation de la batterie.\n\n'
-              'Cliquez sur "Ouvrir les parametres" ci-dessous pour acceder directement '
-              'aux parametres systeme et autoriser l\'app.',
-              style: TextStyle(fontSize: 15),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Plus tard'),
-              ),
-              FilledButton.icon(
-                onPressed: () async {
-                  Navigator.of(ctx).pop();
-                  // Ouvrir directement les paramètres système
-                  await openAppSettings();
-                },
-                icon: const Icon(Icons.settings_rounded),
-                label: const Text('Ouvrir les parametres'),
-              ),
-            ],
-          ),
-        );
-      }
-    } catch (_) {}
-  }
-
   Future<void> _signIn() async {
     final email = _emailController.text.trim();
     final pass = _passwordController.text;
@@ -1833,11 +2086,6 @@ class _AuthPageState extends ConsumerState<AuthPage> with TickerProviderStateMix
     });
     try {
       await ref.read(appProvider.notifier).signInWithEmail(email: email, password: pass);
-      
-      // Vérifier si la permission batterie est accordée
-      if (mounted) {
-        _checkBatteryPermissionAndShowDialog();
-      }
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
@@ -2585,8 +2833,6 @@ class _HomePageState extends ConsumerState<HomePage>
       ref.read(appProvider.notifier).checkForUpdate();
     });
 
-    // Demander les permissions dès l’arrivée sur le dashboard (sans refresh).
-    scheduleMicrotask(_requestSmsPermissionsOnStart);
     // Charger la liste SIM dès l'arrivée (pour le sélecteur SIM).
     scheduleMicrotask(() => ref.read(appProvider.notifier).refreshSimCards());
 
@@ -2607,39 +2853,7 @@ class _HomePageState extends ConsumerState<HomePage>
     });
   }
 
-  Future<void> _requestSmsPermissionsOnStart() async {
-    final ok = await ref.read(smsSenderProvider).ensurePermissions();
-    if (!ok) {
-      ref.read(appProvider.notifier).setLastStatus(
-            'Permissions SMS/Téléphone refusées. Active-les pour envoyer les SMS.',
-          );
-      if (!mounted) return;
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('Permissions requises'),
-          content: const Text(
-            'Pour envoyer des SMS, l’app a besoin des permissions SMS et Téléphone. '
-            'Accepte-les pour que les campagnes puissent démarrer.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Plus tard'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                Navigator.of(ctx).pop();
-                await ref.read(smsSenderProvider).ensurePermissions();
-              },
-              child: const Text('Autoriser'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
+
 
   void _startAutoSync() {
     // Premier check apr\u00e8s 3s : forcer le service background s'il y a une campagne
