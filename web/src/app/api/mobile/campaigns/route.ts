@@ -1,18 +1,49 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sha256Hex } from '@/lib/device-token'
+import crypto from 'node:crypto'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 async function resolveDevice(service: ReturnType<typeof createServiceClient>, deviceToken: string) {
+  // Primary: SHA-256 hash (same as Edge Functions)
   const hash = sha256Hex(deviceToken)
   const { data } = await service
     .from('devices')
     .select('id, org_id')
     .eq('token_hash', hash)
     .maybeSingle()
-  return data
+
+  if (data) return data
+
+  // Fallback 1: try Web Crypto API hash (in case of subtle differences)
+  try {
+    const encoded = new TextEncoder().encode(deviceToken)
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoded)
+    const hashArray = new Uint8Array(hashBuffer)
+    let webCryptoHash = ''
+    for (let i = 0; i < hashArray.length; i++) {
+      webCryptoHash += hashArray[i].toString(16).padStart(2, '0')
+    }
+    if (webCryptoHash !== hash) {
+      const { data: d2 } = await service
+        .from('devices')
+        .select('id, org_id')
+        .eq('token_hash', webCryptoHash)
+        .maybeSingle()
+      if (d2) return d2
+    }
+  } catch (_) {}
+
+  // Fallback 2: raw token as token_hash (legacy)
+  const { data: fallback } = await service
+    .from('devices')
+    .select('id, org_id')
+    .eq('token_hash', deviceToken)
+    .maybeSingle()
+
+  return fallback
 }
 
 function smartParsePhone(raw: string): string | null {
@@ -43,7 +74,13 @@ export async function POST(req: Request) {
     const service = createServiceClient()
     const device = await resolveDevice(service, deviceToken)
     if (!device) {
-      return NextResponse.json({ ok: false, error: 'Appareil non reconnu' }, { status: 403 })
+      const hash = sha256Hex(deviceToken)
+      const { count } = await service.from('devices').select('*', { count: 'exact', head: true })
+      return NextResponse.json({
+        ok: false,
+        error: 'Appareil non reconnu',
+        debug: { token_length: deviceToken.length, hash_prefix: hash.substring(0, 8), devices_total: count },
+      }, { status: 403 })
     }
 
     // ── LIST ──
