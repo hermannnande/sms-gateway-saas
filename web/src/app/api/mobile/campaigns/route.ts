@@ -71,15 +71,28 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'device_token requis' }, { status: 400 })
     }
 
-    const service = createServiceClient()
+    let service: ReturnType<typeof createServiceClient>
+    try {
+      service = createServiceClient()
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: `Service init failed: ${e.message}` }, { status: 500 })
+    }
+
     const device = await resolveDevice(service, deviceToken)
     if (!device) {
       const hash = sha256Hex(deviceToken)
-      const { count } = await service.from('devices').select('*', { count: 'exact', head: true })
+      let debugInfo: any = { token_length: deviceToken.length, hash_prefix: hash.substring(0, 8) }
+      try {
+        const { count, error: cErr } = await service.from('devices').select('*', { count: 'exact', head: true })
+        debugInfo.devices_total = count
+        debugInfo.count_error = cErr?.message || null
+      } catch (e2: any) {
+        debugInfo.count_error = e2?.message
+      }
       return NextResponse.json({
         ok: false,
         error: 'Appareil non reconnu',
-        debug: { token_length: deviceToken.length, hash_prefix: hash.substring(0, 8), devices_total: count },
+        debug: debugInfo,
       }, { status: 403 })
     }
 
