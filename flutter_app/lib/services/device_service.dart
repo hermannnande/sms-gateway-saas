@@ -297,15 +297,68 @@ class DeviceService {
     });
   }
 
-  /// Send heartbeat to keep device status "online"
   Future<void> sendHeartbeat({required String deviceToken}) async {
     try {
-      // Toujours via proxy (client-proof).
       await sendHeartbeatVerbose(deviceToken: deviceToken);
     } catch (e) {
       _logger.w('Heartbeat error (ignored): $e');
-      // Ignore heartbeat errors (non-critical)
     }
+  }
+
+  // ── Campaign management ──
+
+  Future<Map<String, dynamic>> listCampaigns({
+    required String deviceToken,
+    int page = 1,
+    int limit = 20,
+    String? status,
+  }) async {
+    return await _postProxy('/api/mobile/campaigns', {
+      'device_token': deviceToken,
+      'action': 'list',
+      'page': page,
+      'limit': limit,
+      if (status != null) 'status': status,
+    });
+  }
+
+  Future<Map<String, dynamic>> campaignDetail({
+    required String deviceToken,
+    required String campaignId,
+  }) async {
+    return await _postProxy('/api/mobile/campaigns', {
+      'device_token': deviceToken,
+      'action': 'detail',
+      'campaign_id': campaignId,
+    });
+  }
+
+  Future<Map<String, dynamic>> createCampaign({
+    required String deviceToken,
+    required String name,
+    required String message,
+    required List<String> contacts,
+    int? simSlotIndex,
+    int priority = 0,
+  }) async {
+    return await _postProxy('/api/mobile/campaigns', {
+      'device_token': deviceToken,
+      'action': 'create',
+      'name': name,
+      'message': message,
+      'contacts': contacts,
+      'sim_slot_index': simSlotIndex,
+      'priority': priority,
+    });
+  }
+
+  Future<Map<String, dynamic>> listTemplates({
+    required String deviceToken,
+  }) async {
+    return await _postProxy('/api/mobile/campaigns', {
+      'device_token': deviceToken,
+      'action': 'templates',
+    });
   }
 }
 

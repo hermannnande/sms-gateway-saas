@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.9+43",
+  "latestVersion": "1.1.0+44",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Ecran d'autorisations complet au demarrage\n• Permissions SMS, Telephone, Notifications, Batterie\n• Interface claire avec statut de chaque permission"
+  "notes": "• Gestion complete des campagnes dans l'app\n• Creer, lancer, pause, reprendre, annuler\n• Liste avec filtres et detail avec stats\n• Selection SIM et priorite\n• Templates SMS"
 }

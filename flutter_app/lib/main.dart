@@ -232,6 +232,7 @@ final appProvider = NotifierProvider<AppNotifier, AppState>(AppNotifier.new);
 /// Sections du dashboard (navigation app)
 enum AppSection {
   dashboard,
+  campaigns,
   messages,
   history,
   subscription,
@@ -3087,6 +3088,8 @@ class _HomePageState extends ConsumerState<HomePage>
               case AppSection.dashboard:
                 await notifier.syncOnce();
                 break;
+              case AppSection.campaigns:
+                break;
               case AppSection.messages:
                 await notifier.refreshInboxMessages(silent: false);
                 break;
@@ -3116,6 +3119,8 @@ class _HomePageState extends ConsumerState<HomePage>
     switch (section) {
       case AppSection.dashboard:
         return 'Dashboard';
+      case AppSection.campaigns:
+        return 'Campagnes';
       case AppSection.messages:
         return 'Messages';
       case AppSection.history:
@@ -3137,6 +3142,8 @@ class _HomePageState extends ConsumerState<HomePage>
     switch (section) {
       case AppSection.dashboard:
         return _DashboardSection(appState: appState, notifier: notifier);
+      case AppSection.campaigns:
+        return _CampaignsSection(appState: appState, notifier: notifier, onSetSection: _setSection);
       case AppSection.messages:
         return _MessagesSection(appState: appState, notifier: notifier);
       case AppSection.history:
@@ -3461,6 +3468,739 @@ class _MessageTile extends StatelessWidget {
 }
 
 // ============================================================================//
+// CAMPAIGNS SECTION
+// ============================================================================//
+
+class _CampaignsSection extends ConsumerStatefulWidget {
+  const _CampaignsSection({
+    required this.appState,
+    required this.notifier,
+    required this.onSetSection,
+  });
+
+  final AppState appState;
+  final AppNotifier notifier;
+  final ValueChanged<AppSection> onSetSection;
+
+  @override
+  ConsumerState<_CampaignsSection> createState() => _CampaignsSectionState();
+}
+
+class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
+  List<Map<String, dynamic>> _campaigns = [];
+  bool _loading = true;
+  String? _error;
+  String _filterStatus = 'all';
+
+  // Create campaign form
+  bool _showCreate = false;
+  bool _creating = false;
+  final _nameCtrl = TextEditingController();
+  final _messageCtrl = TextEditingController();
+  final _contactsCtrl = TextEditingController();
+  int _priority = 0;
+  int? _simSlot;
+  List<Map<String, dynamic>> _templates = [];
+
+  // Detail view
+  Map<String, dynamic>? _detailCampaign;
+  Map<String, dynamic>? _detailStats;
+  bool _loadingDetail = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCampaigns();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _messageCtrl.dispose();
+    _contactsCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCampaigns() async {
+    final token = widget.appState.deviceToken;
+    if (token == null) return;
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await ref.read(deviceServiceProvider).listCampaigns(
+        deviceToken: token,
+        limit: 50,
+        status: _filterStatus == 'all' ? null : _filterStatus,
+      );
+      final list = (res['campaigns'] as List?) ?? [];
+      setState(() {
+        _campaigns = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _loadTemplates() async {
+    final token = widget.appState.deviceToken;
+    if (token == null) return;
+    try {
+      final res = await ref.read(deviceServiceProvider).listTemplates(deviceToken: token);
+      setState(() {
+        _templates = ((res['templates'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _createCampaign() async {
+    final token = widget.appState.deviceToken;
+    if (token == null) return;
+
+    final name = _nameCtrl.text.trim();
+    final message = _messageCtrl.text.trim();
+    final rawContacts = _contactsCtrl.text.trim();
+
+    if (name.isEmpty || message.isEmpty || rawContacts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Remplissez tous les champs')),
+      );
+      return;
+    }
+
+    final contacts = rawContacts
+        .split(RegExp(r'[\n,;]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    if (contacts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Aucun contact valide')),
+      );
+      return;
+    }
+
+    setState(() => _creating = true);
+    try {
+      await ref.read(deviceServiceProvider).createCampaign(
+        deviceToken: token,
+        name: name,
+        message: message,
+        contacts: contacts,
+        simSlotIndex: _simSlot,
+        priority: _priority,
+      );
+      _nameCtrl.clear();
+      _messageCtrl.clear();
+      _contactsCtrl.clear();
+      setState(() { _showCreate = false; _creating = false; _priority = 0; _simSlot = null; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Campagne lancee avec succes !'), backgroundColor: Color(0xFF16A34A)),
+      );
+      _loadCampaigns();
+      widget.notifier.refreshActiveCampaign(silent: false);
+    } catch (e) {
+      setState(() => _creating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _openDetail(String id) async {
+    final token = widget.appState.deviceToken;
+    if (token == null) return;
+    setState(() { _loadingDetail = true; });
+    try {
+      final res = await ref.read(deviceServiceProvider).campaignDetail(
+        deviceToken: token, campaignId: id,
+      );
+      setState(() {
+        _detailCampaign = Map<String, dynamic>.from(res['campaign'] as Map);
+        _detailStats = Map<String, dynamic>.from((res['message_stats'] as Map?) ?? {});
+        _loadingDetail = false;
+      });
+    } catch (e) {
+      setState(() { _loadingDetail = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur: $e')),
+      );
+    }
+  }
+
+  Future<void> _controlCampaign(String action) async {
+    final token = widget.appState.deviceToken;
+    final id = _detailCampaign?['id']?.toString();
+    if (token == null || id == null) return;
+    try {
+      await ref.read(deviceServiceProvider).campaignControl(
+        action: action, campaignId: id, deviceToken: token,
+      );
+      await _openDetail(id);
+      _loadCampaigns();
+      widget.notifier.refreshActiveCampaign(silent: false);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur: $e')),
+      );
+    }
+  }
+
+  Color _statusColor(String? status) {
+    switch (status) {
+      case 'running': return const Color(0xFF16A34A);
+      case 'paused': return Colors.orange;
+      case 'queued': return Colors.blue;
+      case 'completed': return Colors.grey;
+      case 'canceled': return Colors.red;
+      default: return Colors.grey;
+    }
+  }
+
+  String _statusLabel(String? status) {
+    switch (status) {
+      case 'running': return 'En cours';
+      case 'paused': return 'En pause';
+      case 'queued': return 'En attente';
+      case 'completed': return 'Terminee';
+      case 'canceled': return 'Annulee';
+      default: return status ?? '-';
+    }
+  }
+
+  String _priorityLabel(int? p) {
+    switch (p) {
+      case 2: return 'Urgente';
+      case 1: return 'Haute';
+      default: return 'Normale';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_detailCampaign != null) return _buildDetail();
+    if (_showCreate) return _buildCreateForm();
+    return _buildList();
+  }
+
+  Widget _buildList() {
+    const green = Color(0xFF16A34A);
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(top: 120, left: 16, right: 16, bottom: 100),
+      children: [
+        // Filter chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final f in [
+                {'key': 'all', 'label': 'Toutes'},
+                {'key': 'running', 'label': 'En cours'},
+                {'key': 'paused', 'label': 'En pause'},
+                {'key': 'completed', 'label': 'Terminees'},
+                {'key': 'canceled', 'label': 'Annulees'},
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(f['label']!),
+                    selected: _filterStatus == f['key'],
+                    onSelected: (_) {
+                      setState(() => _filterStatus = f['key']!);
+                      _loadCampaigns();
+                    },
+                    selectedColor: green.withValues(alpha: 0.15),
+                    labelStyle: TextStyle(
+                      color: _filterStatus == f['key'] ? green : Colors.grey.shade700,
+                      fontWeight: _filterStatus == f['key'] ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // New campaign button
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: FilledButton.icon(
+            onPressed: () {
+              _loadTemplates();
+              setState(() => _showCreate = true);
+            },
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Nouvelle campagne', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            style: FilledButton.styleFrom(
+              backgroundColor: green,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        if (_loading)
+          const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()))
+        else if (_error != null)
+          Center(child: Padding(
+            padding: const EdgeInsets.all(40),
+            child: Text(_error!, style: const TextStyle(color: Colors.red)),
+          ))
+        else if (_campaigns.isEmpty)
+          Center(child: Padding(
+            padding: const EdgeInsets.all(40),
+            child: Column(
+              children: [
+                Icon(Icons.campaign_outlined, size: 48, color: Colors.grey.shade300),
+                const SizedBox(height: 12),
+                Text('Aucune campagne', style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
+              ],
+            ),
+          ))
+        else
+          ..._campaigns.map((c) {
+            final status = c['status']?.toString() ?? '';
+            final total = c['total_count'] ?? 0;
+            final sent = c['sent_count'] ?? 0;
+            final progress = total > 0 ? sent / total : 0.0;
+
+            return GestureDetector(
+              onTap: () => _openDetail(c['id'].toString()),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade200),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8, offset: const Offset(0, 2))],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            c['name']?.toString() ?? 'Sans nom',
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _statusColor(status).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            _statusLabel(status),
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _statusColor(status)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 6,
+                        backgroundColor: Colors.grey.shade100,
+                        valueColor: AlwaysStoppedAnimation(_statusColor(status)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Text('$sent / $total SMS', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                        const Spacer(),
+                        if ((c['priority'] ?? 0) > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: (c['priority'] == 2 ? Colors.red : Colors.orange).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              _priorityLabel(c['priority']),
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: c['priority'] == 2 ? Colors.red : Colors.orange),
+                            ),
+                          ),
+                        const SizedBox(width: 8),
+                        Icon(Icons.chevron_right_rounded, size: 20, color: Colors.grey.shade400),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
+  Widget _buildCreateForm() {
+    const green = Color(0xFF16A34A);
+    final sims = widget.appState.availableSims;
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(top: 120, left: 16, right: 16, bottom: 40),
+      children: [
+        Row(
+          children: [
+            IconButton(
+              onPressed: () => setState(() => _showCreate = false),
+              icon: const Icon(Icons.arrow_back_rounded),
+            ),
+            const Text('Nouvelle campagne', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Name
+        TextField(
+          controller: _nameCtrl,
+          decoration: InputDecoration(
+            labelText: 'Nom de la campagne',
+            hintText: 'Ex: Promo Noel 2026',
+            prefixIcon: const Icon(Icons.campaign_rounded),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // Templates
+        if (_templates.isNotEmpty) ...[
+          SizedBox(
+            height: 40,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final t in _templates)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ActionChip(
+                      avatar: const Icon(Icons.text_snippet_rounded, size: 16),
+                      label: Text(t['name']?.toString() ?? '', style: const TextStyle(fontSize: 12)),
+                      onPressed: () {
+                        _messageCtrl.text = t['body']?.toString() ?? '';
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+
+        // Message
+        TextField(
+          controller: _messageCtrl,
+          maxLines: 4,
+          decoration: InputDecoration(
+            labelText: 'Message SMS',
+            hintText: 'Bonjour {nom}, profitez de notre promo...',
+            alignLabelWithHint: true,
+            prefixIcon: const Padding(padding: EdgeInsets.only(bottom: 60), child: Icon(Icons.sms_rounded)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4, left: 4),
+          child: Text(
+            '${_messageCtrl.text.length} caracteres',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // Contacts
+        TextField(
+          controller: _contactsCtrl,
+          maxLines: 5,
+          decoration: InputDecoration(
+            labelText: 'Numeros de telephone',
+            hintText: 'Un numero par ligne, ou separes par virgule\n+22507xxxxxxxx\n+33612345678',
+            alignLabelWithHint: true,
+            prefixIcon: const Padding(padding: EdgeInsets.only(bottom: 90), child: Icon(Icons.contacts_rounded)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4, left: 4),
+          child: Text(
+            '${_contactsCtrl.text.split(RegExp(r"[\n,;]+"
+            )).where((e) => e.trim().isNotEmpty).length} contacts',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // SIM selector
+        if (sims.isNotEmpty) ...[
+          DropdownButtonFormField<int?>(
+            value: _simSlot,
+            decoration: InputDecoration(
+              labelText: 'Carte SIM',
+              prefixIcon: const Icon(Icons.sim_card_rounded),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('Automatique')),
+              ...sims.map((s) => DropdownMenuItem(
+                value: s.simSlotIndex,
+                child: Text(s.label()),
+              )),
+            ],
+            onChanged: (v) => setState(() => _simSlot = v),
+          ),
+          const SizedBox(height: 14),
+        ],
+
+        // Priority
+        Row(
+          children: [
+            const Icon(Icons.flag_rounded, size: 20, color: Colors.grey),
+            const SizedBox(width: 8),
+            const Text('Priorite: ', style: TextStyle(fontWeight: FontWeight.w500)),
+            const SizedBox(width: 8),
+            for (final p in [
+              {'v': 0, 'l': 'Normale', 'c': Colors.green},
+              {'v': 1, 'l': 'Haute', 'c': Colors.orange},
+              {'v': 2, 'l': 'Urgente', 'c': Colors.red},
+            ])
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: ChoiceChip(
+                  label: Text(p['l'] as String, style: TextStyle(fontSize: 12, color: _priority == p['v'] ? Colors.white : p['c'] as Color)),
+                  selected: _priority == p['v'],
+                  onSelected: (_) => setState(() => _priority = p['v'] as int),
+                  selectedColor: p['c'] as Color,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 24),
+
+        // Submit
+        SizedBox(
+          width: double.infinity,
+          height: 54,
+          child: FilledButton.icon(
+            onPressed: _creating ? null : _createCampaign,
+            icon: Icon(_creating ? Icons.hourglass_empty_rounded : Icons.send_rounded),
+            label: Text(
+              _creating ? 'Lancement...' : 'Lancer la campagne',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: green,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDetail() {
+    const green = Color(0xFF16A34A);
+    final c = _detailCampaign!;
+    final stats = _detailStats ?? {};
+    final status = c['status']?.toString() ?? '';
+    final total = c['total_count'] ?? 0;
+    final sent = c['sent_count'] ?? 0;
+    final progress = total > 0 ? sent / total : 0.0;
+
+    final queued = stats['queued'] ?? 0;
+    final sending = stats['sending'] ?? 0;
+    final sentStat = stats['sent'] ?? 0;
+    final failed = stats['failed'] ?? 0;
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(top: 120, left: 16, right: 16, bottom: 40),
+      children: [
+        Row(
+          children: [
+            IconButton(
+              onPressed: () => setState(() { _detailCampaign = null; _detailStats = null; }),
+              icon: const Icon(Icons.arrow_back_rounded),
+            ),
+            Expanded(
+              child: Text(
+                c['name']?.toString() ?? 'Campagne',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            IconButton(
+              onPressed: () => _openDetail(c['id'].toString()),
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Status + progress
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 12, height: 12,
+                    decoration: BoxDecoration(
+                      color: _statusColor(status),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _statusLabel(status),
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _statusColor(status)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    width: 100, height: 100,
+                    child: CircularProgressIndicator(
+                      value: progress,
+                      strokeWidth: 8,
+                      backgroundColor: Colors.grey.shade100,
+                      valueColor: AlwaysStoppedAnimation(_statusColor(status)),
+                    ),
+                  ),
+                  Text(
+                    '${(progress * 100).round()}%',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text('$sent / $total SMS envoyes', style: TextStyle(color: Colors.grey.shade600)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Stats grid
+        Row(
+          children: [
+            _statCard('En attente', '$queued', Colors.blue),
+            const SizedBox(width: 8),
+            _statCard('En cours', '$sending', Colors.orange),
+            const SizedBox(width: 8),
+            _statCard('Envoyes', '$sentStat', green),
+            const SizedBox(width: 8),
+            _statCard('Echoues', '$failed', Colors.red),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Priority
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.flag_rounded, size: 20),
+              const SizedBox(width: 8),
+              const Text('Priorite: ', style: TextStyle(fontWeight: FontWeight.w500)),
+              Text(_priorityLabel(c['priority']), style: const TextStyle(fontWeight: FontWeight.w600)),
+              const Spacer(),
+              if (c['sim_slot_index'] != null) ...[
+                const Icon(Icons.sim_card_rounded, size: 18, color: Colors.grey),
+                const SizedBox(width: 4),
+                Text('SIM ${(c['sim_slot_index'] as int) + 1}', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // Action buttons
+        if (status == 'running' || status == 'paused') ...[
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _controlCampaign(status == 'running' ? 'pause' : 'resume'),
+                  icon: Icon(status == 'running' ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                  label: Text(status == 'running' ? 'Pause' : 'Reprendre'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: status == 'running' ? Colors.orange : green,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _controlCampaign('cancel'),
+                  icon: const Icon(Icons.cancel_rounded, color: Colors.red),
+                  label: const Text('Annuler', style: TextStyle(color: Colors.red)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.red),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+
+        if (_loadingDetail)
+          const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator())),
+      ],
+    );
+  }
+
+  Widget _statCard(String label, String value, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(fontSize: 10, color: color.withValues(alpha: 0.8)), textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================//
 // NAVIGATION DRAWER + SECTIONS
 // ============================================================================//
 
@@ -3566,6 +4306,13 @@ class _AppDrawer extends StatelessWidget {
                       icon: Icons.dashboard_rounded,
                       label: 'Dashboard',
                       section: AppSection.dashboard,
+                    ),
+                    const SizedBox(height: 4),
+                    _navItem(
+                      context,
+                      icon: Icons.campaign_rounded,
+                      label: 'Campagnes',
+                      section: AppSection.campaigns,
                     ),
                     const SizedBox(height: 4),
                     _navItem(
