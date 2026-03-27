@@ -1,49 +1,52 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sha256Hex } from '@/lib/device-token'
-import crypto from 'node:crypto'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+function getSupabaseEnv() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url) throw new Error('NEXT_PUBLIC_SUPABASE_URL manquant')
+  if (!anonKey) throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY manquant')
+  return { url, anonKey }
+}
+
 async function resolveDevice(service: ReturnType<typeof createServiceClient>, deviceToken: string) {
-  // Primary: SHA-256 hash (same as Edge Functions)
+  // Method 1: Node.js SHA-256
   const hash = sha256Hex(deviceToken)
   const { data } = await service
     .from('devices')
     .select('id, org_id')
     .eq('token_hash', hash)
     .maybeSingle()
-
   if (data) return data
 
-  // Fallback 1: try Web Crypto API hash (in case of subtle differences)
+  // Method 2: verify via Edge Function heartbeat (uses Deno SHA-256)
   try {
-    const encoded = new TextEncoder().encode(deviceToken)
-    const hashBuffer = await crypto.subtle.digest('SHA-256', encoded)
-    const hashArray = new Uint8Array(hashBuffer)
-    let webCryptoHash = ''
-    for (let i = 0; i < hashArray.length; i++) {
-      webCryptoHash += hashArray[i].toString(16).padStart(2, '0')
-    }
-    if (webCryptoHash !== hash) {
-      const { data: d2 } = await service
+    const { url, anonKey } = getSupabaseEnv()
+    const res = await fetch(`${url}/functions/v1/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({ device_token: deviceToken }),
+    })
+    const hbData = await res.json()
+    if (hbData?.device_id) {
+      const { data: dev } = await service
         .from('devices')
         .select('id, org_id')
-        .eq('token_hash', webCryptoHash)
+        .eq('id', hbData.device_id)
         .maybeSingle()
-      if (d2) return d2
+      if (dev) return dev
     }
   } catch (_) {}
 
-  // Fallback 2: raw token as token_hash (legacy)
-  const { data: fallback } = await service
-    .from('devices')
-    .select('id, org_id')
-    .eq('token_hash', deviceToken)
-    .maybeSingle()
-
-  return fallback
+  return null
 }
 
 function smartParsePhone(raw: string): string | null {
@@ -80,20 +83,7 @@ export async function POST(req: Request) {
 
     const device = await resolveDevice(service, deviceToken)
     if (!device) {
-      const hash = sha256Hex(deviceToken)
-      let debugInfo: any = { token_length: deviceToken.length, hash_prefix: hash.substring(0, 8) }
-      try {
-        const { count, error: cErr } = await service.from('devices').select('*', { count: 'exact', head: true })
-        debugInfo.devices_total = count
-        debugInfo.count_error = cErr?.message || null
-      } catch (e2: any) {
-        debugInfo.count_error = e2?.message
-      }
-      return NextResponse.json({
-        ok: false,
-        error: 'Appareil non reconnu',
-        debug: debugInfo,
-      }, { status: 403 })
+      return NextResponse.json({ ok: false, error: 'Appareil non reconnu' }, { status: 403 })
     }
 
     // ── LIST ──
