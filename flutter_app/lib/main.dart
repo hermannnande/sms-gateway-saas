@@ -1,6 +1,10 @@
+import 'dart:io';
 import 'dart:ui';
 import 'dart:convert';
 import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:excel/excel.dart' as xl;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1116,7 +1120,6 @@ class MyApp extends ConsumerStatefulWidget {
 }
 
 class _MyAppState extends ConsumerState<MyApp> {
-  bool _checkedUpdate = false;
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
 
@@ -1299,73 +1302,6 @@ class _MyAppState extends ConsumerState<MyApp> {
     );
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Check update once (after first build)
-    if (_checkedUpdate) return;
-    _checkedUpdate = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkUpdateIfNeeded());
-  }
-
-  Future<void> _checkUpdateIfNeeded() async {
-    try {
-      final update = await ref.read(appUpdateServiceProvider).checkForUpdate();
-      if (!mounted || update == null) return;
-
-      // Ne pas spammer si un dialogue est déjà ouvert
-      if (!mounted) return;
-      // ignore: use_build_context_synchronously
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: true,
-        builder: (ctx) {
-          return AlertDialog(
-            title: Text('Mise à jour disponible (${update.latestVersion})'),
-            content: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Une nouvelle version de l’app est disponible.\nAndroid vous demandera de confirmer l’installation.',
-                  ),
-                  const SizedBox(height: 12),
-                  if (update.notes != null && update.notes!.isNotEmpty) ...[
-                    const Text('Notes de version :', style: TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 6),
-                    Text(update.notes!),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                },
-                child: const Text('Plus tard'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  await ref.read(appUpdateServiceProvider).ignoreVersion(update.latestVersion);
-                  if (ctx.mounted) Navigator.of(ctx).pop();
-                },
-                child: const Text('Ignorer cette version'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  await ref.read(appUpdateServiceProvider).openApkDownload(update.apkUrl);
-                },
-                child: const Text('Mettre à jour'),
-              ),
-            ],
-          );
-        },
-      );
-    } catch (e, st) {
-      ref.read(loggerProvider).w('Update check failed', error: e, stackTrace: st);
-    }
-  }
 }
 
 class PairingPage extends ConsumerStatefulWidget {
@@ -2828,8 +2764,12 @@ class _HomePageState extends ConsumerState<HomePage>
     // Start heartbeat timer to keep device "online"
     _startHeartbeat();
 
-    // Check for updates now + every 5 minutes
-    scheduleMicrotask(() => ref.read(appProvider.notifier).checkForUpdate());
+    // Check for updates now + show dialog + every 5 minutes
+    scheduleMicrotask(() async {
+      await ref.read(appUpdateServiceProvider).clearIgnored();
+      await ref.read(appProvider.notifier).checkForUpdate();
+      _showUpdateDialogIfAvailable();
+    });
     _updateCheckTimer = Timer.periodic(const Duration(minutes: 5), (_) {
       ref.read(appProvider.notifier).checkForUpdate();
     });
@@ -2948,6 +2888,92 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   }
 
+  void _showUpdateDialogIfAvailable() {
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      final appState = ref.read(appProvider);
+      if (appState.updateVersion == null) return;
+      _showUpdateDialog(appState.updateVersion!, appState.updateUrl ?? '', appState.updateNotes);
+    });
+  }
+
+  void _showUpdateDialog(String version, String url, String? notes) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.system_update_rounded, color: Color(0xFFF59E0B), size: 28),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text('Mise a jour $version', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Une nouvelle version est disponible.'),
+              if (notes != null && notes.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Nouveautes :', style: TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                Text(notes, style: const TextStyle(fontSize: 13)),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Plus tard'),
+          ),
+          FilledButton.icon(
+            onPressed: () async {
+              if (url.isNotEmpty) {
+                await ref.read(appUpdateServiceProvider).openApkDownload(url);
+              }
+            },
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: const Text('Telecharger'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _manualCheckForUpdate() async {
+    await ref.read(appUpdateServiceProvider).clearIgnored();
+    await ref.read(appProvider.notifier).checkForUpdate();
+    if (!mounted) return;
+    final appState = ref.read(appProvider);
+    if (appState.updateVersion != null) {
+      _showUpdateDialog(appState.updateVersion!, appState.updateUrl ?? '', appState.updateNotes);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Vous avez la derniere version.'),
+          backgroundColor: const Color(0xFF16A34A),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
@@ -3032,6 +3058,7 @@ class _HomePageState extends ConsumerState<HomePage>
         selected: section,
         onSelect: _setSection,
         onLogout: _showLogoutDialog,
+        onCheckUpdate: _manualCheckForUpdate,
       ),
       appBar: AppBar(
         elevation: 0,
@@ -3070,47 +3097,58 @@ class _HomePageState extends ConsumerState<HomePage>
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              const Color(0xFF16A34A).withOpacity(0.05),
-              Colors.white,
-            ],
+      body: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  const Color(0xFF16A34A).withOpacity(0.05),
+                  Colors.white,
+                ],
+              ),
+            ),
+            child: RefreshIndicator(
+              onRefresh: () async {
+                HapticFeedback.mediumImpact();
+                switch (section) {
+                  case AppSection.dashboard:
+                    await notifier.syncOnce();
+                    break;
+                  case AppSection.campaigns:
+                    break;
+                  case AppSection.messages:
+                    await notifier.refreshInboxMessages(silent: false);
+                    break;
+                  case AppSection.history:
+                    await notifier.refreshOutboxHistory(silent: false);
+                    break;
+                  case AppSection.subscription:
+                    await notifier.refreshSubscription(silent: false);
+                    break;
+                  case AppSection.devices:
+                    await notifier.refreshDeviceStatus(silent: false);
+                    break;
+                  case AppSection.profile:
+                    await notifier.refreshAccountInfo();
+                    await notifier.refreshSubscription(silent: true);
+                    break;
+                }
+              },
+              color: const Color(0xFF16A34A),
+              child: _buildSectionContent(section, appState, notifier),
+            ),
           ),
-        ),
-        child: RefreshIndicator(
-          onRefresh: () async {
-            HapticFeedback.mediumImpact();
-            switch (section) {
-              case AppSection.dashboard:
-                await notifier.syncOnce();
-                break;
-              case AppSection.campaigns:
-                break;
-              case AppSection.messages:
-                await notifier.refreshInboxMessages(silent: false);
-                break;
-              case AppSection.history:
-                await notifier.refreshOutboxHistory(silent: false);
-                break;
-              case AppSection.subscription:
-                await notifier.refreshSubscription(silent: false);
-                break;
-              case AppSection.devices:
-                await notifier.refreshDeviceStatus(silent: false);
-                break;
-              case AppSection.profile:
-                await notifier.refreshAccountInfo();
-                await notifier.refreshSubscription(silent: true);
-                break;
-            }
-          },
-          color: const Color(0xFF16A34A),
-          child: _buildSectionContent(section, appState, notifier),
-        ),
+          if (appState.updateVersion != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+              left: 16,
+              right: 16,
+              child: _UpdateBanner(appState: appState, notifier: notifier),
+            ),
+        ],
       ),
     );
   }
@@ -3492,6 +3530,13 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   String? _error;
   String _filterStatus = 'all';
 
+  // Pagination
+  int _page = 1;
+  int _totalCampaigns = 0;
+  bool _loadingMore = false;
+  final _scrollCtrl = ScrollController();
+  static const _pageSize = 20;
+
   // Create campaign form
   bool _showCreate = false;
   bool _creating = false;
@@ -3501,6 +3546,8 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   int _priority = 0;
   int? _simSlot;
   List<Map<String, dynamic>> _templates = [];
+  bool _importingFile = false;
+  int _importedCount = 0;
 
   // Detail view
   Map<String, dynamic>? _detailCampaign;
@@ -3511,6 +3558,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   void initState() {
     super.initState();
     _loadCampaigns();
+    _scrollCtrl.addListener(_onScroll);
   }
 
   @override
@@ -3518,27 +3566,152 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
     _nameCtrl.dispose();
     _messageCtrl.dispose();
     _contactsCtrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 200) {
+      _loadMoreCampaigns();
+    }
   }
 
   Future<void> _loadCampaigns() async {
     final token = widget.appState.deviceToken;
     if (token == null) return;
-    setState(() { _loading = true; _error = null; });
+    setState(() { _loading = true; _error = null; _page = 1; });
     try {
       final res = await ref.read(deviceServiceProvider).listCampaigns(
         deviceToken: token,
-        limit: 50,
+        page: 1,
+        limit: _pageSize,
         status: _filterStatus == 'all' ? null : _filterStatus,
       );
       final list = (res['campaigns'] as List?) ?? [];
       setState(() {
         _campaigns = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        _totalCampaigns = (res['total'] as int?) ?? list.length;
         _loading = false;
       });
     } catch (e) {
       setState(() { _error = e.toString(); _loading = false; });
     }
+  }
+
+  Future<void> _loadMoreCampaigns() async {
+    if (_loadingMore || _campaigns.length >= _totalCampaigns) return;
+    final token = widget.appState.deviceToken;
+    if (token == null) return;
+    setState(() => _loadingMore = true);
+    try {
+      final nextPage = _page + 1;
+      final res = await ref.read(deviceServiceProvider).listCampaigns(
+        deviceToken: token,
+        page: nextPage,
+        limit: _pageSize,
+        status: _filterStatus == 'all' ? null : _filterStatus,
+      );
+      final list = (res['campaigns'] as List?) ?? [];
+      setState(() {
+        _campaigns.addAll(list.map((e) => Map<String, dynamic>.from(e as Map)));
+        _page = nextPage;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      setState(() => _loadingMore = false);
+    }
+  }
+
+  Future<void> _importContactsFromFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['txt', 'csv', 'xlsx', 'xls'],
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+      setState(() => _importingFile = true);
+
+      final file = result.files.first;
+      final path = file.path;
+      if (path == null) {
+        setState(() => _importingFile = false);
+        return;
+      }
+
+      final extension = file.extension?.toLowerCase() ?? '';
+      List<String> numbers = [];
+
+      if (extension == 'txt') {
+        final content = await File(path).readAsString();
+        numbers = _extractNumbers(content);
+      } else if (extension == 'csv') {
+        final content = await File(path).readAsString();
+        final lines = content.split(RegExp(r'[\r\n]+'));
+        for (final line in lines) {
+          final cells = line.split(RegExp(r'[,;\t]+'));
+          for (final cell in cells) {
+            final val = cell.replaceAll('"', '').trim();
+            if (_looksLikePhone(val)) numbers.add(val);
+          }
+        }
+      } else if (extension == 'xlsx' || extension == 'xls') {
+        final bytes = await File(path).readAsBytes();
+        final excel = xl.Excel.decodeBytes(bytes);
+        for (final sheet in excel.tables.keys) {
+          for (final row in excel.tables[sheet]!.rows) {
+            for (final cell in row) {
+              if (cell == null) continue;
+              final val = cell.value?.toString().trim() ?? '';
+              if (_looksLikePhone(val)) numbers.add(val);
+            }
+          }
+        }
+      }
+
+      numbers = numbers.toSet().toList();
+
+      if (numbers.isNotEmpty) {
+        final existing = _contactsCtrl.text.trim();
+        if (existing.isNotEmpty) {
+          _contactsCtrl.text = '$existing\n${numbers.join('\n')}';
+        } else {
+          _contactsCtrl.text = numbers.join('\n');
+        }
+        _importedCount = numbers.length;
+      }
+
+      setState(() => _importingFile = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${numbers.length} numeros importes depuis ${file.name}'),
+            backgroundColor: numbers.isNotEmpty ? const Color(0xFF16A34A) : Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _importingFile = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur import: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  List<String> _extractNumbers(String content) {
+    final lines = content.split(RegExp(r'[\n,;]+'));
+    return lines
+        .map((e) => e.trim())
+        .where((e) => _looksLikePhone(e))
+        .toList();
+  }
+
+  bool _looksLikePhone(String val) {
+    if (val.isEmpty) return false;
+    final cleaned = val.replaceAll(RegExp(r'[\s\-\.\(\)]'), '');
+    return RegExp(r'^\+?\d{7,15}$').hasMatch(cleaned);
   }
 
   Future<void> _loadTemplates() async {
@@ -3687,8 +3860,10 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
 
   Widget _buildList() {
     const green = Color(0xFF16A34A);
+    final hasMore = _campaigns.length < _totalCampaigns;
 
     return ListView(
+      controller: _scrollCtrl,
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(top: 120, left: 16, right: 16, bottom: 100),
       children: [
@@ -3841,6 +4016,36 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
               ),
             );
           }),
+
+        if (_loadingMore)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          )
+        else if (hasMore && !_loading && _campaigns.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: TextButton.icon(
+                onPressed: _loadMoreCampaigns,
+                icon: const Icon(Icons.expand_more_rounded),
+                label: Text(
+                  'Charger plus (${_campaigns.length}/$_totalCampaigns)',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+            ),
+          )
+        else if (!_loading && _campaigns.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: Text(
+                '${_campaigns.length} campagne${_campaigns.length > 1 ? 's' : ''} au total',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -3936,9 +4141,94 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
         Padding(
           padding: const EdgeInsets.only(top: 4, left: 4),
           child: Text(
-            '${_contactsCtrl.text.split(RegExp(r"[\n,;]+"
-            )).where((e) => e.trim().isNotEmpty).length} contacts',
+            '${_contactsCtrl.text.split(RegExp(r"[\n,;]+")).where((e) => e.trim().isNotEmpty).length} contacts',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // File import buttons
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: green.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: green.withValues(alpha: 0.2)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.upload_file_rounded, size: 18, color: green),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Importer des contacts',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Importez depuis un fichier TXT, CSV ou Excel (.xlsx)',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _importingFile ? null : _importContactsFromFile,
+                      icon: _importingFile
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.file_open_rounded, size: 18),
+                      label: Text(
+                        _importingFile ? 'Import...' : 'Choisir un fichier',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: green,
+                        side: BorderSide(color: green.withValues(alpha: 0.4)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                  if (_importedCount > 0) ...[
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: green.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '+$_importedCount',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: green),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (_contactsCtrl.text.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.check_circle_outline_rounded, size: 14, color: green),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_contactsCtrl.text.split(RegExp(r"[\n,;]+")).where((e) => e.trim().isNotEmpty).length} numeros au total',
+                      style: TextStyle(fontSize: 11, color: green, fontWeight: FontWeight.w500),
+                    ),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => setState(() { _contactsCtrl.clear(); _importedCount = 0; }),
+                      child: Text('Effacer', style: TextStyle(fontSize: 11, color: Colors.red.shade400, fontWeight: FontWeight.w500)),
+                    ),
+                  ],
+                ),
+              ],
+            ],
           ),
         ),
         const SizedBox(height: 14),
@@ -4209,11 +4499,13 @@ class _AppDrawer extends StatelessWidget {
     required this.selected,
     required this.onSelect,
     required this.onLogout,
+    this.onCheckUpdate,
   });
 
   final AppSection selected;
   final ValueChanged<AppSection> onSelect;
   final VoidCallback onLogout;
+  final VoidCallback? onCheckUpdate;
 
   @override
   Widget build(BuildContext context) {
@@ -4383,6 +4675,47 @@ class _AppDrawer extends StatelessWidget {
                           Navigator.of(context).pop();
                           final uri = Uri.parse('${AppConfig.webApiBaseUrl}/dashboard');
                           await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        },
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [const Color(0xFFF59E0B).withOpacity(0.1), const Color(0xFFFBBF24).withOpacity(0.05)],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.3)),
+                      ),
+                      child: ListTile(
+                        leading: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF59E0B).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.system_update_rounded,
+                            color: Color(0xFFF59E0B),
+                            size: 22,
+                          ),
+                        ),
+                        title: const Text(
+                          'Verifier les mises a jour',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                            fontSize: 15,
+                          ),
+                        ),
+                        onTap: () {
+                          HapticFeedback.mediumImpact();
+                          Navigator.of(context).pop();
+                          onCheckUpdate?.call();
                         },
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -4633,10 +4966,8 @@ class _DashboardSectionState extends State<_DashboardSection> {
 
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(top: 120, left: 20, right: 20, bottom: 20),
+      padding: EdgeInsets.only(top: hasUpdate ? 200 : 120, left: 20, right: 20, bottom: 20),
       children: [
-        if (hasUpdate) _UpdateBanner(appState: appState, notifier: notifier),
-        if (hasUpdate) const SizedBox(height: 12),
         if (hasCampaign) _CampaignProgressCard(appState: appState, notifier: notifier),
         if (hasCampaign) const SizedBox(height: 16),
 

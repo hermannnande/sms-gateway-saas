@@ -52,3 +52,5 @@ key.properties
 
 # Credentials (IMPORTANT: ne jamais commit ce fichier)
 CREDENTIALS_IMPORTANT.txt
+
+.vercel

@@ -1,9 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 
 export function createServiceClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
   const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+    (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim() || undefined
 
   if (!url) {
     throw new Error('NEXT_PUBLIC_SUPABASE_URL manquant')

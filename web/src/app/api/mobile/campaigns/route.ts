@@ -13,19 +13,13 @@ function getSupabaseEnv() {
   return { url, anonKey }
 }
 
-async function resolveDevice(service: ReturnType<typeof createServiceClient>, deviceToken: string) {
-  // Method 1: Node.js SHA-256
-  const hash = sha256Hex(deviceToken)
-  const { data } = await service
-    .from('devices')
-    .select('id, org_id')
-    .eq('token_hash', hash)
-    .maybeSingle()
-  if (data) return data
+async function resolveDevice(service: ReturnType<typeof createServiceClient>, deviceToken: string): Promise<{ id: string; org_id: string } | null> {
+  const debugLog: string[] = []
 
-  // Method 2: verify via Edge Function heartbeat (uses Deno SHA-256)
+  // Method 1: Edge Function heartbeat (Deno SHA-256)
   try {
     const { url, anonKey } = getSupabaseEnv()
+    debugLog.push(`hb_url=${url}/functions/v1/heartbeat`)
     const res = await fetch(`${url}/functions/v1/heartbeat`, {
       method: 'POST',
       headers: {
@@ -35,17 +29,43 @@ async function resolveDevice(service: ReturnType<typeof createServiceClient>, de
       },
       body: JSON.stringify({ device_token: deviceToken }),
     })
-    const hbData = await res.json()
-    if (hbData?.device_id) {
-      const { data: dev } = await service
-        .from('devices')
-        .select('id, org_id')
-        .eq('id', hbData.device_id)
-        .maybeSingle()
-      if (dev) return dev
+    debugLog.push(`hb_status=${res.status}`)
+    const hbText = await res.text()
+    debugLog.push(`hb_body=${hbText.substring(0, 200)}`)
+    if (res.ok) {
+      const hbData = JSON.parse(hbText)
+      if (hbData?.device_id) {
+        debugLog.push(`hb_device_id=${hbData.device_id}`)
+        const { data: dev } = await service
+          .from('devices')
+          .select('id, org_id')
+          .eq('id', hbData.device_id)
+          .maybeSingle()
+        if (dev) return dev
+        debugLog.push('hb_db_lookup_failed')
+      }
     }
-  } catch (_) {}
+  } catch (e: any) {
+    debugLog.push(`hb_error=${e.message}`)
+  }
 
+  // Method 2: Node.js SHA-256
+  try {
+    const hash = sha256Hex(deviceToken)
+    debugLog.push(`node_hash=${hash.substring(0, 16)}`)
+    const { data, error } = await service
+      .from('devices')
+      .select('id, org_id')
+      .eq('token_hash', hash)
+      .maybeSingle()
+    debugLog.push(`node_result=${data ? 'found' : 'null'}${error ? ',err=' + error.message : ''}`)
+    if (data) return data
+  } catch (e: any) {
+    debugLog.push(`node_error=${e.message}`)
+  }
+
+  // Store debug log for error response
+  ;(resolveDevice as any)._lastDebug = debugLog
   return null
 }
 
@@ -83,7 +103,16 @@ export async function POST(req: Request) {
 
     const device = await resolveDevice(service, deviceToken)
     if (!device) {
-      return NextResponse.json({ ok: false, error: 'Appareil non reconnu' }, { status: 403 })
+      const hash = sha256Hex(deviceToken)
+      return NextResponse.json({
+        ok: false,
+        error: 'Appareil non reconnu',
+        debug: {
+          token_length: deviceToken.length,
+          hash_prefix: hash.substring(0, 12),
+          steps: (resolveDevice as any)._lastDebug || [],
+        },
+      }, { status: 403 })
     }
 
     // ── LIST ──

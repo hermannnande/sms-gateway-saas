@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.1.0+44",
+  "latestVersion": "1.2.0+46",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Gestion complete des campagnes dans l'app\n• Creer, lancer, pause, reprendre, annuler\n• Liste avec filtres et detail avec stats\n• Selection SIM et priorite\n• Templates SMS"
+  "notes": "• Pagination des campagnes (chargement progressif)\n• Import de contacts depuis fichier TXT, CSV, Excel\n• Interface d'import amelioree\n• Corrections de fiabilite"
 }

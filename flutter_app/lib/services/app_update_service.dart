@@ -45,6 +45,11 @@ class AppUpdateService {
     await prefs.setString(_ignoredKey, version);
   }
 
+  Future<void> clearIgnored() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_ignoredKey);
+  }
+
   Future<void> openApkDownload(String url) async {
     final uri = Uri.parse(url);
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
