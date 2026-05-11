@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.1+48",
+  "latestVersion": "1.3.2+49",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• FIX Android 13+ : SMS_SENT recoit les callbacks de la telephonie (RECEIVER_EXPORTED)\n• FIX : reception SMS sur applicationContext (service premier plan / activite arretee)\n• Versions precedentes pouvaient rester bloquees en timeout ou echecs silencieux"
+  "notes": "• FIX MAJEUR : envoi SMS en mode rapide (comme avant)\n• Plus de blocage 25s par message\n• Auto-deblocage des SMS coinces cote serveur"
 }

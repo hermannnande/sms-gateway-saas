@@ -1,13 +1,7 @@
 package com.smsgateway.app
 
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
@@ -15,8 +9,6 @@ import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.util.UUID
-import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.smsgateway.app/sms"
@@ -42,7 +34,7 @@ class MainActivity : FlutterActivity() {
                                     "subscriptionId" to info.subscriptionId,
                                     "simSlotIndex" to info.simSlotIndex,
                                     "displayName" to (info.displayName?.toString() ?: ""),
-                                    "carrierName" to (info.carrierName?.toString() ?: "")
+                                    "carrierName" to (info.carrierName?.toString() ?: ""),
                                 )
                             }
                             result.success(sims)
@@ -57,7 +49,8 @@ class MainActivity : FlutterActivity() {
 
                     "getAndroidId" -> {
                         try {
-                            val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                            val androidId =
+                                Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                             result.success(androidId)
                         } catch (e: Exception) {
                             Log.e(tag, "getAndroidId failed", e)
@@ -70,6 +63,12 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    // Send an SMS in fire-and-forget mode: this is the behavior that was
+    // working historically in this app. We hand the message to the Android
+    // telephony stack and trust the OS to deliver it. Delivery feedback (if
+    // ever needed) is intentionally NOT awaited here because the previous
+    // implementation that did so could hang and cause the whole campaign to
+    // stall (SMS_TIMEOUT, messages stuck in "sending").
     private fun handleSendSms(
         call: io.flutter.plugin.common.MethodCall,
         result: MethodChannel.Result,
@@ -84,105 +83,33 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            val appCtx = applicationContext
             val smsManager = resolveSmsManager(subscriptionId)
             if (smsManager == null) {
                 result.error(
                     "SMS_NO_MANAGER",
-                    "Aucun SmsManager disponible (SIM absente ou subscriptionId invalide)",
+                    "Aucun SmsManager disponible (SIM absente / désactivée)",
                     null,
                 )
                 return
             }
 
             val parts = smsManager.divideMessage(body)
-            val txId = UUID.randomUUID().toString()
-            val sentAction = "com.smsgateway.app.SMS_SENT_$txId"
-            val expectedCount = parts.size
-
-            // Build a list of identical PendingIntents (one per SMS part), so we
-            // can receive a per-part delivery status from the OS.
-            val sentIntents = ArrayList<PendingIntent>(expectedCount)
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
-            for (i in 0 until expectedCount) {
-                val intent = Intent(sentAction).setPackage(packageName)
-                intent.putExtra("partIndex", i)
-                // Each part needs a distinct requestCode so the PendingIntent
-                // is not collapsed into the same one by the OS.
-                // Unique requestCode avoids PendingIntent collapsing across parts.
-                val pi = PendingIntent.getBroadcast(
-                    applicationContext,
-                    txId.hashCode() xor (i * 397),
-                    intent,
-                    flags,
-                )
-                sentIntents.add(pi)
-            }
-
-            val replied = AtomicBoolean(false)
-            var receivedCount = 0
-            var failureReason: String? = null
-
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (replied.get()) return
-                    receivedCount += 1
-                    val code = resultCode
-                    if (code != android.app.Activity.RESULT_OK && failureReason == null) {
-                        failureReason = describeSmsError(code)
-                    }
-                    if (receivedCount >= expectedCount) {
-                        if (replied.compareAndSet(false, true)) {
-                            try { appCtx.unregisterReceiver(this) } catch (_: Throwable) {}
-                            if (failureReason == null) {
-                                result.success(true)
-                            } else {
-                                result.error("SMS_SEND_FAILED", failureReason, null)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // IMPORTANT (Android 13+): RECEIVER_NOT_EXPORTED blocks broadcasts sent
-            // by other UIDs (Telephony stack). SMS_SENT is delivered by the modem /
-            // phone process — we MUST use RECEIVER_EXPORTED or callbacks never fire
-            // (Flutter then sees SMS_TIMEOUT forever).
-            //
-            // IMPORTANT (foreground service): register on applicationContext, not
-            // the Activity — otherwise the receiver may never run while the UI is
-            // stopped / activity destroyed.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                appCtx.registerReceiver(receiver, IntentFilter(sentAction), Context.RECEIVER_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                appCtx.registerReceiver(receiver, IntentFilter(sentAction))
-            }
-
-            // Watchdog: if the OS never reports back within 25s, return a
-            // friendly timeout error rather than hanging Flutter forever.
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (replied.compareAndSet(false, true)) {
-                    try { appCtx.unregisterReceiver(receiver) } catch (_: Throwable) {}
-                    result.error(
-                        "SMS_TIMEOUT",
-                        "L'OS n'a pas confirmé l'envoi dans les 25 secondes (parts reçues: $receivedCount/$expectedCount)",
-                        null,
-                    )
-                }
-            }, 25_000L)
-
-            smsManager.sendMultipartTextMessage(to, null, parts, sentIntents, null)
+            smsManager.sendMultipartTextMessage(to, null, parts, null, null)
+            result.success(true)
         } catch (e: SecurityException) {
             Log.e(tag, "SMS permission denied", e)
-            result.error("SMS_PERMISSION", "Permission SEND_SMS refusée. Active-la dans les paramètres.", null)
+            result.error(
+                "SMS_PERMISSION",
+                "Permission SEND_SMS refusée. Active-la dans les paramètres Android.",
+                null,
+            )
         } catch (e: IllegalArgumentException) {
             Log.e(tag, "SMS invalid argument", e)
-            result.error("SMS_INVALID", e.localizedMessage ?: "Argument invalide (numéro ou message)", null)
+            result.error(
+                "SMS_INVALID",
+                e.localizedMessage ?: "Numéro ou message invalide",
+                null,
+            )
         } catch (e: Exception) {
             Log.e(tag, "Send SMS failed", e)
             result.error("SMS_ERROR", e.localizedMessage ?: "Erreur inconnue", null)
@@ -218,16 +145,6 @@ class MainActivity : FlutterActivity() {
                 Log.e(tag, "resolveSmsManager fallback failed: $e2")
                 null
             }
-        }
-    }
-
-    private fun describeSmsError(code: Int): String {
-        return when (code) {
-            SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "Echec generique (operateur a refuse / pas de credit / numero invalide)"
-            SmsManager.RESULT_ERROR_NO_SERVICE -> "Aucun service mobile (verifie le reseau / pas de signal)"
-            SmsManager.RESULT_ERROR_NULL_PDU -> "PDU nulle (message vide ou mal forme)"
-            SmsManager.RESULT_ERROR_RADIO_OFF -> "Radio coupee (mode avion ou SIM desactivee)"
-            else -> "Erreur OS (code=$code)"
         }
     }
 }
