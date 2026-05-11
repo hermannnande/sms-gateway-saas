@@ -99,10 +99,26 @@ Deno.serve(async (req) => {
           .single()
 
         const newSent = (campaign?.sent_count || 0) + 1
-
         const updatePayload: Record<string, unknown> = { sent_count: newSent }
-        if (campaign?.total_count && campaign.total_count > 0 && newSent >= campaign.total_count) {
-          updatePayload.status = 'done'
+
+        // Finalize the campaign as soon as ALL its messages are in a terminal
+        // state (sent / failed / skipped_optout). Using sent_count alone is not
+        // sufficient because skipped_optout messages never become "sent".
+        try {
+          const { count: terminalCount } = await supabaseClient
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('campaign_id', message.campaign_id)
+            .in('status', ['sent', 'failed', 'skipped_optout'])
+
+          const total = campaign?.total_count ?? 0
+          if (total > 0 && (terminalCount ?? 0) >= total) {
+            updatePayload.status = 'done'
+          }
+        } catch (_) {
+          if (campaign?.total_count && campaign.total_count > 0 && newSent >= campaign.total_count) {
+            updatePayload.status = 'done'
+          }
         }
 
         await supabaseClient
@@ -168,6 +184,35 @@ Deno.serve(async (req) => {
         }
 
         console.log('Message failed permanently:', message_id)
+
+        // Also try to finalize the campaign now that this message is terminal.
+        if (message.campaign_id) {
+          try {
+            const { data: campaign } = await supabaseClient
+              .from('campaigns')
+              .select('total_count,status')
+              .eq('id', message.campaign_id)
+              .single()
+
+            if (campaign && campaign.status !== 'done' && campaign.status !== 'canceled') {
+              const { count: terminalCount } = await supabaseClient
+                .from('messages')
+                .select('*', { count: 'exact', head: true })
+                .eq('campaign_id', message.campaign_id)
+                .in('status', ['sent', 'failed', 'skipped_optout'])
+
+              const total = campaign.total_count ?? 0
+              if (total > 0 && (terminalCount ?? 0) >= total) {
+                await supabaseClient
+                  .from('campaigns')
+                  .update({ status: 'done' })
+                  .eq('id', message.campaign_id)
+              }
+            }
+          } catch (_) {
+            // non-blocking
+          }
+        }
 
         return new Response(
           JSON.stringify({

@@ -445,14 +445,19 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       );
 
       final sims = await _getSimCards();
+      // Avant : si la campagne demandait une SIM précise mais que la liste des
+      // SIMs est vide (permission ou téléphone mono‑SIM), on bloquait sans
+      // envoyer. Cela laissait les messages bloqués en statut "sending" et la
+      // campagne ne progressait jamais. On affiche maintenant un avertissement
+      // mais on continue: l'OS utilisera la SIM par défaut.
       final requiresSimRouting = messages.any((m) => m.simSlotIndex != null);
       if (requiresSimRouting && sims.isEmpty) {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMSenvoie',
-          notificationText: '\u26a0\ufe0f SIM non d\u00e9tect\u00e9e. Autorise la permission T\u00e9l\u00e9phone.',
+          notificationText:
+              '\u26a0\ufe0f Routage SIM impossible \u2192 envoi via SIM par d\u00e9faut',
           notificationButtons: _activeButtons(),
         );
-        return;
       }
       final batchTotal = messages.length;
       var attempted = 0;

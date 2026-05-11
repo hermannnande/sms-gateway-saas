@@ -80,6 +80,7 @@ export function NewCampaignForm({
   const [fileInvalidPhones, setFileInvalidPhones] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [skippedBlacklist, setSkippedBlacklist] = useState<string[]>([])
   const router = useRouter()
 
   const selectedTemplate = templates.find((t) => t.id === templateId)
@@ -277,6 +278,7 @@ export function NewCampaignForm({
     e.preventDefault()
     setLoading(true)
     setError(null)
+    setSkippedBlacklist([])
 
     try {
       const supabase = createClient()
@@ -315,6 +317,42 @@ export function NewCampaignForm({
         throw new Error('Aucun contact valide à qui envoyer le message.')
       }
 
+      // Filtrer les contacts présents dans la liste noire (optouts).
+      // Cela évite d'insérer des messages qui resteraient bloqués en "queued"
+      // pour toujours, et garantit que la campagne se termine proprement.
+      const { data: optouts, error: optoutsError } = await supabase
+        .from('optouts')
+        .select('phone_e164')
+        .eq('org_id', orgMember.org_id)
+
+      if (optoutsError) {
+        throw new Error('Erreur lors de la lecture de la liste noire : ' + optoutsError.message)
+      }
+
+      const blacklistSet = new Set((optouts ?? []).map((o) => o.phone_e164))
+      const beforeCount = contactsToProcess.length
+      const blacklistedNumbers: string[] = []
+      contactsToProcess = contactsToProcess.filter((c) => {
+        if (blacklistSet.has(c.phone_e164)) {
+          blacklistedNumbers.push(c.phone_e164)
+          return false
+        }
+        return true
+      })
+
+      if (blacklistedNumbers.length > 0) {
+        setSkippedBlacklist(blacklistedNumbers)
+      }
+
+      if (contactsToProcess.length === 0) {
+        const all = beforeCount === blacklistedNumbers.length
+        throw new Error(
+          all
+            ? `Tous les contacts (${beforeCount}) sont dans la liste noire. Aucune campagne créée.`
+            : 'Aucun contact valide à qui envoyer le message.',
+        )
+      }
+
       const { data: campaign, error: campaignError } = await supabase
         .from('campaigns')
         .insert({
@@ -349,11 +387,14 @@ export function NewCampaignForm({
         }
       })
 
-      const { error: messagesError } = await supabase
-        .from('messages')
-        .insert(messages)
-
-      if (messagesError) throw messagesError
+      const batchSize = 500
+      for (let i = 0; i < messages.length; i += batchSize) {
+        const batch = messages.slice(i, i + batchSize)
+        const { error: messagesError } = await supabase
+          .from('messages')
+          .insert(batch)
+        if (messagesError) throw messagesError
+      }
 
       router.push(`/dashboard/campaigns/${campaign.id}`)
     } catch (err: any) {
@@ -372,6 +413,24 @@ export function NewCampaignForm({
           <div className="bg-red-50 border border-red-200 text-red-800 text-sm p-4 rounded-xl flex items-start gap-3">
             <span className="text-lg">⚠️</span>
             <span>{error}</span>
+          </div>
+        )}
+
+        {skippedBlacklist.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 text-sm p-4 rounded-xl flex items-start gap-3">
+            <span className="text-lg">🚫</span>
+            <div>
+              <p className="font-semibold">
+                {skippedBlacklist.length} numéro{skippedBlacklist.length > 1 ? 's' : ''} ignoré{skippedBlacklist.length > 1 ? 's' : ''} (liste noire)
+              </p>
+              <p className="text-xs mt-1 font-mono break-all">
+                {skippedBlacklist.slice(0, 5).join(', ')}
+                {skippedBlacklist.length > 5 ? `… (+${skippedBlacklist.length - 5})` : ''}
+              </p>
+              <p className="text-xs mt-1 text-amber-700">
+                Ces contacts ne recevront aucun SMS car ils figurent dans votre liste noire.
+              </p>
+            </div>
           </div>
         )}
 
