@@ -84,6 +84,7 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
+            val appCtx = applicationContext
             val smsManager = resolveSmsManager(subscriptionId)
             if (smsManager == null) {
                 result.error(
@@ -112,7 +113,13 @@ class MainActivity : FlutterActivity() {
                 intent.putExtra("partIndex", i)
                 // Each part needs a distinct requestCode so the PendingIntent
                 // is not collapsed into the same one by the OS.
-                val pi = PendingIntent.getBroadcast(this, (sentAction + i).hashCode(), intent, flags)
+                // Unique requestCode avoids PendingIntent collapsing across parts.
+                val pi = PendingIntent.getBroadcast(
+                    applicationContext,
+                    txId.hashCode() xor (i * 397),
+                    intent,
+                    flags,
+                )
                 sentIntents.add(pi)
             }
 
@@ -130,7 +137,7 @@ class MainActivity : FlutterActivity() {
                     }
                     if (receivedCount >= expectedCount) {
                         if (replied.compareAndSet(false, true)) {
-                            try { unregisterReceiver(this) } catch (_: Throwable) {}
+                            try { appCtx.unregisterReceiver(this) } catch (_: Throwable) {}
                             if (failureReason == null) {
                                 result.success(true)
                             } else {
@@ -141,20 +148,26 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // Register the receiver. On Android 13+ we must specify the export
-            // flag explicitly (private to our app since the action is namespaced).
+            // IMPORTANT (Android 13+): RECEIVER_NOT_EXPORTED blocks broadcasts sent
+            // by other UIDs (Telephony stack). SMS_SENT is delivered by the modem /
+            // phone process — we MUST use RECEIVER_EXPORTED or callbacks never fire
+            // (Flutter then sees SMS_TIMEOUT forever).
+            //
+            // IMPORTANT (foreground service): register on applicationContext, not
+            // the Activity — otherwise the receiver may never run while the UI is
+            // stopped / activity destroyed.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(receiver, IntentFilter(sentAction), Context.RECEIVER_NOT_EXPORTED)
+                appCtx.registerReceiver(receiver, IntentFilter(sentAction), Context.RECEIVER_EXPORTED)
             } else {
                 @Suppress("UnspecifiedRegisterReceiverFlag")
-                registerReceiver(receiver, IntentFilter(sentAction))
+                appCtx.registerReceiver(receiver, IntentFilter(sentAction))
             }
 
             // Watchdog: if the OS never reports back within 25s, return a
             // friendly timeout error rather than hanging Flutter forever.
             Handler(Looper.getMainLooper()).postDelayed({
                 if (replied.compareAndSet(false, true)) {
-                    try { unregisterReceiver(receiver) } catch (_: Throwable) {}
+                    try { appCtx.unregisterReceiver(receiver) } catch (_: Throwable) {}
                     result.error(
                         "SMS_TIMEOUT",
                         "L'OS n'a pas confirmé l'envoi dans les 25 secondes (parts reçues: $receivedCount/$expectedCount)",
