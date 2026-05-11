@@ -542,6 +542,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           if (cid != null && campaigns.containsKey(cid)) {
             sentDeltaByCampaign[cid] = (sentDeltaByCampaign[cid] ?? 0) + 1;
           }
+        } on PlatformException catch (e) {
+          // Le code natif renvoie un code stable (SMS_PERMISSION, SMS_TIMEOUT,
+          // SMS_SEND_FAILED, etc.) et un message lisible. On formatte pour que
+          // l'erreur stockee en BD soit utile au debug.
+          final msg2 = (e.message ?? '').trim();
+          final formatted = msg2.isEmpty ? e.code : '[${e.code}] $msg2';
+          await _updateStatus(token, msg, false, formatted);
+          failed++;
+          lastErr = formatted;
         } catch (e) {
           await _updateStatus(token, msg, false, e.toString());
           failed++;

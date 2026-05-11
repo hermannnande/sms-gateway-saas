@@ -55,10 +55,14 @@ class SmsSender {
           }) ??
           false;
 
-      return SmsSendResult(ok, error: ok ? null : 'Echec natif');
+      return SmsSendResult(ok, error: ok ? null : 'Echec natif (pas de retour OS)');
     } on PlatformException catch (e) {
       _logger.e('Erreur envoi SMS (platform)', error: e);
-      return SmsSendResult(false, error: e.message);
+      // Code natif: SMS_PERMISSION / SMS_NO_MANAGER / SMS_SEND_FAILED / SMS_TIMEOUT / SMS_INVALID / SMS_ERROR
+      final code = e.code;
+      final msg = (e.message ?? '').trim();
+      final composed = msg.isEmpty ? code : '[$code] $msg';
+      return SmsSendResult(false, error: composed);
     } catch (e, st) {
       _logger.e('Erreur envoi SMS', error: e, stackTrace: st);
       return SmsSendResult(false, error: e.toString());
