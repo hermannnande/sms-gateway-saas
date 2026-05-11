@@ -177,6 +177,63 @@ Deno.serve(async (req) => {
       )
     }
 
+    // Safety net: if the app or network crashed mid-batch, messages can stay
+    // stuck in "sending" forever. Because the mobile foreground tick uses a
+    // `_busy` guard, the device only calls claim_messages between batches —
+    // so it's safe to requeue every "sending" row that belongs to THIS device
+    // at the start of each claim cycle. This unblocks campaigns immediately
+    // after a crash/reboot/network blip without any user action.
+    let staleRequeued = 0
+    try {
+      const { data: staleRows, error: staleErr } = await supabaseClient
+        .from('messages')
+        .update({
+          status: 'queued',
+          device_id: null,
+          sim_subscription_id: null,
+          last_error: 'Auto-requeue: new claim cycle started by device',
+        })
+        .eq('org_id', org_id)
+        .eq('device_id', device_id)
+        .eq('status', 'sending')
+        .is('sent_at', null)
+        .select('id')
+
+      if (staleErr) {
+        console.warn('Stale sending requeue failed (non-blocking):', staleErr)
+      } else if (staleRows && staleRows.length > 0) {
+        staleRequeued = staleRows.length
+        console.warn(`Auto-requeued ${staleRequeued} stale "sending" messages for device ${device_id}`)
+      }
+    } catch (e) {
+      console.warn('Stale sending requeue crash (non-blocking):', e)
+    }
+
+    // Secondary safety net: orphaned messages stuck in "sending" with NO
+    // device assigned (race conditions / device deletion) for more than 90s.
+    try {
+      const cutoff = new Date(Date.now() - 90 * 1000).toISOString()
+      const { data: orphaned } = await supabaseClient
+        .from('messages')
+        .update({
+          status: 'queued',
+          device_id: null,
+          sim_subscription_id: null,
+          last_error: 'Auto-requeue: orphaned sending (no device, >90s)',
+        })
+        .eq('org_id', org_id)
+        .eq('status', 'sending')
+        .is('sent_at', null)
+        .is('device_id', null)
+        .lt('created_at', cutoff)
+        .select('id')
+
+      if (orphaned && orphaned.length > 0) {
+        staleRequeued += orphaned.length
+        console.warn(`Auto-requeued ${orphaned.length} orphaned sending messages`)
+      }
+    } catch (_) {}
+
     // Get optouts for this org
     const { data: optouts } = await supabaseClient
       .from('optouts')
