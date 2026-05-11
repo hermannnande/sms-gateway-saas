@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.3+50",
+  "latestVersion": "1.3.4+51",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Reglage du delai entre SMS dans Parametres\n• Notification avec compte a rebours temps reel\n• Interface compactee, plus moderne\n• Envoi en arriere-plan auto active sur campagne active"
+  "notes": "• Le delai SMS se regle aussi depuis smsenvoie.com/dashboard/profile\n• Synchronisation bidirectionnelle app <-> web\n• Notification avec compte a rebours temps reel\n• Interface compactee"
 }

@@ -575,6 +575,14 @@ class AppNotifier extends Notifier<AppState> {
         smsUsedThisMonth: _safeParseInt(payload['sms_used_this_month']),
         quotaRemaining: _safeParseInt(payload['quota_remaining']),
       );
+
+      // Opportunistically sync the SMS delay from the web dashboard so the
+      // change made by the user on smsenvoie.com/dashboard/profile is picked
+      // up by the next batch (within seconds, the heartbeat is frequent).
+      try {
+        final supabase = ref.read(supabaseClientProvider);
+        await AppSettings.syncFromSupabase(supabase);
+      } catch (_) {}
     } catch (e) {
       if (!silent) setLastStatus('Statut appareil: $e');
     }
@@ -836,6 +844,14 @@ class AppNotifier extends Notifier<AppState> {
 
   Future<void> _postLoginSetup() async {
     await checkPermissions();
+
+    // Pull the per-user SMS delay configured on the web dashboard
+    // (/dashboard/profile -> Délai entre les messages). This makes the web
+    // the source of truth for the delay; the app simply mirrors it.
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      await AppSettings.syncFromSupabase(supabase);
+    } catch (_) {}
 
     try {
       if (state.deviceToken != null && state.deviceToken!.isNotEmpty) {
@@ -7241,6 +7257,12 @@ Future<void> _showSettingsSheet(BuildContext context) async {
           Future<void> saveDelay(int ms) async {
             await AppSettings.setSmsDelayMs(ms);
             setState(() => delayMs = ms);
+            // Mirror to web so /dashboard/profile shows the same value.
+            try {
+              final container = ProviderScope.containerOf(ctx);
+              final supabase = container.read(supabaseClientProvider);
+              await AppSettings.pushToSupabase(supabase, ms);
+            } catch (_) {}
           }
 
           String delayLabel() {
