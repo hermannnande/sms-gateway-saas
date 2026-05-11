@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.2+49",
+  "latestVersion": "1.3.3+50",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• FIX MAJEUR : envoi SMS en mode rapide (comme avant)\n• Plus de blocage 25s par message\n• Auto-deblocage des SMS coinces cote serveur"
+  "notes": "• Reglage du delai entre SMS dans Parametres\n• Notification avec compte a rebours temps reel\n• Interface compactee, plus moderne\n• Envoi en arriere-plan auto active sur campagne active"
 }

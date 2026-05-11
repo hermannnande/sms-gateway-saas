@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
+import 'package:smsgateway_flutter/services/app_settings.dart';
 
 class BackgroundSyncService {
   static const int serviceId = 701;
@@ -463,6 +464,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var attempted = 0;
       var failed = 0;
       String? lastErr;
+      // Read user-configurable delay between two sends. We re-read it once per
+      // batch so a change in Settings is picked up by the next batch.
+      final perSmsDelayMs = await AppSettings.getSmsDelayMs();
 
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
       final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
@@ -578,7 +582,39 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           );
         }
 
-        await Future.delayed(Duration(milliseconds: AppConfig.smsDelayMs));
+        // Apply the user-configured delay between SMS, with a live countdown
+        // in the notification so the user sees that the app is *working*
+        // (not frozen). We skip the wait on the very last message of the
+        // batch — there is nothing to wait for after it.
+        final isLastInBatch = attempted >= batchTotal;
+        if (!isLastInBatch && perSmsDelayMs > 0) {
+          final tickMs = 500; // refresh notification twice per second
+          var elapsed = 0;
+          while (elapsed < perSmsDelayMs) {
+            if (await _isPaused()) break;
+            final remainMs = perSmsDelayMs - elapsed;
+            final waitMs = remainMs < tickMs ? remainMs : tickMs;
+            // Live countdown shown only when waiting >= 1 second
+            if (perSmsDelayMs >= 1000) {
+              final s = hasCampaignTotals ? sentNow() : 0;
+              final total = hasCampaignTotals ? totalSum : batchTotal;
+              final progressed = hasCampaignTotals ? s : attempted;
+              final remainText = hasCampaignTotals
+                  ? max(totalSum - s, 0).toString()
+                  : (batchTotal - attempted).toString();
+              final secsLeft = ((remainMs + 999) / 1000).floor();
+              await FlutterForegroundTask.updateService(
+                notificationTitle: 'SMSenvoie',
+                notificationText:
+                    '\u23f3 $campaignLabel \u2022 ${_progressBar(progressed, total)} '
+                    '$progressed/$total \u2022 prochain dans ${secsLeft}s \u2022 reste $remainText',
+                notificationButtons: _activeButtons(),
+              );
+            }
+            await Future.delayed(Duration(milliseconds: waitMs));
+            elapsed += waitMs;
+          }
+        }
       }
 
       // Check if we broke out because user pressed Pause

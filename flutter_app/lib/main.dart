@@ -26,6 +26,7 @@ import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/auth_session_storage.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/services/background_sync_service.dart';
+import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:supabase/supabase.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
@@ -994,8 +995,10 @@ class AppNotifier extends Notifier<AppState> {
       final results = <String>[];
       int okCount = 0;
       int failCount = 0;
+      final perSmsDelayMs = await AppSettings.getSmsDelayMs();
 
-      for (final msg in messages) {
+      for (int i = 0; i < messages.length; i++) {
+        final msg = messages[i];
         int? subscriptionId;
         if (msg.simSubscriptionId != null) {
           subscriptionId = msg.simSubscriptionId;
@@ -1025,6 +1028,12 @@ class AppNotifier extends Notifier<AppState> {
           failCount++;
           final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
           results.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
+        }
+
+        // Respect the user-configured delay between SMS, except after the
+        // last message of the batch.
+        if (i < messages.length - 1 && perSmsDelayMs > 0) {
+          await Future.delayed(Duration(milliseconds: perSmsDelayMs));
         }
       }
 
@@ -5063,34 +5072,48 @@ class _DashStatTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         child: Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(color: color.withOpacity(0.15)),
           ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+          child: Row(
+            children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(7),
                 decoration: BoxDecoration(
                   color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(9),
                 ),
-                child: Icon(icon, color: color, size: 22),
+                child: Icon(icon, color: color, size: 18),
               ),
-              const SizedBox(height: 12),
-              Text(
-                value,
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      value,
+                      style: TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold, color: color, height: 1.1),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      label,
+                      style: TextStyle(
+                          fontSize: 11, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 4),
-              Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
             ],
           ),
         ),
@@ -5276,18 +5299,18 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(9),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
                   Icons.campaign_rounded,
                   color: Colors.white,
-                  size: 28,
+                  size: 22,
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5296,18 +5319,18 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                       campaignName,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 18,
+                        fontSize: 15,
                         fontWeight: FontWeight.bold,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
                       statusLine,
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.9),
-                        fontSize: 14,
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -5315,7 +5338,7 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
           Row(
             children: [
               Expanded(
@@ -5329,7 +5352,7 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                           '$sent / $total SMS',
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -5337,28 +5360,28 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                           percentText,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(10),
                       child: LinearProgressIndicator(
                         value: progress,
-                        minHeight: 12,
+                        minHeight: 8,
                         backgroundColor: Colors.white.withOpacity(0.3),
                         valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(
                       'Reste $remaining SMS à envoyer',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.8),
-                        fontSize: 13,
+                        color: Colors.white.withOpacity(0.85),
+                        fontSize: 11.5,
                       ),
                     ),
                   ],
@@ -5366,7 +5389,7 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
           Row(
             children: [
               Expanded(
@@ -5385,19 +5408,19 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white,
                     foregroundColor: const Color(0xFF3B82F6),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(11),
                     ),
                   ),
-                  icon: Icon(leftIcon, size: 20),
+                  icon: Icon(leftIcon, size: 16),
                   label: Text(
                     leftLabel,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: _busy
@@ -5436,15 +5459,15 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
                     side: const BorderSide(color: Colors.white, width: 2),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(11),
                     ),
                   ),
-                  icon: const Icon(Icons.cancel_rounded, size: 20),
+                  icon: const Icon(Icons.cancel_rounded, size: 16),
                   label: const Text(
                     'Annuler',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
               ),
@@ -7169,17 +7192,21 @@ Future<void> _showSettingsSheet(BuildContext context) async {
           bool loading = false;
           bool enabled = false;
           bool paused = false;
+          int delayMs = AppSettings.defaultDelayMs;
+          bool delayLoaded = false;
 
           Future<void> load() async {
             final e = await BackgroundSyncService.isEnabled();
             final p = await BackgroundSyncService.isPaused();
+            final d = await AppSettings.getSmsDelayMs();
             setState(() {
               enabled = e;
               paused = p;
+              delayMs = d;
+              delayLoaded = true;
             });
           }
 
-          // Load once
           scheduleMicrotask(load);
 
           Future<void> toggleEnabled(bool v) async {
@@ -7211,72 +7238,160 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             setState(() => loading = false);
           }
 
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Paramètres',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Envoi en arrière-plan (Android)\n'
-                  'Active une notification permanente pour continuer l’envoi même si tu quittes l’app.',
-                  style: TextStyle(color: Colors.black54),
-                ),
-                const SizedBox(height: 14),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Continuer en arrière-plan'),
-                  subtitle: const Text('Recommandé pour envoyer sans interruption'),
-                  value: enabled,
-                  onChanged: loading ? null : toggleEnabled,
-                ),
-                if (enabled) ...[
-                  const SizedBox(height: 6),
+          Future<void> saveDelay(int ms) async {
+            await AppSettings.setSmsDelayMs(ms);
+            setState(() => delayMs = ms);
+          }
+
+          String delayLabel() {
+            if (!delayLoaded) return 'Chargement...';
+            if (delayMs < 1000) return '${delayMs}ms (rapide)';
+            final secs = (delayMs / 1000).toStringAsFixed(delayMs % 1000 == 0 ? 0 : 1);
+            return '${secs}s';
+          }
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Row(
                     children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: loading ? null : togglePause,
-                          icon: Icon(paused ? Icons.play_arrow_rounded : Icons.pause_rounded),
-                          label: Text(paused ? 'Reprendre' : 'Pause'),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(10),
                         ),
+                        child: Icon(Icons.settings_rounded, color: Colors.blue.shade700, size: 22),
                       ),
                       const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: loading ? null : stop,
-                          icon: const Icon(Icons.stop_rounded),
-                          label: const Text('Arrêter'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.red.shade700,
-                          ),
-                        ),
+                      const Text(
+                        'Paramètres',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    paused ? 'Statut: en pause' : 'Statut: actif',
-                    style: TextStyle(color: paused ? Colors.orange.shade700 : Colors.green.shade700),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text('Fermer'),
+                  const SizedBox(height: 18),
+
+                  // ─── Délai entre SMS ─────────────────────────────────────
+                  Row(
+                    children: [
+                      Icon(Icons.timer_outlined, size: 18, color: Colors.grey.shade700),
+                      const SizedBox(width: 8),
+                      const Text('Délai entre chaque SMS',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(delayLabel(),
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue.shade700)),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Slider(
+                    min: AppSettings.minDelayMs.toDouble(),
+                    max: AppSettings.maxDelayMs.toDouble(),
+                    divisions: (AppSettings.maxDelayMs - AppSettings.minDelayMs) ~/ 500,
+                    value: delayMs
+                        .clamp(AppSettings.minDelayMs, AppSettings.maxDelayMs)
+                        .toDouble(),
+                    label: delayLabel(),
+                    onChanged: !delayLoaded
+                        ? null
+                        : (v) {
+                            setState(() => delayMs = (v / 500).round() * 500);
+                          },
+                    onChangeEnd: !delayLoaded ? null : (v) => saveDelay((v / 500).round() * 500),
+                  ),
+                  Text(
+                    'Plus rapide = plus de risque que l\'opérateur bloque les SMS. '
+                    'Recommandé : 1,5s à 2s.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 18),
+                  const Divider(),
+                  const SizedBox(height: 12),
+
+                  // ─── Envoi en arrière-plan ────────────────────────────────
+                  Row(
+                    children: [
+                      Icon(Icons.cloud_sync_outlined, size: 18, color: Colors.grey.shade700),
+                      const SizedBox(width: 8),
+                      const Text('Envoi en arrière-plan',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Active une notification permanente pour continuer l\'envoi '
+                    'même si tu fermes l\'application.',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text('Continuer en arrière-plan',
+                        style: TextStyle(fontSize: 14)),
+                    subtitle: const Text('Recommandé pour envoyer sans interruption',
+                        style: TextStyle(fontSize: 12)),
+                    value: enabled,
+                    onChanged: loading ? null : toggleEnabled,
+                  ),
+                  if (enabled) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: loading ? null : togglePause,
+                            icon: Icon(
+                                paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                                size: 18),
+                            label: Text(paused ? 'Reprendre' : 'Pause',
+                                style: const TextStyle(fontSize: 13)),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: loading ? null : stop,
+                            icon: const Icon(Icons.stop_rounded, size: 18),
+                            label: const Text('Arrêter', style: TextStyle(fontSize: 13)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red.shade700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      paused ? 'Statut : en pause' : 'Statut : actif',
+                      style: TextStyle(
+                          color: paused ? Colors.orange.shade700 : Colors.green.shade700,
+                          fontSize: 12),
                     ),
                   ],
-                ),
-              ],
+                  const SizedBox(height: 22),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Fermer'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         },
