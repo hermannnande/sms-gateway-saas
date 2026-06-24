@@ -4,6 +4,9 @@
     <!-- Permissions SMS & téléphone -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Permet d'ecrire une copie des SMS envoyes dans le journal systeme
+         (boite "Envoyes") afin qu'ils apparaissent dans l'app Messages. -->
+    <uses-permission android:name="android.permission.WRITE_SMS" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />

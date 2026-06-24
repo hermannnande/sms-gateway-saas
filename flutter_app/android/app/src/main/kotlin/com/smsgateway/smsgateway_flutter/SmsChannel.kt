@@ -1,8 +1,11 @@
 package com.smsgateway.app
 
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.provider.Telephony
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import android.util.Log
@@ -107,6 +110,14 @@ object SmsChannel {
 
             val parts = smsManager.divideMessage(body)
             smsManager.sendMultipartTextMessage(to, null, parts, null, null)
+
+            // Ecrit une copie dans la boite "Envoyes" du systeme pour que le SMS
+            // apparaisse dans l'application Messages du telephone (comme les apps
+            // concurrentes). Best-effort: si l'OS refuse l'ecriture (app non
+            // definie comme app SMS par defaut sur Android stock), on ignore
+            // silencieusement sans faire echouer l'envoi.
+            saveToSentBox(context, to, body, subscriptionId)
+
             result.success(true)
         } catch (e: SecurityException) {
             Log.e(TAG, "SMS permission denied", e)
@@ -125,6 +136,33 @@ object SmsChannel {
         } catch (e: Exception) {
             Log.e(TAG, "Send SMS failed", e)
             result.error("SMS_ERROR", e.localizedMessage ?: "Erreur inconnue", null)
+        }
+    }
+
+    // Enregistre le message dans le fournisseur SMS (content://sms/sent) afin
+    // qu'il soit visible dans l'app Messages. Non bloquant.
+    private fun saveToSentBox(
+        context: Context,
+        address: String,
+        body: String,
+        subscriptionId: Int?,
+    ) {
+        try {
+            val values = ContentValues().apply {
+                put(Telephony.Sms.ADDRESS, address)
+                put(Telephony.Sms.BODY, body)
+                put(Telephony.Sms.DATE, System.currentTimeMillis())
+                put(Telephony.Sms.READ, 1)
+                put(Telephony.Sms.SEEN, 1)
+                put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+                if (subscriptionId != null && subscriptionId >= 0) {
+                    put(Telephony.Sms.SUBSCRIPTION_ID, subscriptionId)
+                }
+            }
+            val uri: Uri = Telephony.Sms.Sent.CONTENT_URI
+            context.contentResolver.insert(uri, values)
+        } catch (e: Exception) {
+            Log.w(TAG, "saveToSentBox failed (non-blocking): $e")
         }
     }
 
