@@ -17,7 +17,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <application
         android:label="SMSenvoie"
-        android:name="${applicationName}"
+        android:name="com.smsgateway.app.MyApplication"
         android:icon="@mipmap/ic_launcher">
         <!-- Foreground service used by flutter_foreground_task (do not rename) -->
         <service

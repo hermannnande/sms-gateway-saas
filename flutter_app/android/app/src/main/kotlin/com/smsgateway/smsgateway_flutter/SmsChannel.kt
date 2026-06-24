@@ -1,0 +1,163 @@
+package com.smsgateway.app
+
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
+import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
+import android.util.Log
+import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.MethodCall
+import io.flutter.plugin.common.MethodChannel
+
+/**
+ * Handler du MethodChannel natif d'envoi de SMS.
+ *
+ * IMPORTANT: ce canal doit etre enregistre sur CHAQUE FlutterEngine qui en a
+ * besoin. Il y en a deux dans cette app:
+ *   1. Le moteur de [MainActivity] (envoi manuel "Synchroniser et envoyer").
+ *   2. Le moteur cree par flutter_foreground_task pour le service d'arriere-plan
+ *      (envoi automatique des campagnes). Ce moteur est totalement separe et ne
+ *      connait AUCUN canal declare dans MainActivity.
+ *
+ * Avant cette factorisation, le canal n'etait enregistre que dans MainActivity,
+ * donc les envois faits depuis le service d'arriere-plan echouaient avec
+ * MissingPluginException et aucun SMS n'etait reellement envoye.
+ */
+object SmsChannel {
+    const val CHANNEL = "com.smsgateway.app/sms"
+    private const val TAG = "SMS_GATEWAY"
+
+    fun register(context: Context, messenger: BinaryMessenger) {
+        val appContext = context.applicationContext
+        MethodChannel(messenger, CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "sendSms" -> handleSendSms(appContext, call, result)
+                "getSimCards" -> handleGetSimCards(appContext, result)
+                "getAndroidId" -> handleGetAndroidId(appContext, result)
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun handleGetSimCards(context: Context, result: MethodChannel.Result) {
+        try {
+            val subMgr =
+                context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+            val infos = subMgr.activeSubscriptionInfoList ?: emptyList()
+
+            val sims = infos.map { info ->
+                mapOf(
+                    "subscriptionId" to info.subscriptionId,
+                    "simSlotIndex" to info.simSlotIndex,
+                    "displayName" to (info.displayName?.toString() ?: ""),
+                    "carrierName" to (info.carrierName?.toString() ?: ""),
+                )
+            }
+            result.success(sims)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "getSimCards permission denied", e)
+            result.success(emptyList<Map<String, Any>>())
+        } catch (e: Exception) {
+            Log.e(TAG, "getSimCards failed", e)
+            result.success(emptyList<Map<String, Any>>())
+        }
+    }
+
+    private fun handleGetAndroidId(context: Context, result: MethodChannel.Result) {
+        try {
+            val androidId =
+                Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            result.success(androidId)
+        } catch (e: Exception) {
+            Log.e(TAG, "getAndroidId failed", e)
+            result.success(null)
+        }
+    }
+
+    // Envoi d'un SMS en fire-and-forget: on confie le message a la pile telephony
+    // d'Android et on fait confiance a l'OS pour la livraison. On n'attend PAS de
+    // retour de livraison (PendingIntent) car cela pouvait bloquer toute la
+    // campagne (SMS_TIMEOUT, messages coinces en "sending").
+    private fun handleSendSms(
+        context: Context,
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val to = call.argument<String>("to")
+        val body = call.argument<String>("body")
+        val subscriptionId = call.argument<Int>("subscriptionId")
+
+        if (to.isNullOrBlank() || body.isNullOrBlank()) {
+            result.error("SMS_INVALID_INPUT", "Destinataire ou message vide", null)
+            return
+        }
+
+        try {
+            val smsManager = resolveSmsManager(context, subscriptionId)
+            if (smsManager == null) {
+                result.error(
+                    "SMS_NO_MANAGER",
+                    "Aucun SmsManager disponible (SIM absente / desactivee)",
+                    null,
+                )
+                return
+            }
+
+            val parts = smsManager.divideMessage(body)
+            smsManager.sendMultipartTextMessage(to, null, parts, null, null)
+            result.success(true)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SMS permission denied", e)
+            result.error(
+                "SMS_PERMISSION",
+                "Permission SEND_SMS refusee. Active-la dans les parametres Android.",
+                null,
+            )
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "SMS invalid argument", e)
+            result.error(
+                "SMS_INVALID",
+                e.localizedMessage ?: "Numero ou message invalide",
+                null,
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Send SMS failed", e)
+            result.error("SMS_ERROR", e.localizedMessage ?: "Erreur inconnue", null)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveSmsManager(context: Context, subscriptionId: Int?): SmsManager? {
+        return try {
+            if (subscriptionId != null && subscriptionId >= 0) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val sysMgr = context.getSystemService(SmsManager::class.java)
+                    sysMgr?.createForSubscriptionId(subscriptionId)
+                } else {
+                    SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+                }
+            } else {
+                defaultSmsManager(context)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveSmsManager fallback to default (sub=$subscriptionId): $e")
+            try {
+                defaultSmsManager(context)
+            } catch (e2: Exception) {
+                Log.e(TAG, "resolveSmsManager fallback failed: $e2")
+                null
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun defaultSmsManager(context: Context): SmsManager? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(SmsManager::class.java)
+        } else {
+            SmsManager.getDefault()
+        }
+    }
+}
