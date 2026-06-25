@@ -331,18 +331,23 @@ class AppNotifier extends Notifier<AppState> {
       await refreshSubscription(silent: true);
     }
 
-    // Auto-d\u00e9marrer le BackgroundSyncService UNE SEULE FOIS
+    // Auto-démarrer l'envoi automatique dès qu'un appareil est jumelé.
     if (token != null && token.isNotEmpty) {
       try {
-        await BackgroundSyncService.setEnabled(true);
-        await BackgroundSyncService.setPaused(false);
-        await BackgroundSyncService.setForegroundLock(false);
-        await BackgroundSyncService.init();
-        await BackgroundSyncService.start();
+        await ensureAutoSyncRunning();
       } catch (e) {
-        debugPrint('\u00c9chec auto-d\u00e9marrage BackgroundSyncService: $e');
+        debugPrint('Échec auto-démarrage BackgroundSyncService: $e');
       }
     }
+  }
+
+  /// Lance / maintient le service d'envoi automatique (sans sync manuelle).
+  Future<void> ensureAutoSyncRunning() async {
+    final token = state.deviceToken;
+    if (token == null || token.isEmpty) return;
+    try {
+      await BackgroundSyncService.ensureAutoSync();
+    } catch (_) {}
   }
 
   Future<void> _loadAppVersion() async {
@@ -589,40 +594,60 @@ class AppNotifier extends Notifier<AppState> {
     }
   }
 
-  /// Récupère la campagne "active" la plus récente (running/paused/queued) pour afficher la progression sur le dashboard.
+  /// Récupère la campagne active (running/paused/queued) et maintient l'envoi auto.
   Future<void> refreshActiveCampaign({bool silent = true}) async {
     try {
-      final supabase = ref.read(supabaseClientProvider);
-      if (supabase.auth.currentUser == null) return;
+      Map<String, dynamic>? row;
 
-      // Assure que la session est fraîche (évite les 401 si le JWT a expiré).
-      try {
-        final s = supabase.auth.currentSession;
-        if (s != null && s.expiresAt != null) {
-          final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-          if (s.expiresAt! <= nowSec + 90) {
-            final rt = s.refreshToken;
-            if (rt != null && rt.trim().isNotEmpty) {
-              await supabase.auth.refreshSession(rt);
+      final supabase = ref.read(supabaseClientProvider);
+      if (supabase.auth.currentUser != null) {
+        try {
+          final s = supabase.auth.currentSession;
+          if (s != null && s.expiresAt != null) {
+            final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+            if (s.expiresAt! <= nowSec + 90) {
+              final rt = s.refreshToken;
+              if (rt != null && rt.trim().isNotEmpty) {
+                await supabase.auth.refreshSession(rt);
+              }
             }
           }
+        } catch (_) {}
+
+        if (state.orgId == null) {
+          await refreshAccountInfo();
         }
-      } catch (_) {}
+        final orgId = state.orgId;
+        if (orgId == null) return;
 
-      if (state.orgId == null) {
-        await refreshAccountInfo();
+        final dbRow = await supabase
+            .from('campaigns')
+            .select('id,name,status,sent_count,total_count,updated_at')
+            .eq('org_id', orgId)
+            .inFilter('status', ['running', 'paused', 'queued'])
+            .order('updated_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+        if (dbRow != null) {
+          row = Map<String, dynamic>.from(dbRow);
+        }
+      } else {
+        final token = state.deviceToken;
+        if (token == null || token.isEmpty) return;
+        final res = await ref.read(deviceServiceProvider).listCampaigns(
+              deviceToken: token,
+              limit: 10,
+            );
+        final list = (res['campaigns'] as List?) ?? const [];
+        for (final item in list) {
+          if (item is! Map) continue;
+          final status = item['status']?.toString();
+          if (status == 'running' || status == 'queued' || status == 'paused') {
+            row = Map<String, dynamic>.from(item);
+            break;
+          }
+        }
       }
-      final orgId = state.orgId;
-      if (orgId == null) return;
-
-      final row = await supabase
-          .from('campaigns')
-          .select('id,name,status,sent_count,total_count,updated_at')
-          .eq('org_id', orgId)
-          .inFilter('status', ['running', 'paused', 'queued'])
-          .order('updated_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
 
       if (row == null) {
         state = state.copyWith(clearCampaign: true);
@@ -637,21 +662,9 @@ class AppNotifier extends Notifier<AppState> {
         campaignTotalCount: _safeParseInt(row['total_count']) ?? 0,
       );
 
-      // Auto-ensure background service is running + unpaused when a campaign is active
       final status = row['status']?.toString();
       if ((status == 'running' || status == 'queued') && (state.deviceToken?.isNotEmpty ?? false)) {
-        try {
-          await BackgroundSyncService.setEnabled(true);
-          await BackgroundSyncService.setPaused(false);
-          await BackgroundSyncService.setForegroundLock(false);
-          final bgRunning = await BackgroundSyncService.isRunning();
-          if (!bgRunning) {
-            await BackgroundSyncService.init();
-            await BackgroundSyncService.ensureRunning();
-          }
-          // Kick the background service to process immediately
-          FlutterForegroundTask.sendDataToTask('kick');
-        } catch (_) {}
+        await ensureAutoSyncRunning();
       }
     } catch (e) {
       if (!silent) setLastStatus('Erreur campagne: $e');
@@ -811,8 +824,10 @@ class AppNotifier extends Notifier<AppState> {
       if (!enabled) {
         await BackgroundSyncService.setEnabled(true);
         await BackgroundSyncService.setPaused(false);
-        await BackgroundSyncService.start(); // déclenche la demande de permission Notifications si besoin
-        state = state.copyWith(lastStatus: '✅ Appareil connecté + mode arrière‑plan activé');
+        await ensureAutoSyncRunning();
+        state = state.copyWith(lastStatus: '✅ Appareil connecté + envoi automatique activé');
+      } else {
+        await ensureAutoSyncRunning();
       }
     } catch (_) {}
   }
@@ -1140,6 +1155,7 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
+  Timer? _autoSyncTimer;
 
   @override
   void initState() {
@@ -1147,14 +1163,14 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     scheduleMicrotask(() => ref.read(appProvider.notifier).init());
     scheduleMicrotask(_initDeepLinks);
-    // Init foreground service infra (background sending)
     scheduleMicrotask(() async {
       await BackgroundSyncService.init();
-      // Auto-start if enabled previously
-      final enabled = await BackgroundSyncService.isEnabled();
-      if (enabled) {
-        await BackgroundSyncService.start();
-      }
+      await ref.read(appProvider.notifier).ensureAutoSyncRunning();
+      await ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
+    });
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      ref.read(appProvider.notifier).ensureAutoSyncRunning();
+      ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
     });
   }
 
@@ -1196,6 +1212,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _autoSyncTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _linkSub?.cancel();
     super.dispose();
@@ -2840,35 +2857,9 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _ensureBackgroundSending() async {
-    final appState = ref.read(appProvider);
-    if (!appState.authenticated) return;
-    if (!(appState.deviceToken?.isNotEmpty ?? false)) return;
-
-    final hasActiveCampaign = appState.campaignStatusSending == 'running' ||
-        appState.campaignStatusSending == 'queued';
-
-    if (hasActiveCampaign) {
-      try {
-        await BackgroundSyncService.setEnabled(true);
-        await BackgroundSyncService.setPaused(false);
-        await BackgroundSyncService.setForegroundLock(false);
-        final running = await BackgroundSyncService.isRunning();
-        if (!running) {
-          await BackgroundSyncService.init();
-          await BackgroundSyncService.ensureRunning();
-        }
-        // Kick the background isolate so it re-reads prefs immediately
-        FlutterForegroundTask.sendDataToTask('kick');
-      } catch (_) {}
-    } else {
-      // No active campaign: keep background worker alive for the next campaign.
-      final bgRunning = await BackgroundSyncService.isRunning();
-      if (!bgRunning) {
-        try {
-          await BackgroundSyncService.ensureRunning();
-        } catch (_) {}
-      }
-    }
+    if (!(ref.read(appProvider).deviceToken?.isNotEmpty ?? false)) return;
+    await ref.read(appProvider.notifier).ensureAutoSyncRunning();
+    await ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
   }
 
   void _startHeartbeat() {
@@ -2891,7 +2882,8 @@ class _HomePageState extends ConsumerState<HomePage>
               deviceToken: deviceToken,
             );
         await ref.read(appProvider.notifier).refreshDeviceStatus(silent: true);
-        // Message discret (évite de spammer l’utilisateur)
+        await ref.read(appProvider.notifier).ensureAutoSyncRunning();
+        // Message discret (évite de spammer l'utilisateur)
         ref.read(appProvider.notifier).setLastStatus(
               'Appareil en ligne${payload['device_name'] != null ? ' • ${payload['device_name']}' : ''}',
             );
@@ -3140,7 +3132,9 @@ class _HomePageState extends ConsumerState<HomePage>
                 HapticFeedback.mediumImpact();
                 switch (section) {
                   case AppSection.dashboard:
-                    await notifier.syncOnce();
+                    await notifier.ensureAutoSyncRunning();
+                    await notifier.refreshActiveCampaign(silent: false);
+                    await notifier.refreshOutboxHistory(silent: false);
                     break;
                   case AppSection.campaigns:
                     break;
@@ -5774,18 +5768,31 @@ class _SyncCard extends StatelessWidget {
               color: Colors.black87,
             ),
           ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.autorenew_rounded, size: 18, color: Colors.green.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Envoi automatique actif — les campagnes partent sans action manuelle.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700, height: 1.35),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: ElevatedButton.icon(
+            child: OutlinedButton.icon(
               onPressed: appState.syncing
                   ? null
                   : () {
                       HapticFeedback.mediumImpact();
                       notifier.syncOnce();
                     },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 18),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
@@ -5796,16 +5803,16 @@ class _SyncCard extends StatelessWidget {
                       height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Colors.white,
+                        color: Color(0xFF16A34A),
                       ),
                     )
                   : const Icon(Icons.sync_rounded, size: 24),
               label: Text(
                 appState.syncing
-                    ? 'Synchronisation en cours...'
-                    : 'Synchroniser et envoyer',
+                    ? 'Synchronisation manuelle...'
+                    : 'Forcer une sync (optionnel)',
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 15,
                   fontWeight: FontWeight.w600,
                 ),
               ),

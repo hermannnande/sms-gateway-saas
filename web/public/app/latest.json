@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.8+55",
+  "latestVersion": "1.3.9+56",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CORRECTIF: envoi SMS continue en arriere-plan (app fermee, ecran verrouille)\n• Le service ne se bloque plus si vous quittez l'app pendant une campagne\n• Redemarrage auto apres reboot du telephone\n• CORRECTIF SIM: les SMS respectent la SIM choisie (SIM 1 / SIM 2)"
+  "notes": "• Envoi automatique: plus besoin de synchroniser manuellement\n• Detection des campagnes web toutes les 10s + service arriere-plan permanent\n• Envoi continue en arriere-plan et ecran verrouille\n• CORRECTIF SIM: respect de la SIM choisie (SIM 1 / SIM 2)"
 }

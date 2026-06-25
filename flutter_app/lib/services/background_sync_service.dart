@@ -74,7 +74,10 @@ class BackgroundSyncService {
 
   static Future<bool> isEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_enabledKey) ?? false;
+    final explicit = prefs.getBool(_enabledKey);
+    if (explicit != null) return explicit;
+    final token = prefs.getString('device_token')?.trim();
+    return token != null && token.isNotEmpty;
   }
 
   static Future<void> setEnabled(bool enabled) async {
@@ -136,10 +139,26 @@ class BackgroundSyncService {
   /// Release foreground lock and nudge the background worker (app going to background).
   static Future<void> handoffToBackground() async {
     await setForegroundLock(false);
-    if (!(await isEnabled())) return;
+    await ensureAutoSync();
+  }
+
+  /// Keep the foreground service claiming/sending without any manual sync.
+  /// Safe to call frequently (no-op if the service is already running).
+  static Future<void> ensureAutoSync() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final token = prefs.getString('device_token')?.trim();
+    if (token == null || token.isEmpty) return;
+
+    await setEnabled(true);
+    await setPaused(false);
+    await setForegroundLock(false);
+    await init();
     await ensureRunning();
     try {
-      FlutterForegroundTask.sendDataToTask('kick');
+      if (await FlutterForegroundTask.isRunningService) {
+        FlutterForegroundTask.sendDataToTask('kick');
+      }
     } catch (_) {}
   }
 
@@ -417,6 +436,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         );
         return;
       }
+
+      // Appareil jumelé → envoi auto actif (sauf si l'utilisateur a désactivé le service).
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
+        if (prefs.getBool(BackgroundSyncService._enabledKey) == null) {
+          await prefs.setBool(BackgroundSyncService._enabledKey, true);
+        }
+      } catch (_) {}
 
       try {
         final smsOk = await Permission.sms.isGranted;
