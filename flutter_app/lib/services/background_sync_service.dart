@@ -290,17 +290,24 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   }
 
   Future<void> _updateStatus(String deviceToken, Message msg, bool success, String? error) async {
-    try {
-      await _postJson(
-        _proxyUri('/api/mobile/update-message-status'),
-        {
-          'device_token': deviceToken,
-          'message_id': msg.id,
-          'status': success ? 'sent' : 'failed',
-          'error': error,
-        },
-      );
-    } catch (_) {}
+    const maxAttempts = 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await _postJson(
+          _proxyUri('/api/mobile/update-message-status'),
+          {
+            'device_token': deviceToken,
+            'message_id': msg.id,
+            'status': success ? 'sent' : 'failed',
+            'error': error,
+          },
+        );
+        return;
+      } catch (_) {
+        if (attempt >= maxAttempts) return;
+        await Future.delayed(Duration(milliseconds: 350 * attempt));
+      }
+    }
   }
 
   String _progressBar(int done, int total) {
@@ -468,52 +475,65 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
       } catch (_) {}
 
-      final payload = await _claimPayload(token);
-      final rawList = (payload['messages'] as List?) ?? const [];
-      final messages =
-          rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
-      final campaigns = _campaignsFromPayload(payload);
-      final remaining = payload['quota_remaining'] is int ? payload['quota_remaining'] as int : null;
-      final quotaReached = payload['quota_reached'] == true || remaining == 0;
-      final plan = payload['plan'];
-      final planQuota = plan is Map && plan['sms_quota_month'] is int ? plan['sms_quota_month'] as int : null;
+      var batchesProcessed = 0;
+      const maxBatchesPerCycle = 200;
+      var shouldChainImmediately = false;
 
-      if (messages.isEmpty) {
-        if (quotaReached && (planQuota ?? 0) > 0) {
+      while (batchesProcessed < maxBatchesPerCycle) {
+        if (await _isPaused()) break;
+
+        final payload = await _claimPayload(token);
+        final rawList = (payload['messages'] as List?) ?? const [];
+        final messages =
+            rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
+        final campaigns = _campaignsFromPayload(payload);
+        final remaining = payload['quota_remaining'] is int ? payload['quota_remaining'] as int : null;
+        final quotaReached =
+            payload['quota_reached'] == true || (remaining != null && remaining <= 0);
+        final plan = payload['plan'];
+        final planQuota = plan is Map && plan['sms_quota_month'] is int ? plan['sms_quota_month'] as int : null;
+
+        if (messages.isEmpty) {
+          if (batchesProcessed == 0) {
+            if (quotaReached && (planQuota ?? 0) > 0) {
+              await FlutterForegroundTask.updateService(
+                notificationTitle: 'SMSenvoie',
+                notificationText: '\ud83d\udeab Quota atteint (0 SMS restant ce mois)',
+                notificationButtons: _activeButtons(),
+              );
+            } else {
+              final debugInfo = quotaReached ? 'quota=$remaining' : 'pas de campagne';
+              final updateHint = _updateAvailable ? ' \u2022 MAJ dispo!' : '';
+              await FlutterForegroundTask.updateService(
+                notificationTitle: 'SMSenvoie',
+                notificationText:
+                    '\u2705 Actif \u2022 ${_hhmmss()} \u2022 Aucun msg ($debugInfo)$updateHint',
+                notificationButtons: _activeButtons(),
+              );
+            }
+          }
+          break;
+        }
+
+        batchesProcessed++;
+
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'SMSenvoie',
+          notificationText: '\ud83d\udd04 ${messages.length} msg r\u00e9cup\u00e9r\u00e9s, envoi imminent...',
+          notificationButtons: _activeButtons(),
+        );
+
+        final sims = await _getSimCards();
+        final requiresSimRouting =
+            messages.any((m) => resolveSimRouting(m, sims).requiresSpecificSim);
+        if (requiresSimRouting && sims.isEmpty) {
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMSenvoie',
-            notificationText: '\ud83d\udeab Quota atteint (0 SMS restant ce mois)',
+            notificationText:
+                '\u26a0\ufe0f Lecture SIM impossible \u2192 tentative via slot demand\u00e9',
             notificationButtons: _activeButtons(),
           );
-          return;
         }
-        final debugInfo = quotaReached ? 'quota=$remaining' : 'pas de campagne';
-        final updateHint = _updateAvailable ? ' \u2022 MAJ dispo!' : '';
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'SMSenvoie',
-          notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 Aucun msg ($debugInfo)$updateHint',
-          notificationButtons: _activeButtons(),
-        );
-        return;
-      }
-
-      await FlutterForegroundTask.updateService(
-        notificationTitle: 'SMSenvoie',
-        notificationText: '\ud83d\udd04 ${messages.length} msg r\u00e9cup\u00e9r\u00e9s, envoi imminent...',
-        notificationButtons: _activeButtons(),
-      );
-
-      final sims = await _getSimCards();
-      final requiresSimRouting =
-          messages.any((m) => resolveSimRouting(m, sims).requiresSpecificSim);
-      if (requiresSimRouting && sims.isEmpty) {
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'SMSenvoie',
-          notificationText:
-              '\u26a0\ufe0f Lecture SIM impossible \u2192 tentative via slot demand\u00e9',
-          notificationButtons: _activeButtons(),
-        );
-      }
       final batchTotal = messages.length;
       var attempted = 0;
       var failed = 0;
@@ -727,6 +747,26 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             notificationButtons: _activeButtons(),
           );
         }
+      }
+
+        if (pausedAfterLoop) break;
+        if (failed > 0) break;
+
+        // Lot complet → enchaîner immédiatement le lot suivant (sans attendre 3 s).
+        if (messages.length >= AppConfig.claimBatchSize) {
+          continue;
+        }
+        break;
+      }
+
+      if (batchesProcessed >= maxBatchesPerCycle) {
+        shouldChainImmediately = true;
+      }
+
+      if (shouldChainImmediately) {
+        _busy = false;
+        unawaited(Future.microtask(_tick));
+        return;
       }
     } catch (e) {
       await FlutterForegroundTask.updateService(

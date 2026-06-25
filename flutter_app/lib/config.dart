@@ -11,8 +11,8 @@ class AppConfig {
   static const supabaseAnonKey =
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhbXVteWJjb3h4YW5oamFrcGRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcxMDA1MzAsImV4cCI6MjA4MjY3NjUzMH0.0SLKPBAO5AaYguxnqUjb2nDVIGvZiK8N-3FQCREKk6w';
 
-  /// Limite de messages à réclamer par batch.
-  static const claimBatchSize = 10;
+  /// Limite de messages réclamés par cycle serveur (plusieurs cycles s'enchaînent).
+  static const claimBatchSize = 30;
 
   /// Délai entre chaque SMS (en millisecondes) pour que la progression soit visible.
   /// Valeurs recommandées: 1000ms (rapide), 2000ms (normal), 3000ms (lent mais visible).
