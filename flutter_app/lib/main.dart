@@ -25,6 +25,7 @@ import 'package:smsgateway_flutter/services/app_update_service.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/auth_session_storage.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
+import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 import 'package:smsgateway_flutter/services/background_sync_service.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:supabase/supabase.dart';
@@ -1015,20 +1016,12 @@ class AppNotifier extends Notifier<AppState> {
 
       for (int i = 0; i < messages.length; i++) {
         final msg = messages[i];
-        int? subscriptionId;
-        if (msg.simSubscriptionId != null) {
-          subscriptionId = msg.simSubscriptionId;
-        } else if (msg.simSlotIndex != null) {
-          final match = state.availableSims.firstWhere(
-            (s) => s.simSlotIndex == msg.simSlotIndex,
-            orElse: () => const SimCard(subscriptionId: -1, simSlotIndex: -1, displayName: '', carrierName: ''),
-          );
-          subscriptionId = match.subscriptionId >= 0 ? match.subscriptionId : null;
-        }
+        final routing = resolveSimRouting(msg, state.availableSims);
 
         final sendResult = await ref.read(smsSenderProvider).send(
               msg,
-              subscriptionIdOverride: subscriptionId,
+              subscriptionIdOverride: routing.subscriptionId,
+              simSlotIndexOverride: routing.simSlotIndex,
             );
         await ref.read(deviceServiceProvider).updateMessageStatus(
           deviceToken: token,

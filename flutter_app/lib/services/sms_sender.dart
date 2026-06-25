@@ -45,13 +45,19 @@ class SmsSender {
     return granted;
   }
 
-  Future<SmsSendResult> send(Message message, {int? subscriptionIdOverride}) async {
+  Future<SmsSendResult> send(
+    Message message, {
+    int? subscriptionIdOverride,
+    int? simSlotIndexOverride,
+  }) async {
     try {
       final subId = subscriptionIdOverride ?? message.simSubscriptionId;
+      final slotIdx = simSlotIndexOverride ?? message.simSlotIndex;
       final ok = await _channel.invokeMethod<bool>('sendSms', {
             'to': message.to,
             'body': message.content,
             'subscriptionId': subId,
+            'simSlotIndex': slotIdx,
           }) ??
           false;
 

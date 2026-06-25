@@ -91,6 +91,9 @@ object SmsChannel {
         val to = call.argument<String>("to")
         val body = call.argument<String>("body")
         val subscriptionId = call.argument<Int>("subscriptionId")
+        val simSlotIndex = call.argument<Int>("simSlotIndex")
+        val strictSimRouting = (subscriptionId != null && subscriptionId > 0) ||
+            (simSlotIndex != null && simSlotIndex >= 0)
 
         if (to.isNullOrBlank() || body.isNullOrBlank()) {
             result.error("SMS_INVALID_INPUT", "Destinataire ou message vide", null)
@@ -98,13 +101,16 @@ object SmsChannel {
         }
 
         try {
-            val smsManager = resolveSmsManager(context, subscriptionId)
+            val smsManager = resolveSmsManager(context, subscriptionId, simSlotIndex, strictSimRouting)
             if (smsManager == null) {
-                result.error(
-                    "SMS_NO_MANAGER",
-                    "Aucun SmsManager disponible (SIM absente / desactivee)",
-                    null,
-                )
+                val detail = when {
+                    simSlotIndex != null && simSlotIndex >= 0 ->
+                        "SIM ${simSlotIndex + 1} introuvable ou inactive"
+                    subscriptionId != null && subscriptionId > 0 ->
+                        "Subscription $subscriptionId introuvable"
+                    else -> "Aucun SmsManager disponible (SIM absente / desactivee)"
+                }
+                result.error("SMS_NO_MANAGER", detail, null)
                 return
             }
 
@@ -167,26 +173,54 @@ object SmsChannel {
     }
 
     @Suppress("DEPRECATION")
-    private fun resolveSmsManager(context: Context, subscriptionId: Int?): SmsManager? {
-        return try {
-            if (subscriptionId != null && subscriptionId >= 0) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val sysMgr = context.getSystemService(SmsManager::class.java)
-                    sysMgr?.createForSubscriptionId(subscriptionId)
-                } else {
-                    SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+    private fun resolveSmsManager(
+        context: Context,
+        subscriptionId: Int?,
+        simSlotIndex: Int?,
+        strictRouting: Boolean,
+    ): SmsManager? {
+        if (subscriptionId != null && subscriptionId > 0) {
+            managerForSubscriptionId(context, subscriptionId)?.let { return it }
+            if (strictRouting) {
+                Log.e(TAG, "resolveSmsManager: subscription $subscriptionId unavailable")
+                return null
+            }
+        }
+
+        if (simSlotIndex != null && simSlotIndex >= 0) {
+            try {
+                val subMgr =
+                    context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+                val info = subMgr.activeSubscriptionInfoList
+                    ?.firstOrNull { it.simSlotIndex == simSlotIndex }
+                if (info != null) {
+                    managerForSubscriptionId(context, info.subscriptionId)?.let { return it }
                 }
+                Log.e(TAG, "resolveSmsManager: no active subscription for slot $simSlotIndex")
+            } catch (e: SecurityException) {
+                Log.e(TAG, "resolveSmsManager: permission denied reading SIM slot $simSlotIndex", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "resolveSmsManager: slot lookup failed for $simSlotIndex", e)
+            }
+            if (strictRouting) return null
+        }
+
+        if (strictRouting) return null
+        return defaultSmsManager(context)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun managerForSubscriptionId(context: Context, subscriptionId: Int): SmsManager? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val sysMgr = context.getSystemService(SmsManager::class.java)
+                sysMgr?.createForSubscriptionId(subscriptionId)
             } else {
-                defaultSmsManager(context)
+                SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "resolveSmsManager fallback to default (sub=$subscriptionId): $e")
-            try {
-                defaultSmsManager(context)
-            } catch (e2: Exception) {
-                Log.e(TAG, "resolveSmsManager fallback failed: $e2")
-                null
-            }
+            Log.w(TAG, "managerForSubscriptionId failed (sub=$subscriptionId): $e")
+            null
         }
     }
 

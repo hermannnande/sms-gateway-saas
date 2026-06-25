@@ -11,6 +11,8 @@ import 'package:http/http.dart' as http;
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
+import 'package:smsgateway_flutter/services/sms_sender.dart';
+import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 
 class BackgroundSyncService {
   static const int serviceId = 701;
@@ -190,30 +192,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     return prefs.getBool(BackgroundSyncService._fgLockKey) ?? false;
   }
 
-  Future<List<Map<String, dynamic>>> _getSimCards() async {
+  Future<List<SimCard>> _getSimCards() async {
     try {
       final raw = await _channel.invokeMethod('getSimCards');
       final list = (raw as List? ?? const []).whereType<Map>().map((e) {
-        final m = Map<String, dynamic>.from(e);
-        return m;
+        return SimCard.fromJson(Map<String, dynamic>.from(e));
       }).toList();
       return list;
     } catch (_) {
       return const [];
     }
-  }
-
-  int? _pickSubscriptionId(Message msg, List<Map<String, dynamic>> sims) {
-    if (msg.simSubscriptionId != null) return msg.simSubscriptionId;
-    if (msg.simSlotIndex == null) return null;
-    for (final s in sims) {
-      final slot = s['simSlotIndex'];
-      if (slot is int && slot == msg.simSlotIndex) {
-        final sub = s['subscriptionId'];
-        if (sub is int) return sub;
-      }
-    }
-    return null;
   }
 
   Future<Map<String, dynamic>> _postJson(Uri uri, Map<String, dynamic> body) async {
@@ -446,17 +434,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       );
 
       final sims = await _getSimCards();
-      // Avant : si la campagne demandait une SIM précise mais que la liste des
-      // SIMs est vide (permission ou téléphone mono‑SIM), on bloquait sans
-      // envoyer. Cela laissait les messages bloqués en statut "sending" et la
-      // campagne ne progressait jamais. On affiche maintenant un avertissement
-      // mais on continue: l'OS utilisera la SIM par défaut.
-      final requiresSimRouting = messages.any((m) => m.simSlotIndex != null);
+      final requiresSimRouting =
+          messages.any((m) => resolveSimRouting(m, sims).requiresSpecificSim);
       if (requiresSimRouting && sims.isEmpty) {
         await FlutterForegroundTask.updateService(
           notificationTitle: 'SMSenvoie',
           notificationText:
-              '\u26a0\ufe0f Routage SIM impossible \u2192 envoi via SIM par d\u00e9faut',
+              '\u26a0\ufe0f Lecture SIM impossible \u2192 tentative via slot demand\u00e9',
           notificationButtons: _activeButtons(),
         );
       }
@@ -534,11 +518,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
 
         try {
-          final subscriptionId = _pickSubscriptionId(msg, sims);
+          final routing = resolveSimRouting(msg, sims);
           await _channel.invokeMethod('sendSms', {
             'to': msg.to,
             'body': msg.content,
-            'subscriptionId': subscriptionId,
+            'subscriptionId': routing.subscriptionId,
+            'simSlotIndex': routing.simSlotIndex,
           });
           await _updateStatus(token, msg, true, null);
 
