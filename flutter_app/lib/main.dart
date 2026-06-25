@@ -350,6 +350,28 @@ class AppNotifier extends Notifier<AppState> {
     } catch (_) {}
   }
 
+  /// Reprend l'envoi sans clic utilisateur (service arrière-plan + filet de sécurité).
+  Future<void> autoContinueCampaignSend() async {
+    if (state.deviceToken == null || state.deviceToken!.isEmpty) return;
+
+    await ensureAutoSyncRunning();
+    try {
+      FlutterForegroundTask.sendDataToTask('kick');
+    } catch (_) {}
+
+    await refreshActiveCampaign(silent: true);
+
+    final status = state.campaignStatusSending;
+    if (status != 'running' && status != 'queued') return;
+
+    final total = state.campaignTotalCount ?? 0;
+    final sent = state.campaignSentCount ?? 0;
+    if (total <= 0 || sent >= total) return;
+    if (state.syncing) return;
+
+    await syncOnce(silentIfEmpty: true);
+  }
+
   Future<void> _loadAppVersion() async {
     try {
       final info = await PackageInfo.fromPlatform();
@@ -665,6 +687,9 @@ class AppNotifier extends Notifier<AppState> {
       final status = row['status']?.toString();
       if ((status == 'running' || status == 'queued') && (state.deviceToken?.isNotEmpty ?? false)) {
         await ensureAutoSyncRunning();
+        try {
+          FlutterForegroundTask.sendDataToTask('kick');
+        } catch (_) {}
       }
     } catch (e) {
       if (!silent) setLastStatus('Erreur campagne: $e');
@@ -957,15 +982,11 @@ class AppNotifier extends Notifier<AppState> {
       state = state.copyWith(lastStatus: 'Aucun token enregistré');
       return;
     }
+    if (state.syncing) return;
 
     state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
 
     try {
-      // Verrouille le service arrière-plan pour éviter le double-envoi pendant ce sync manuel.
-      try {
-        await BackgroundSyncService.setForegroundLock(true);
-      } catch (_) {}
-
       final permsOk = await ref.read(smsSenderProvider).ensurePermissions();
       if (!permsOk) {
         state = state.copyWith(
@@ -975,115 +996,114 @@ class AppNotifier extends Notifier<AppState> {
         return;
       }
 
-      // Charger les SIMs une fois si vide (pour router les campagnes SIM1/SIM2).
       if (state.availableSims.isEmpty) {
         await refreshSimCards();
       }
 
-      final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
-        deviceToken: token,
-        limit: AppConfig.claimBatchSize,
-            // La SIM est décidée côté campagne web (via sim_slot_index),
-            // claim_messages_atomic renvoie ensuite sim_subscription_id = "slot:X".
-            simSubscriptionId: null,
-          );
+      var batchesProcessed = 0;
+      const maxBatches = 100;
+      var totalOk = 0;
+      var totalFail = 0;
+      final allResults = <String>[];
+      List<Message> lastBatchMessages = const [];
 
-      // Mettre à jour quota/usage dès qu’on a une réponse serveur.
-      final usedThisMonth = _safeParseInt(payload['sms_used_this_month']);
-      final remaining = _safeParseInt(payload['quota_remaining']);
-      state = state.copyWith(
-        smsUsedThisMonth: usedThisMonth ?? state.smsUsedThisMonth,
-        quotaRemaining: remaining ?? state.quotaRemaining,
-      );
-
-      final rawList = (payload['messages'] as List?) ?? const [];
-      final messages = rawList
-          .whereType<Map>()
-          .map((e) => Message.fromJson(Map<String, dynamic>.from(e)))
-          .toList();
-
-      if (messages.isEmpty) {
-        final quotaReached = payload['quota_reached'] == true || remaining == 0;
-        final plan = payload['plan'];
-        final planQuota = plan is Map ? _safeParseInt(plan['sms_quota_month']) : null;
-
-        if (!silentIfEmpty) {
-          if (quotaReached && planQuota != null && planQuota > 0) {
-            state = state.copyWith(
-              lastStatus:
-                  '🚫 Quota atteint (${planQuota} SMS/mois). Reste: 0.\nLes SMS restants sont en attente. Passe à un abonnement ou attends le renouvellement.',
-              lastMessages: const [],
+      while (batchesProcessed < maxBatches) {
+        final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
+              deviceToken: token,
+              limit: AppConfig.claimBatchSize,
+              simSubscriptionId: null,
             );
-          } else {
-            state = state.copyWith(
-              lastStatus: 'Aucun message à envoyer',
-              lastMessages: const [],
-            );
-          }
-        }
-        return;
-      }
 
-      final results = <String>[];
-      int okCount = 0;
-      int failCount = 0;
-      final perSmsDelayMs = await AppSettings.getSmsDelayMs();
-
-      for (int i = 0; i < messages.length; i++) {
-        final msg = messages[i];
-        final routing = resolveSimRouting(msg, state.availableSims);
-
-        final sendResult = await ref.read(smsSenderProvider).send(
-              msg,
-              subscriptionIdOverride: routing.subscriptionId,
-              simSlotIndexOverride: routing.simSlotIndex,
-            );
-        await ref.read(deviceServiceProvider).updateMessageStatus(
-          deviceToken: token,
-          message: msg,
-          success: sendResult.success,
-          error: sendResult.error,
+        final usedThisMonth = _safeParseInt(payload['sms_used_this_month']);
+        final remaining = _safeParseInt(payload['quota_remaining']);
+        state = state.copyWith(
+          smsUsedThisMonth: usedThisMonth ?? state.smsUsedThisMonth,
+          quotaRemaining: remaining ?? state.quotaRemaining,
         );
 
-        if (sendResult.success) {
-          okCount++;
-          results.add('✅ sent → ${msg.to}');
-        } else {
-          failCount++;
-          final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
-          results.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
+        final rawList = (payload['messages'] as List?) ?? const [];
+        final messages = rawList
+            .whereType<Map>()
+            .map((e) => Message.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+
+        if (messages.isEmpty) {
+          if (batchesProcessed == 0 && !silentIfEmpty) {
+            final quotaReached = payload['quota_reached'] == true || remaining == 0;
+            final plan = payload['plan'];
+            final planQuota = plan is Map ? _safeParseInt(plan['sms_quota_month']) : null;
+
+            if (quotaReached && planQuota != null && planQuota > 0) {
+              state = state.copyWith(
+                lastStatus:
+                    '🚫 Quota atteint (${planQuota} SMS/mois). Reste: 0.\nLes SMS restants sont en attente. Passe à un abonnement ou attends le renouvellement.',
+                lastMessages: const [],
+              );
+            } else {
+              state = state.copyWith(
+                lastStatus: 'Aucun message à envoyer',
+                lastMessages: const [],
+              );
+            }
+          }
+          break;
         }
 
-        // Respect the user-configured delay between SMS, except after the
-        // last message of the batch.
-        if (i < messages.length - 1 && perSmsDelayMs > 0) {
-          await Future.delayed(Duration(milliseconds: perSmsDelayMs));
+        batchesProcessed++;
+        lastBatchMessages = messages;
+        final perSmsDelayMs = await AppSettings.getSmsDelayMs();
+
+        for (int i = 0; i < messages.length; i++) {
+          final msg = messages[i];
+          final routing = resolveSimRouting(msg, state.availableSims);
+
+          final sendResult = await ref.read(smsSenderProvider).send(
+                msg,
+                subscriptionIdOverride: routing.subscriptionId,
+                simSlotIndexOverride: routing.simSlotIndex,
+              );
+          await ref.read(deviceServiceProvider).updateMessageStatus(
+                deviceToken: token,
+                message: msg,
+                success: sendResult.success,
+                error: sendResult.error,
+              );
+
+          if (sendResult.success) {
+            totalOk++;
+            allResults.add('✅ sent → ${msg.to}');
+          } else {
+            totalFail++;
+            final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
+            allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
+          }
+
+          if (i < messages.length - 1 && perSmsDelayMs > 0) {
+            await Future.delayed(Duration(milliseconds: perSmsDelayMs));
+          }
         }
+
+        if (messages.length < AppConfig.claimBatchSize) break;
       }
 
-      state = state.copyWith(
-        lastMessages: messages,
-        lastStatus: 'Résultat: $okCount OK • $failCount échecs\n\n${results.join('\n')}',
-      );
+      if (batchesProcessed > 0) {
+        state = state.copyWith(
+          lastMessages: lastBatchMessages,
+          lastStatus:
+              'Résultat: $totalOk OK • $totalFail échecs${batchesProcessed > 1 ? ' ($batchesProcessed lots)' : ''}\n\n${allResults.take(20).join('\n')}',
+        );
+        await refreshDeviceStatus(silent: true);
+        await refreshActiveCampaign(silent: true);
+      }
 
-      // Rafraîchir le quota après envoi (statuts mis à jour côté serveur)
-      await refreshDeviceStatus(silent: true);
-
-      // Si le mode arrière-plan est activé, relancer le service après l'envoi manuel.
       try {
-        final bgEnabled = await BackgroundSyncService.isEnabled();
-        if (bgEnabled) {
-          await BackgroundSyncService.setPaused(false);
-          await BackgroundSyncService.ensureRunning();
-        }
+        await BackgroundSyncService.setPaused(false);
+        await BackgroundSyncService.ensureAutoSync();
       } catch (_) {}
     } catch (e, st) {
       ref.read(loggerProvider).e('syncOnce error', error: e, stackTrace: st);
       state = state.copyWith(lastStatus: 'Erreur sync: $e');
     } finally {
-      try {
-        await BackgroundSyncService.setForegroundLock(false);
-      } catch (_) {}
       state = state.copyWith(syncing: false);
     }
   }
@@ -1168,9 +1188,8 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       await ref.read(appProvider.notifier).ensureAutoSyncRunning();
       await ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
     });
-    _autoSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      ref.read(appProvider.notifier).ensureAutoSyncRunning();
-      ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      ref.read(appProvider.notifier).autoContinueCampaignSend();
     });
   }
 
@@ -2857,9 +2876,7 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _ensureBackgroundSending() async {
-    if (!(ref.read(appProvider).deviceToken?.isNotEmpty ?? false)) return;
-    await ref.read(appProvider.notifier).ensureAutoSyncRunning();
-    await ref.read(appProvider.notifier).refreshActiveCampaign(silent: true);
+    await ref.read(appProvider.notifier).autoContinueCampaignSend();
   }
 
   void _startHeartbeat() {

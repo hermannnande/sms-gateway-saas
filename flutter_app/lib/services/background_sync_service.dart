@@ -56,7 +56,7 @@ class BackgroundSyncService {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(3000),
+        eventAction: ForegroundTaskEventAction.repeat(2000),
         autoRunOnBoot: true,
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
@@ -222,6 +222,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   String? _activeCampaignId;
   int _tickCount = 0;
   bool _updateAvailable = false;
+  Timer? _watchdog;
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
@@ -371,6 +372,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 En attente...',
       notificationButtons: _activeButtons(),
     );
+    _watchdog?.cancel();
+    _watchdog = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!_busy) {
+        unawaited(_tick());
+      }
+    });
+    unawaited(_tick());
   }
 
   @override
@@ -414,15 +422,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     }
 
     try {
-      final fgLocked = await _isForegroundLocked();
-      if (fgLocked) {
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'SMSenvoie',
-          notificationText: '\u23f3 Envoi en cours via l\'app...',
-          notificationButtons: _activeButtons(),
-        );
-        return;
-      }
+      await BackgroundSyncService.setForegroundLock(false);
 
       final paused = await _isPaused();
       if (paused) {
@@ -768,6 +768,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         unawaited(Future.microtask(_tick));
         return;
       }
+
+      if (batchesProcessed > 0) {
+        try {
+          FlutterForegroundTask.sendDataToTask('kick');
+        } catch (_) {}
+      }
     } catch (e) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMSenvoie',
@@ -786,6 +792,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    _watchdog?.cancel();
     _http.close();
   }
 

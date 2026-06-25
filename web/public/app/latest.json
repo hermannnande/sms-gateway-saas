@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.10+57",
+  "latestVersion": "1.3.11+58",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CORRECTIF: les campagnes continuent apres 10/30 SMS (lots enchaines automatiquement)\n• Taille de lot portee a 30 messages\n• Envoi automatique sans sync manuelle\n• Envoi continue en arriere-plan et ecran verrouille"
+  "notes": "• CORRECTIF MAJEUR: l'envoi continue sans cliquer sur Forcer\n• Suppression du verrou qui bloquait le service arriere-plan\n• Reprise automatique toutes les 6 secondes si campagne inachevee\n• Watchdog arriere-plan + lots enchaines (30 SMS/lot)"
 }
