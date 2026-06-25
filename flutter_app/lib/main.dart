@@ -647,7 +647,7 @@ class AppNotifier extends Notifier<AppState> {
           final bgRunning = await BackgroundSyncService.isRunning();
           if (!bgRunning) {
             await BackgroundSyncService.init();
-            await BackgroundSyncService.start();
+            await BackgroundSyncService.ensureRunning();
           }
           // Kick the background service to process immediately
           FlutterForegroundTask.sendDataToTask('kick');
@@ -705,7 +705,7 @@ class AppNotifier extends Notifier<AppState> {
     } catch (_) {}
     try {
       await BackgroundSyncService.init();
-      await BackgroundSyncService.start();
+      await BackgroundSyncService.ensureRunning();
     } catch (_) {}
     await syncOnce();
   }
@@ -1059,7 +1059,7 @@ class AppNotifier extends Notifier<AppState> {
         final bgEnabled = await BackgroundSyncService.isEnabled();
         if (bgEnabled) {
           await BackgroundSyncService.setPaused(false);
-          await BackgroundSyncService.start();
+          await BackgroundSyncService.ensureRunning();
         }
       } catch (_) {}
     } catch (e, st) {
@@ -1137,13 +1137,14 @@ class MyApp extends ConsumerStatefulWidget {
   ConsumerState<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends ConsumerState<MyApp> {
+class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     scheduleMicrotask(() => ref.read(appProvider.notifier).init());
     scheduleMicrotask(_initDeepLinks);
     // Init foreground service infra (background sending)
@@ -1195,8 +1196,18 @@ class _MyAppState extends ConsumerState<MyApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _linkSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      unawaited(BackgroundSyncService.handoffToBackground());
+    }
   }
 
   @override
@@ -2844,22 +2855,18 @@ class _HomePageState extends ConsumerState<HomePage>
         final running = await BackgroundSyncService.isRunning();
         if (!running) {
           await BackgroundSyncService.init();
-          await BackgroundSyncService.start();
+          await BackgroundSyncService.ensureRunning();
         }
         // Kick the background isolate so it re-reads prefs immediately
         FlutterForegroundTask.sendDataToTask('kick');
       } catch (_) {}
-
-      // If campaign running but 0 SMS sent after service is active, do a direct sync as kickstart
-      final sentCount = appState.campaignSentCount ?? 0;
-      if (sentCount == 0 && !appState.syncing) {
-        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
-      }
     } else {
-      // No active campaign: fallback if bg not running at all
+      // No active campaign: keep background worker alive for the next campaign.
       final bgRunning = await BackgroundSyncService.isRunning();
-      if (!bgRunning && !appState.syncing) {
-        ref.read(appProvider.notifier).syncOnce(silentIfEmpty: true);
+      if (!bgRunning) {
+        try {
+          await BackgroundSyncService.ensureRunning();
+        } catch (_) {}
       }
     }
   }

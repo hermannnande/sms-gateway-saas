@@ -19,7 +19,9 @@ class BackgroundSyncService {
   static const String _pausedKey = 'bg_sync_paused';
   static const String _enabledKey = 'bg_sync_enabled';
   static const String _fgLockKey = 'bg_sync_fg_lock';
+  static const String _fgLockAtKey = 'bg_sync_fg_lock_at';
   static const String _activeCampaignIdKey = 'bg_sync_active_campaign_id';
+  static const Duration _fgLockMaxAge = Duration(minutes: 2);
 
   static Future<void> setActiveCampaignId(String? id) async {
     final prefs = await SharedPreferences.getInstance();
@@ -44,8 +46,8 @@ class BackgroundSyncService {
         channelId: 'sms_gateway_active_v4',
         channelName: 'SMSenvoie - Envoi actif',
         channelDescription: 'Affiche la progression et les controles d\'envoi SMS.',
-        channelImportance: NotificationChannelImportance.DEFAULT,
-        priority: NotificationPriority.DEFAULT,
+        channelImportance: NotificationChannelImportance.HIGH,
+        priority: NotificationPriority.HIGH,
         showWhen: false,
         onlyAlertOnce: true,
       ),
@@ -55,7 +57,7 @@ class BackgroundSyncService {
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(3000),
-        autoRunOnBoot: false,
+        autoRunOnBoot: true,
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
         allowWifiLock: true,
@@ -105,11 +107,46 @@ class BackgroundSyncService {
   static Future<void> setForegroundLock(bool locked) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_fgLockKey, locked);
+    if (locked) {
+      await prefs.setInt(_fgLockAtKey, DateTime.now().millisecondsSinceEpoch);
+    } else {
+      await prefs.remove(_fgLockAtKey);
+    }
   }
 
+  /// True when the foreground UI is doing a manual sync. Expires automatically
+  /// if the app is killed mid-sync so background sending is never blocked forever.
   static Future<bool> isForegroundLocked() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_fgLockKey) ?? false;
+    await prefs.reload();
+    if (!(prefs.getBool(_fgLockKey) ?? false)) return false;
+
+    final lockedAt = prefs.getInt(_fgLockAtKey);
+    if (lockedAt == null) return true;
+
+    final age = DateTime.now().millisecondsSinceEpoch - lockedAt;
+    if (age > _fgLockMaxAge.inMilliseconds) {
+      await prefs.setBool(_fgLockKey, false);
+      await prefs.remove(_fgLockAtKey);
+      return false;
+    }
+    return true;
+  }
+
+  /// Release foreground lock and nudge the background worker (app going to background).
+  static Future<void> handoffToBackground() async {
+    await setForegroundLock(false);
+    if (!(await isEnabled())) return;
+    await ensureRunning();
+    try {
+      FlutterForegroundTask.sendDataToTask('kick');
+    } catch (_) {}
+  }
+
+  /// Start the foreground service only if it is not already running.
+  static Future<void> ensureRunning() async {
+    if (await FlutterForegroundTask.isRunningService) return;
+    await start();
   }
 
   static Future<void> start() async {
@@ -139,10 +176,7 @@ class BackgroundSyncService {
       }
     } catch (_) {}
 
-    if (await FlutterForegroundTask.isRunningService) {
-      await FlutterForegroundTask.stopService();
-      await Future.delayed(const Duration(milliseconds: 250));
-    }
+    if (await FlutterForegroundTask.isRunningService) return;
 
     await FlutterForegroundTask.startService(
       serviceId: serviceId,
@@ -187,9 +221,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   }
 
   Future<bool> _isForegroundLocked() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    return prefs.getBool(BackgroundSyncService._fgLockKey) ?? false;
+    return BackgroundSyncService.isForegroundLocked();
   }
 
   Future<List<SimCard>> _getSimCards() async {
@@ -306,6 +338,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    await BackgroundSyncService.setForegroundLock(false);
     _activeCampaignId = await BackgroundSyncService.getActiveCampaignId();
     await FlutterForegroundTask.updateService(
       notificationTitle: 'SMSenvoie',
@@ -395,6 +428,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             notificationButtons: _activeButtons(),
           );
           return;
+        }
+        final batteryOk = await Permission.ignoreBatteryOptimizations.isGranted;
+        if (!batteryOk && _tickCount % 20 == 1) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMSenvoie',
+            notificationText:
+                '\u26a0\ufe0f Autorisez l\'arri\u00e8re-plan (batterie) pour continuer en veille',
+            notificationButtons: _activeButtons(),
+          );
         }
       } catch (_) {}
 

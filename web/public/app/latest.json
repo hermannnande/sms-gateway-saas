@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.7+54",
+  "latestVersion": "1.3.8+55",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CORRECTIF: les SMS respectent maintenant la SIM choisie (SIM 1 / SIM 2) lors de la campagne\n• Les SMS envoyes apparaissent dans l'app Messages du telephone (boite Envoyes)\n• Le delai SMS se regle depuis smsenvoie.com/dashboard/profile"
+  "notes": "• CORRECTIF: envoi SMS continue en arriere-plan (app fermee, ecran verrouille)\n• Le service ne se bloque plus si vous quittez l'app pendant une campagne\n• Redemarrage auto apres reboot du telephone\n• CORRECTIF SIM: les SMS respectent la SIM choisie (SIM 1 / SIM 2)"
 }
