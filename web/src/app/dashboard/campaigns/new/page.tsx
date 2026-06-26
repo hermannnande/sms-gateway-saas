@@ -39,6 +39,13 @@ export default async function NewCampaignPage() {
     .eq('org_id', orgMember.org_id)
     .eq('opt_in', true) : { count: 0 }
 
+  // Appareils disponibles pour assigner la campagne
+  const { data: devices } = orgMember ? await supabase
+    .from('devices')
+    .select('id, name, status')
+    .eq('org_id', orgMember.org_id)
+    .order('name', { ascending: true }) : { data: [] }
+
   return (
     <div className="space-y-8">
       {/* Page header */}
@@ -67,6 +74,7 @@ export default async function NewCampaignPage() {
         <NewCampaignForm
           templates={templates || []}
           contactsCount={contactsCount || 0}
+          devices={devices || []}
         />
       </div>
     </div>

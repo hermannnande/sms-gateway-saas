@@ -58,14 +58,22 @@ type Template = {
   body: string
 }
 
+type DeviceOption = {
+  id: string
+  name: string
+  status?: string | null
+}
+
 type ContactInputMode = 'manual' | 'file' | 'database'
 
 export function NewCampaignForm({
   templates,
   contactsCount: dbContactsCount,
+  devices,
 }: {
   templates: Template[]
   contactsCount: number
+  devices: DeviceOption[]
 }) {
   const [name, setName] = useState('')
   const [templateId, setTemplateId] = useState('')
@@ -73,6 +81,7 @@ export function NewCampaignForm({
   const [contactInputMode, setContactInputMode] = useState<ContactInputMode>('manual')
   const [manualContacts, setManualContacts] = useState('')
   const [simSlotIndex, setSimSlotIndex] = useState<number | null>(null)
+  const [deviceId, setDeviceId] = useState<string>('')
   const [priority, setPriority] = useState<number>(0)
   const [fileContacts, setFileContacts] = useState<
     { phone_e164: string; name?: string }[]
@@ -82,6 +91,13 @@ export function NewCampaignForm({
   const [error, setError] = useState<string | null>(null)
   const [skippedBlacklist, setSkippedBlacklist] = useState<string[]>([])
   const router = useRouter()
+
+  // Un seul appareil : sélection automatique
+  useEffect(() => {
+    if (devices.length === 1) {
+      setDeviceId(devices[0].id)
+    }
+  }, [devices])
 
   const selectedTemplate = templates.find((t) => t.id === templateId)
 
@@ -274,6 +290,12 @@ export function NewCampaignForm({
         ? manualParse.valid.length
         : getContactsForCampaign().length
 
+  const canSubmitDevice =
+    devices.length === 1 ||
+    (devices.length >= 2 && deviceId.trim() !== '')
+
+  const canSubmit = devices.length > 0 && canSubmitDevice && totalContactsToSend > 0
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
@@ -296,6 +318,18 @@ export function NewCampaignForm({
 
       if (!messageBody.trim()) {
         throw new Error('Le message SMS ne peut pas être vide.')
+      }
+
+      const resolvedDeviceId =
+        devices.length === 1 ? devices[0].id : deviceId.trim() || null
+
+      if (devices.length === 0) {
+        throw new Error(
+          'Aucun appareil connecté. Liez un appareil depuis la page Appareils avant de lancer une campagne.',
+        )
+      }
+      if (devices.length >= 2 && !resolvedDeviceId) {
+        throw new Error('Sélectionnez l\'appareil qui enverra cette campagne.')
       }
 
       let contactsToProcess: { phone_e164: string; name?: string }[] = []
@@ -359,6 +393,7 @@ export function NewCampaignForm({
           org_id: orgMember.org_id,
           name,
           template_id: templateId || null,
+          device_id: resolvedDeviceId,
           sim_slot_index: simSlotIndex,
           priority,
           status: 'running',
@@ -580,6 +615,58 @@ export function NewCampaignForm({
           )}
         </div>
 
+        {/* Appareil d'envoi */}
+        <div>
+          <label htmlFor="device-id" className="block text-sm font-semibold mb-2 text-foreground">
+            📱 Appareil d&apos;envoi {devices.length >= 2 && <span className="text-red-500">*</span>}
+          </label>
+          {devices.length === 0 ? (
+            <div className="bg-amber-50 border border-amber-200 text-amber-900 p-4 rounded-lg text-sm">
+              Aucun appareil lié.{' '}
+              <a href="/dashboard/devices" className="font-semibold underline hover:no-underline">
+                Connecter un appareil
+              </a>{' '}
+              avant de lancer une campagne.
+            </div>
+          ) : devices.length === 1 ? (
+            <div className="flex items-center gap-3 px-4 py-3 border border-border rounded-lg bg-muted/30">
+              <span className="text-xl">📱</span>
+              <div>
+                <p className="font-semibold text-sm">{devices[0].name}</p>
+                <p className="text-xs text-muted-foreground">
+                  Seul appareil disponible — sélectionné automatiquement
+                </p>
+              </div>
+              {devices[0].status === 'online' && (
+                <span className="ml-auto text-xs font-semibold text-green-700 bg-green-100 px-2 py-1 rounded-md">
+                  En ligne
+                </span>
+              )}
+            </div>
+          ) : (
+            <>
+              <select
+                id="device-id"
+                value={deviceId}
+                onChange={(e) => setDeviceId(e.target.value)}
+                required
+                className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-background transition"
+              >
+                <option value="">-- Choisir l&apos;appareil qui enverra les SMS --</option>
+                {devices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name}
+                    {device.status === 'online' ? ' (En ligne)' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Seul l&apos;appareil choisi enverra les SMS de cette campagne. Les autres appareils ne les récupéreront pas.
+              </p>
+            </>
+          )}
+        </div>
+
         {/* SIM */}
         <div>
           <label htmlFor="sim-slot" className="block text-sm font-semibold mb-2 text-foreground">
@@ -715,7 +802,7 @@ export function NewCampaignForm({
         <div className="flex gap-3 pt-2">
           <button
             type="submit"
-            disabled={loading || totalContactsToSend === 0}
+            disabled={loading || !canSubmit}
             className="flex-1 bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md flex items-center justify-center gap-2"
           >
             {loading ? (

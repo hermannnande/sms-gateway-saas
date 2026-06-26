@@ -13,6 +13,8 @@ type Campaign = {
   total_count?: number
   sent_count?: number
   sim_slot_index?: number | null
+  device_id?: string | null
+  devices?: { name: string } | null
   priority?: number
   campaign_jobs?: { status: string; created_at: string }[] | null
   templates: { name: string } | null
@@ -215,6 +217,12 @@ export function CampaignsList({
                         </span>
                       </span>
                     )}
+                    <span className="flex items-center gap-1.5">
+                      <span>📱</span>
+                      <span>
+                        {campaign.devices?.name || (campaign.device_id ? 'Appareil assigné' : 'Tout appareil')}
+                      </span>
+                    </span>
                     <span className="flex items-center gap-1.5">
                       <span>📲</span>
                       <span>

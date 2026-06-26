@@ -124,7 +124,7 @@ export async function POST(req: Request) {
 
       let query = service
         .from('campaigns')
-        .select('id, name, status, priority, total_count, sent_count, sim_slot_index, created_at', { count: 'exact' })
+        .select('id, name, status, priority, total_count, sent_count, sim_slot_index, device_id, created_at', { count: 'exact' })
         .eq('org_id', device.org_id)
         .order('created_at', { ascending: false })
         .range(offset, offset + limit - 1)
@@ -157,7 +157,7 @@ export async function POST(req: Request) {
 
       const { data: campaign, error } = await service
         .from('campaigns')
-        .select('id, name, status, priority, total_count, sent_count, sim_slot_index, created_at')
+        .select('id, name, status, priority, total_count, sent_count, sim_slot_index, device_id, created_at')
         .eq('id', campaignId)
         .eq('org_id', device.org_id)
         .single()
@@ -249,6 +249,7 @@ export async function POST(req: Request) {
           org_id: device.org_id,
           name,
           template_id: null,
+          device_id: device.id,
           sim_slot_index: simSlot,
           priority,
           status: 'running',

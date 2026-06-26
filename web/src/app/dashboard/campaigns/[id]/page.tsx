@@ -16,7 +16,7 @@ export default async function CampaignPage({ params }: { params: { id: string } 
   // Get campaign
   const { data: campaign } = await supabase
     .from('campaigns')
-    .select('*, templates(name, body), campaign_jobs(status, created_at)')
+    .select('*, templates(name, body), campaign_jobs(status, created_at), devices(name)')
     .eq('id', params.id)
     .single()
 

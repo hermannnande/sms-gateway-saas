@@ -11,6 +11,8 @@ type Campaign = {
   total_count?: number
   sent_count?: number
   sim_slot_index?: number | null
+  device_id?: string | null
+  devices?: { name: string } | null
   priority?: number
   campaign_jobs?: { status: string; created_at: string }[] | null
   templates: { name: string; body: string } | null
@@ -213,6 +215,10 @@ export function CampaignDetails({
             {campaign.total_count ?? 0} messages prévus • {campaign.sent_count ?? 0} envoyés
           </p>
           <p className="text-sm text-muted-foreground mt-1">
+            Appareil: <span className="font-semibold text-foreground">
+              {campaign.devices?.name || (campaign.device_id ? 'Appareil assigné' : 'Tout appareil')}
+            </span>
+            {' • '}
             SIM: <span className="font-semibold text-foreground">
               {campaign.sim_slot_index === null || campaign.sim_slot_index === undefined
                 ? 'Auto'
