@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
+import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 
@@ -76,8 +77,9 @@ class BackgroundSyncService {
     final prefs = await SharedPreferences.getInstance();
     final explicit = prefs.getBool(_enabledKey);
     if (explicit != null) return explicit;
-    final token = prefs.getString('device_token')?.trim();
-    return token != null && token.isNotEmpty;
+    final token = prefs.getString(TokenStorage.legacyKey)?.trim();
+    final owner = prefs.getString(TokenStorage.ownerKey)?.trim();
+    return token != null && token.isNotEmpty && owner != null && owner.isNotEmpty;
   }
 
   static Future<void> setEnabled(bool enabled) async {
@@ -147,8 +149,9 @@ class BackgroundSyncService {
   static Future<void> ensureAutoSync() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
-    final token = prefs.getString('device_token')?.trim();
-    if (token == null || token.isEmpty) return;
+    final token = prefs.getString(TokenStorage.legacyKey)?.trim();
+    final owner = prefs.getString(TokenStorage.ownerKey)?.trim();
+    if (token == null || token.isEmpty || owner == null || owner.isEmpty) return;
 
     await setEnabled(true);
     await setPaused(false);
@@ -229,7 +232,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   Future<String?> _loadDeviceToken() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
-    final v = prefs.getString('device_token');
+    final owner = prefs.getString(TokenStorage.ownerKey)?.trim();
+    if (owner == null || owner.isEmpty) return null;
+    final v = prefs.getString(TokenStorage.legacyKey);
     if (v == null) return null;
     return v.trim().isEmpty ? null : v.trim();
   }

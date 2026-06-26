@@ -41,6 +41,7 @@ Deno.serve(async (req) => {
       .from('org_members')
       .select('org_id')
       .eq('user_id', user.id)
+      .order('created_at', { ascending: true })
       .limit(1)
 
     let org_id: string | null = orgMembers?.[0]?.org_id ?? null

@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.12+59",
+  "latestVersion": "1.3.13+60",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• FIX: reception des SMS entrants (reponses clients visibles sur le web)\n• Permission RECEIVE_SMS + intercepteur SMS active\n• Boite de reception web: correction affichage messages"
+  "notes": "• FIX: isolation compte/appareil — un téléphone ne mélange plus les campagnes de deux comptes\n• Token appareil lié au compte connecté + re-jumelage obligatoire si mismatch\n• Déconnexion: arrêt envoi arrière-plan et désappairage automatique\n• Serveur: suppression auto-déplacement device entre orgs + org_id dans heartbeat"
 }

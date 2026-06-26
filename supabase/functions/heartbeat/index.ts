@@ -120,6 +120,7 @@ Deno.serve(async (req) => {
         success: true,
         device_id: device.id,
         device_name: device.name,
+        org_id: device.org_id,
         timestamp: new Date().toISOString(),
         plan: plan
           ? { id: plan.id, name: plan.name, max_devices: plan.max_devices, sms_quota_month: plan.sms_quota_month }

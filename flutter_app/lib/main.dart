@@ -165,6 +165,7 @@ class AppState {
     bool? loading,
     bool? syncing,
     String? deviceToken,
+    bool clearDeviceToken = false,
     String? lastStatus,
     List<Message>? lastMessages,
     bool? authenticated,
@@ -199,7 +200,7 @@ class AppState {
     return AppState(
       loading: loading ?? this.loading,
       syncing: syncing ?? this.syncing,
-      deviceToken: deviceToken ?? this.deviceToken,
+      deviceToken: clearDeviceToken ? null : (deviceToken ?? this.deviceToken),
       lastStatus: lastStatus ?? this.lastStatus,
       lastMessages: lastMessages ?? this.lastMessages,
       authenticated: authenticated ?? this.authenticated,
@@ -268,30 +269,7 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> init() async {
-    String? token = await ref.read(tokenStorageProvider).load();
-
-    // Auto-fix: si le token est un JSON (erreur de pairing précédente)
-    if (token != null && token.startsWith('{') && token.endsWith('}')) {
-      try {
-        final data = jsonDecode(token);
-        if (data is Map) {
-          // Cas OK: QR appareil -> extraire device_token
-          if (data.containsKey('device_token')) {
-            token = data['device_token'].toString();
-            await ref.read(tokenStorageProvider).save(token);
-          } else if (data['type'] == 'session' || data.containsKey('refresh_token')) {
-            // Cas erreur: QR session scanné dans la page Pairing
-            await ref.read(tokenStorageProvider).clear();
-            token = null;
-            setLastStatus(
-              'Token appareil invalide (QR session détecté). Scanne le QR depuis Web > Appareils.',
-            );
-          }
-        }
-      } catch (_) {}
-    }
-
-    // Restaurer la session Supabase (pour rester connecté même après fermeture de l'app)
+    // Restaurer la session Supabase en premier (le token appareil dépend du compte).
     final supabase = ref.read(supabaseClientProvider);
     var session = supabase.auth.currentSession;
     var hasSession = session != null;
@@ -308,11 +286,44 @@ class AppNotifier extends Notifier<AppState> {
             await ref.read(authSessionStorageProvider).clear();
           }
         } catch (e) {
-          // Token expiré/invalide => on nettoie et l'utilisateur devra se reconnecter.
           await ref.read(authSessionStorageProvider).clear();
           setLastStatus('Session expirée. Merci de vous reconnecter.');
         }
       }
+    }
+
+    String? token;
+    final userId = supabase.auth.currentUser?.id;
+
+    if (hasSession && userId != null) {
+      token = await ref.read(tokenStorageProvider).loadForUser(userId);
+
+      // Auto-fix: token JSON (erreur de pairing précédente)
+      if (token != null && token.startsWith('{') && token.endsWith('}')) {
+        try {
+          final data = jsonDecode(token);
+          if (data is Map) {
+            if (data.containsKey('device_token')) {
+              token = data['device_token'].toString();
+              await ref.read(tokenStorageProvider).saveForUser(token, userId);
+            } else if (data['type'] == 'session' || data.containsKey('refresh_token')) {
+              await ref.read(tokenStorageProvider).clearForUser(userId);
+              token = null;
+              setLastStatus(
+                'Token appareil invalide (QR session détecté). Scanne le QR depuis Web > Appareils.',
+              );
+            }
+          }
+        } catch (_) {}
+      }
+    } else {
+      // Sans session: ne jamais envoyer en arrière-plan avec un token orphelin.
+      try {
+        await BackgroundSyncService.stop();
+        await BackgroundSyncService.setEnabled(false);
+      } catch (_) {}
+      await ref.read(tokenStorageProvider).clearGlobal();
+      token = null;
     }
 
     state = state.copyWith(
@@ -322,23 +333,83 @@ class AppNotifier extends Notifier<AppState> {
     );
 
     await checkPermissions();
-
     await _loadAppVersion();
+
     if (hasSession) {
       await refreshAccountInfo();
       await refreshInboxMessages(silent: true);
       await refreshOutboxHistory(silent: true);
       await refreshSubscription(silent: true);
-    }
 
-    // Auto-démarrer l'envoi automatique dès qu'un appareil est jumelé.
-    if (token != null && token.isNotEmpty) {
-      try {
-        await ensureAutoSyncRunning();
-      } catch (e) {
-        debugPrint('Échec auto-démarrage BackgroundSyncService: $e');
+      final tokenOk = await ensureDeviceTokenMatchesAccount(clearIfMismatch: true);
+      if (!tokenOk && state.deviceToken == null) {
+        setLastStatus(
+          'Appareil d’un autre compte détecté. Re-jumelez cet appareil pour continuer.',
+        );
+      } else if (state.deviceToken != null && state.deviceToken!.isNotEmpty) {
+        try {
+          await ensureAutoSyncRunning();
+        } catch (e) {
+          debugPrint('Échec auto-démarrage BackgroundSyncService: $e');
+        }
       }
     }
+  }
+
+  /// Vérifie que le token appareil local appartient à l'org du compte connecté.
+  Future<bool> ensureDeviceTokenMatchesAccount({bool clearIfMismatch = true}) async {
+    final supabase = ref.read(supabaseClientProvider);
+    final user = supabase.auth.currentUser;
+    if (user == null) return false;
+
+    final token = state.deviceToken;
+    if (token == null || token.isEmpty) return true;
+
+    if (state.orgId == null) {
+      await refreshAccountInfo();
+    }
+    final expectedOrgId = state.orgId;
+    if (expectedOrgId == null) return false;
+
+    try {
+      final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
+        deviceToken: token,
+        appVersion: state.appVersion,
+      );
+      final deviceOrgId = payload['org_id']?.toString();
+      if (deviceOrgId == null || deviceOrgId != expectedOrgId) {
+        if (clearIfMismatch) {
+          await _clearDeviceTokenAndStopSync(userId: user.id);
+        }
+        return false;
+      }
+      return true;
+    } catch (_) {
+      if (clearIfMismatch) {
+        await _clearDeviceTokenAndStopSync(userId: user.id);
+      }
+      return false;
+    }
+  }
+
+  Future<void> _clearDeviceTokenAndStopSync({String? userId}) async {
+    try {
+      await BackgroundSyncService.stop();
+      await BackgroundSyncService.setEnabled(false);
+      await BackgroundSyncService.setActiveCampaignId(null);
+    } catch (_) {}
+
+    if (userId != null) {
+      await ref.read(tokenStorageProvider).clearForUser(userId);
+    } else {
+      await ref.read(tokenStorageProvider).clearGlobal();
+    }
+
+    state = state.copyWith(
+      clearDeviceToken: true,
+      clearCampaign: true,
+      lastMessages: const [],
+    );
   }
 
   /// Lance / maintient le service d'envoi automatique (sans sync manuelle).
@@ -836,7 +907,13 @@ class AppNotifier extends Notifier<AppState> {
       }
     }
 
-    await ref.read(tokenStorageProvider).save(normalized);
+    final supabase = ref.read(supabaseClientProvider);
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      throw Exception('Connectez-vous avant de jumeler l’appareil.');
+    }
+
+    await ref.read(tokenStorageProvider).saveForUser(normalized, user.id);
     state = state.copyWith(
       deviceToken: normalized,
       lastStatus: 'Token enregistré',
@@ -858,22 +935,22 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> clearToken() async {
-    await ref.read(tokenStorageProvider).clear();
-    state = state.copyWith(
-      deviceToken: null,
-      lastMessages: const [],
-      lastStatus: 'Token effacé',
-    );
+    final userId = ref.read(supabaseClientProvider).auth.currentUser?.id;
+    await _clearDeviceTokenAndStopSync(userId: userId);
+    state = state.copyWith(lastStatus: 'Appareil désappairé');
   }
 
   Future<void> signOutAccount() async {
     final supabase = ref.read(supabaseClientProvider);
+    final userId = supabase.auth.currentUser?.id;
+
+    await _clearDeviceTokenAndStopSync(userId: userId);
+
     await supabase.auth.signOut();
     await ref.read(authSessionStorageProvider).clear();
-    // IMPORTANT: on garde le deviceToken pour éviter de devoir re-scanner l’appareil.
     state = state.copyWith(
       authenticated: false,
-      lastStatus: 'Compte déconnecté (appareil conservé)',
+      lastStatus: 'Compte déconnecté',
       userEmail: null,
       orgId: null,
       orgName: null,
@@ -883,27 +960,37 @@ class AppNotifier extends Notifier<AppState> {
     );
   }
 
+  Future<void> _reloadDeviceTokenForCurrentUser() async {
+    final userId = ref.read(supabaseClientProvider).auth.currentUser?.id;
+    if (userId == null) {
+      state = state.copyWith(clearDeviceToken: true);
+      return;
+    }
+    final token = await ref.read(tokenStorageProvider).loadForUser(userId);
+    state = state.copyWith(deviceToken: token);
+  }
+
   Future<void> _postLoginSetup() async {
     await checkPermissions();
 
-    // Pull the per-user SMS delay configured on the web dashboard
-    // (/dashboard/profile -> Délai entre les messages). This makes the web
-    // the source of truth for the delay; the app simply mirrors it.
     try {
       final supabase = ref.read(supabaseClientProvider);
       await AppSettings.syncFromSupabase(supabase);
     } catch (_) {}
 
+    final tokenOk = await ensureDeviceTokenMatchesAccount(clearIfMismatch: true);
+    if (!tokenOk && state.deviceToken == null) {
+      setLastStatus(
+        'Cet appareil était lié à un autre compte. Re-jumelez-le pour envoyer des SMS.',
+      );
+      return;
+    }
+
     try {
       if (state.deviceToken != null && state.deviceToken!.isNotEmpty) {
-        final enabled = await BackgroundSyncService.isEnabled();
-        if (enabled) {
-          await BackgroundSyncService.start();
-        } else {
-          await BackgroundSyncService.setEnabled(true);
-          await BackgroundSyncService.setPaused(false);
-          await BackgroundSyncService.start();
-        }
+        await BackgroundSyncService.setEnabled(true);
+        await BackgroundSyncService.setPaused(false);
+        await BackgroundSyncService.start();
       }
     } catch (_) {}
   }
@@ -926,6 +1013,7 @@ class AppNotifier extends Notifier<AppState> {
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
+    await _reloadDeviceTokenForCurrentUser();
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
@@ -948,6 +1036,7 @@ class AppNotifier extends Notifier<AppState> {
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
+    await _reloadDeviceTokenForCurrentUser();
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
@@ -969,6 +1058,7 @@ class AppNotifier extends Notifier<AppState> {
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
+    await _reloadDeviceTokenForCurrentUser();
     await refreshSubscription(silent: true);
     await refreshInboxMessages(silent: true);
     await refreshOutboxHistory(silent: true);
@@ -3055,7 +3145,7 @@ class _HomePageState extends ConsumerState<HomePage>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Se déconnecter du compte ?'),
         content: const Text(
-          'Vous serez déconnecté du compte, mais l’appareil restera pairé (pas besoin de rescanner).',
+          'Vous serez déconnecté et l’appareil sera désappairé. Vous devrez le re-jumeler à la prochaine connexion.',
         ),
         actions: [
           TextButton(
