@@ -33,6 +33,14 @@ export default async function InboxPage() {
     .select('id, name')
     .eq('org_id', orgMember.org_id) : { data: [] }
 
+  // Get blacklisted phone numbers (liste noire)
+  const { data: optouts } = orgMember ? await supabase
+    .from('optouts')
+    .select('phone_e164')
+    .eq('org_id', orgMember.org_id) : { data: [] }
+
+  const blockedPhones = (optouts || []).map((o) => o.phone_e164)
+
   // Statistics
   const totalMessages = messages?.length || 0
   const unreadMessages = messages?.filter(m => !m.read).length || 0
@@ -101,7 +109,7 @@ export default async function InboxPage() {
       </div>
 
       {/* Inbox list with filters */}
-      <InboxList messages={messages || []} devices={devices || []} />
+      <InboxList messages={messages || []} devices={devices || []} orgId={orgMember?.org_id || ''} blockedPhones={blockedPhones} />
     </div>
   )
 }

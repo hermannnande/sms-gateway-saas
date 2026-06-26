@@ -9,6 +9,7 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: '📊' },
   { name: 'Campagnes', href: '/dashboard/campaigns', icon: '🚀' },
   { name: 'Messages', href: '/dashboard/messages', icon: '📥' },
+  { name: 'Boîte de réception', href: '/dashboard/inbox', icon: '📬' },
   { name: 'Contacts', href: '/dashboard/contacts', icon: '👥' },
   { name: 'Templates', href: '/dashboard/templates', icon: '📝' },
   { name: 'Appareils', href: '/dashboard/devices', icon: '📱' },

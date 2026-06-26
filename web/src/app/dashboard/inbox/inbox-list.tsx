@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 
 type InboxMessage = {
   id: string
+  device_id: string | null
   from_phone_e164: string
   body: string
   received_at: string
@@ -23,7 +24,7 @@ type Device = {
   name: string
 }
 
-export function InboxList({ messages, devices }: { messages: InboxMessage[], devices: Device[] }) {
+export function InboxList({ messages, devices, orgId, blockedPhones = [] }: { messages: InboxMessage[], devices: Device[], orgId: string, blockedPhones?: string[] }) {
   const [selectedMessages, setSelectedMessages] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [filterDevice, setFilterDevice] = useState<string>('all')
@@ -31,6 +32,8 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
   const [filterDateStart, setFilterDateStart] = useState('')
   const [filterDateEnd, setFilterDateEnd] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  const [blocked, setBlocked] = useState<Set<string>>(new Set(blockedPhones))
+  const [blockingPhone, setBlockingPhone] = useState<string | null>(null)
 
   // Filtrer les messages
   const filteredMessages = useMemo(() => {
@@ -42,7 +45,7 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
       }
 
       // Filtre par appareil
-      if (filterDevice !== 'all' && msg.devices?.device_token !== filterDevice) {
+      if (filterDevice !== 'all' && msg.device_id !== filterDevice) {
         return false
       }
 
@@ -52,6 +55,7 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
       if (filterStatus === 'starred' && !msg.starred) return false
       if (filterStatus === 'archived' && !msg.archived) return false
       if (filterStatus === 'replied' && !msg.replied) return false
+      if (filterStatus === 'blocked' && !blocked.has(msg.from_phone_e164)) return false
 
       // Filtre par date
       if (filterDateStart && new Date(msg.received_at) < new Date(filterDateStart)) {
@@ -63,7 +67,7 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
 
       return true
     })
-  }, [messages, searchQuery, filterDevice, filterStatus, filterDateStart, filterDateEnd])
+  }, [messages, searchQuery, filterDevice, filterStatus, filterDateStart, filterDateEnd, blocked])
 
   // Sélection
   const handleSelectAll = () => {
@@ -129,6 +133,81 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
     window.location.reload()
   }
 
+  // Bloquer un numéro en 1 clic (ajout à la liste noire)
+  const handleBlockPhone = async (phone: string) => {
+    if (!phone || blocked.has(phone)) return
+    setBlockingPhone(phone)
+    try {
+      const supabase = createClient()
+      const { error } = await supabase.from('optouts').upsert(
+        { org_id: orgId, phone_e164: phone, reason: 'Bloqué depuis la boîte de réception' },
+        { onConflict: 'org_id,phone_e164' },
+      )
+      if (error) throw error
+      setBlocked((prev) => new Set(prev).add(phone))
+    } catch (err: any) {
+      alert(`Erreur lors du blocage : ${err.message}`)
+    }
+    setBlockingPhone(null)
+  }
+
+  // Débloquer un numéro (retirer de la liste noire)
+  const handleUnblockPhone = async (phone: string) => {
+    if (!phone || !blocked.has(phone)) return
+    setBlockingPhone(phone)
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('optouts')
+        .delete()
+        .eq('org_id', orgId)
+        .eq('phone_e164', phone)
+      if (error) throw error
+      setBlocked((prev) => {
+        const next = new Set(prev)
+        next.delete(phone)
+        return next
+      })
+    } catch (err: any) {
+      alert(`Erreur lors du déblocage : ${err.message}`)
+    }
+    setBlockingPhone(null)
+  }
+
+  // Bloquer tous les numéros des messages sélectionnés
+  const handleBlockSelected = async () => {
+    const phones = Array.from(
+      new Set(
+        filteredMessages
+          .filter((m) => selectedMessages.includes(m.id))
+          .map((m) => m.from_phone_e164)
+          .filter((p) => p && !blocked.has(p)),
+      ),
+    )
+    if (phones.length === 0) return
+    if (!confirm(`Bloquer ${phones.length} numéro(s) ? Ils ne recevront plus de SMS de vos campagnes.`)) return
+    try {
+      const supabase = createClient()
+      const rows = phones.map((phone) => ({
+        org_id: orgId,
+        phone_e164: phone,
+        reason: 'Bloqué depuis la boîte de réception',
+      }))
+      const { error } = await supabase.from('optouts').upsert(rows, {
+        onConflict: 'org_id,phone_e164',
+      })
+      if (error) throw error
+      setBlocked((prev) => {
+        const next = new Set(prev)
+        phones.forEach((p) => next.add(p))
+        return next
+      })
+      setSelectedMessages([])
+    } catch (err: any) {
+      alert(`Erreur lors du blocage : ${err.message}`)
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Barre de recherche et filtres */}
@@ -188,6 +267,7 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
                 <option value="starred">Favoris</option>
                 <option value="archived">Archivés</option>
                 <option value="replied">Répondus</option>
+                <option value="blocked">Bloqués (liste noire)</option>
               </select>
             </div>
 
@@ -243,6 +323,12 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
                 className="px-3 py-1.5 bg-gray-500 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition"
               >
                 📦 Archiver
+              </button>
+              <button
+                onClick={handleBlockSelected}
+                className="px-3 py-1.5 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition"
+              >
+                🚫 Bloquer le numéro
               </button>
               <button
                 onClick={handleDelete}
@@ -315,8 +401,32 @@ export function InboxList({ messages, devices }: { messages: InboxMessage[], dev
                           ARCHIVÉ
                         </span>
                       )}
+                      {blocked.has(message.from_phone_e164) && (
+                        <span className="px-2 py-0.5 bg-red-500/20 text-red-700 rounded text-xs font-bold">
+                          🚫 BLOQUÉ
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
+                      {blocked.has(message.from_phone_e164) ? (
+                        <button
+                          onClick={() => handleUnblockPhone(message.from_phone_e164)}
+                          disabled={blockingPhone === message.from_phone_e164}
+                          className="px-2.5 py-1 border border-border rounded-lg text-xs font-medium hover:bg-muted transition disabled:opacity-50 whitespace-nowrap"
+                          title="Retirer ce numéro de la liste noire"
+                        >
+                          Débloquer
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleBlockPhone(message.from_phone_e164)}
+                          disabled={blockingPhone === message.from_phone_e164}
+                          className="px-2.5 py-1 bg-orange-500 text-white rounded-lg text-xs font-medium hover:bg-orange-600 transition disabled:opacity-50 whitespace-nowrap"
+                          title="Bloquer ce numéro (liste noire)"
+                        >
+                          {blockingPhone === message.from_phone_e164 ? '...' : '🚫 Bloquer'}
+                        </button>
+                      )}
                       <button
                         onClick={() => handleToggleStar(message.id, message.starred)}
                         className="text-xl hover:scale-110 transition"
