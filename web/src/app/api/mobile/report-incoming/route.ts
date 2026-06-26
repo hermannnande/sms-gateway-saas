@@ -5,19 +5,34 @@ import { sha256Hex } from '@/lib/device-token'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+function normalizePhoneE164(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return trimmed
+  if (trimmed.startsWith('+')) return trimmed
+  const digits = trimmed.replace(/\D/g, '')
+  if (!digits) return trimmed
+  // Numéros locaux CI (10 chiffres commençant par 0) → +225
+  if (digits.length === 10 && digits.startsWith('0')) {
+    return `+225${digits.slice(1)}`
+  }
+  return `+${digits}`
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
     const device_token = typeof body?.device_token === 'string' ? body.device_token.trim() : ''
-    const from_phone = typeof body?.from_phone === 'string' ? body.from_phone.trim() : ''
+    const from_phone_raw = typeof body?.from_phone === 'string' ? body.from_phone.trim() : ''
     const message_body = typeof body?.body === 'string' ? body.body.trim() : ''
 
-    if (!device_token || !from_phone || !message_body) {
+    if (!device_token || !from_phone_raw || !message_body) {
       return NextResponse.json(
         { ok: false, error: 'device_token, from_phone, body requis' },
         { status: 400 },
       )
     }
+
+    const from_phone = normalizePhoneE164(from_phone_raw)
 
     const service = createServiceClient()
     const tokenHash = sha256Hex(device_token)
@@ -34,8 +49,7 @@ export async function POST(req: Request) {
 
     const orgId = device.org_id
 
-    // Save to inbox_messages
-    await service.from('inbox_messages').insert({
+    const { error: insertError } = await service.from('inbox_messages').insert({
       org_id: orgId,
       device_id: device.id,
       from_phone_e164: from_phone,
@@ -43,24 +57,25 @@ export async function POST(req: Request) {
       received_at: new Date().toISOString(),
     })
 
+    if (insertError) {
+      return NextResponse.json({ ok: false, error: insertError.message }, { status: 500 })
+    }
+
     // Check for STOP pattern
     const normalized = message_body.toUpperCase().trim()
     let shouldBlacklist = false
     let reason = ''
 
     if (normalized === 'STOP') {
-      // Direct STOP — works for dedicated devices
       shouldBlacklist = true
       reason = 'Réponse STOP automatique'
     } else if (/^STOP\s+[A-Z0-9]{4,}$/i.test(normalized)) {
-      // STOP XXXX — check if the code matches an org short code
       const code = normalized.replace(/^STOP\s+/i, '').trim()
-      // Match against the first 4 chars of any org_id (case-insensitive)
       const { data: orgs } = await service
         .from('organizations')
         .select('id')
 
-      const matchedOrg = orgs?.find((o: any) =>
+      const matchedOrg = orgs?.find((o: { id: string }) =>
         o.id.toUpperCase().startsWith(code),
       )
 
@@ -68,7 +83,6 @@ export async function POST(req: Request) {
         shouldBlacklist = true
         reason = `Réponse STOP ${code}`
       } else if (matchedOrg) {
-        // Blacklist in the matched org instead
         await service.from('optouts').upsert(
           { org_id: matchedOrg.id, phone_e164: from_phone, reason: `Réponse STOP ${code}` },
           { onConflict: 'org_id,phone_e164' },
@@ -96,7 +110,8 @@ export async function POST(req: Request) {
         ? 'Numéro ajouté à la liste noire'
         : 'Message reçu enregistré',
     })
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? 'Erreur' }, { status: 500 })
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Erreur'
+    return NextResponse.json({ ok: false, error: message }, { status: 500 })
   }
 }

@@ -1772,8 +1772,8 @@ class _PermissionsPageState extends ConsumerState<PermissionsPage> with WidgetsB
     _items = [
       _PermissionItem(
         permission: Permission.sms,
-        label: 'Envoi de SMS',
-        description: 'Permet d\'envoyer les SMS de vos campagnes',
+        label: 'Envoi et reception SMS',
+        description: 'Envoyer vos campagnes et recevoir les reponses clients sur le web',
         icon: Icons.sms_rounded,
         required_: true,
       ),

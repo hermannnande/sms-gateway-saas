@@ -9,6 +9,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -17,6 +18,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
     companion object {
         const val TAG = "IncomingSmsReceiver"
         const val PREFS_NAME = "FlutterSharedPreferences"
+        const val DEVICE_TOKEN_KEY = "flutter.device_token"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -31,7 +33,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
         }
 
         val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val deviceToken = prefs.getString("flutter.device_token", null)
+        val deviceToken = prefs.getString(DEVICE_TOKEN_KEY, null)
 
         if (deviceToken.isNullOrBlank()) {
             Log.w(TAG, "No device_token in SharedPreferences, skipping report")
@@ -40,6 +42,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
 
         for ((sender, bodyBuilder) in grouped) {
             val body = bodyBuilder.toString().trim()
+            if (body.isEmpty()) continue
             Log.d(TAG, "Incoming SMS from $sender: $body")
 
             CoroutineScope(Dispatchers.IO).launch {
@@ -59,11 +62,19 @@ class IncomingSmsReceiver : BroadcastReceiver() {
             conn.connectTimeout = 15000
             conn.readTimeout = 15000
 
-            val json = """{"device_token":"$deviceToken","from_phone":"$fromPhone","body":"$body"}"""
-            conn.outputStream.bufferedWriter().use { it.write(json) }
+            val payload = JSONObject()
+            payload.put("device_token", deviceToken)
+            payload.put("from_phone", fromPhone)
+            payload.put("body", body)
+
+            conn.outputStream.bufferedWriter().use { it.write(payload.toString()) }
 
             val responseCode = conn.responseCode
-            val response = try { conn.inputStream.bufferedReader().readText() } catch (_: Exception) { "" }
+            val response = try {
+                conn.inputStream.bufferedReader().readText()
+            } catch (_: Exception) {
+                conn.errorStream?.bufferedReader()?.readText() ?: ""
+            }
             Log.d(TAG, "Report response ($responseCode): $response")
             conn.disconnect()
         } catch (e: Exception) {

@@ -21,11 +21,12 @@ export default async function InboxPage() {
     .single()
 
   // Get inbox messages
-  const { data: messages } = orgMember ? await supabase
+  const { data: messages, error: messagesError } = orgMember ? await supabase
     .from('inbox_messages')
-    .select('*, devices(name, device_token)')
+    .select('*, devices(name)')
     .eq('org_id', orgMember.org_id)
-    .order('received_at', { ascending: false }) : { data: [] }
+    .order('received_at', { ascending: false })
+    .limit(500) : { data: [], error: null }
 
   // Get devices for filter
   const { data: devices } = orgMember ? await supabase
@@ -109,6 +110,11 @@ export default async function InboxPage() {
       </div>
 
       {/* Inbox list with filters */}
+      {messagesError && (
+        <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-4 text-sm">
+          Erreur de chargement des messages reçus : {messagesError.message}
+        </div>
+      )}
       <InboxList messages={messages || []} devices={devices || []} orgId={orgMember?.org_id || ''} blockedPhones={blockedPhones} />
     </div>
   )

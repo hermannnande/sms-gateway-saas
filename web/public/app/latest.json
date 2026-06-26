@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.11+58",
+  "latestVersion": "1.3.12+59",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CORRECTIF MAJEUR: l'envoi continue sans cliquer sur Forcer\n• Suppression du verrou qui bloquait le service arriere-plan\n• Reprise automatique toutes les 6 secondes si campagne inachevee\n• Watchdog arriere-plan + lots enchaines (30 SMS/lot)"
+  "notes": "• FIX: reception des SMS entrants (reponses clients visibles sur le web)\n• Permission RECEIVE_SMS + intercepteur SMS active\n• Boite de reception web: correction affichage messages"
 }

@@ -4,6 +4,8 @@
     <!-- Permissions SMS & téléphone -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Réception des réponses SMS (boîte de réception web) -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <!-- Permet d'ecrire une copie des SMS envoyes dans le journal systeme
          (boite "Envoyes") afin qu'ils apparaissent dans l'app Messages. -->
     <uses-permission android:name="android.permission.WRITE_SMS" />
@@ -58,6 +60,17 @@
                 <data android:scheme="smsgateway" android:host="pair" />
             </intent-filter>
         </activity>
+
+        <!-- Intercepte les SMS entrants et les envoie au serveur (boîte de réception web) -->
+        <receiver
+            android:name="com.smsgateway.app.IncomingSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
