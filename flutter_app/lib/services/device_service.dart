@@ -37,7 +37,7 @@ class DeviceService {
         final refreshToken = session.refreshToken;
         if (refreshToken != null && refreshToken.trim().isNotEmpty) {
           final res = await client.auth.refreshSession(refreshToken);
-          final newToken = res.session?.accessToken?.trim();
+          final newToken = res.session?.accessToken.trim();
           if (newToken != null && newToken.isNotEmpty) return newToken;
         }
       } catch (e) {

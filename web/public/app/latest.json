@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.13+60",
+  "latestVersion": "1.3.14+61",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• FIX: isolation compte/appareil — un téléphone ne mélange plus les campagnes de deux comptes\n• Token appareil lié au compte connecté + re-jumelage obligatoire si mismatch\n• Déconnexion: arrêt envoi arrière-plan et désappairage automatique\n• Serveur: suppression auto-déplacement device entre orgs + org_id dans heartbeat"
+  "notes": "• FIX: la SIM choisie pour une campagne (SIM 1 / SIM 2) est maintenant strictement respectée\n• FIX: le SMS copié dans l'app Messages du téléphone s'affiche sous la bonne SIM\n• FIX: plus d'envoi simultané sync manuelle + service arrière-plan (verrou restauré)\n• FIX: le service arrière-plan réagit immédiatement aux relances (kick réparé)\n• FIX: « Réessayer les échecs » ne requeue plus des messages impossibles à envoyer"
 }

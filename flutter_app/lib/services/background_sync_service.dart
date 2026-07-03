@@ -155,7 +155,9 @@ class BackgroundSyncService {
 
     await setEnabled(true);
     await setPaused(false);
-    await setForegroundLock(false);
+    // NOTE: ne PAS effacer le verrou foreground ici. Cette methode est appelee
+    // toutes les 10 s par l'UI; effacer le verrou pendant une sync manuelle
+    // provoquait des envois concurrents foreground + background.
     await init();
     await ensureRunning();
     try {
@@ -370,7 +372,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    await BackgroundSyncService.setForegroundLock(false);
+    // Un eventuel verrou foreground obsolete expire tout seul (2 min), inutile
+    // de l'effacer ici: le service peut demarrer PENDANT une sync manuelle.
     _activeCampaignId = await BackgroundSyncService.getActiveCampaignId();
     await FlutterForegroundTask.updateService(
       notificationTitle: 'SMSenvoie',
@@ -392,7 +395,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   }
 
   @override
-  void onReceiveTaskData(Object data) {
+  void onReceiveData(Object data) {
     if (data == 'kick') {
       unawaited(_tick());
     }
@@ -427,7 +430,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     }
 
     try {
-      await BackgroundSyncService.setForegroundLock(false);
+      // Sync manuelle en cours dans l'UI ? On lui laisse la main pour eviter
+      // deux boucles d'envoi simultanees. Le verrou expire automatiquement
+      // apres 2 min si l'app est tuee en pleine sync (jamais bloque a vie).
+      if (await _isForegroundLocked()) {
+        return;
+      }
 
       final paused = await _isPaused();
       if (paused) {
@@ -529,8 +537,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         );
 
         final sims = await _getSimCards();
-        final requiresSimRouting =
-            messages.any((m) => resolveSimRouting(m, sims).requiresSpecificSim);
+        // Slot SIM par campagne (fallback si le message n'a pas de consigne SIM)
+        final simSlotsByCampaign = campaignSimSlots(payload);
+        int? slotFallbackFor(Message m) =>
+            m.campaignId == null ? null : simSlotsByCampaign[m.campaignId];
+        final requiresSimRouting = messages.any((m) =>
+            resolveSimRouting(m, sims, campaignSlotFallback: slotFallbackFor(m))
+                .requiresSpecificSim);
         if (requiresSimRouting && sims.isEmpty) {
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMSenvoie',
@@ -613,7 +626,11 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
 
         try {
-          final routing = resolveSimRouting(msg, sims);
+          final routing = resolveSimRouting(
+            msg,
+            sims,
+            campaignSlotFallback: slotFallbackFor(msg),
+          );
           await _channel.invokeMethod('sendSms', {
             'to': msg.to,
             'body': msg.content,

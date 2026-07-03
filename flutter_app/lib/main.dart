@@ -1077,6 +1077,10 @@ class AppNotifier extends Notifier<AppState> {
     state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
 
     try {
+      // Verrou: previent l'envoi concurrent par le service d'arriere-plan
+      // pendant cette sync manuelle (expire seul apres 2 min si app tuee).
+      await BackgroundSyncService.setForegroundLock(true);
+
       final permsOk = await ref.read(smsSenderProvider).ensurePermissions();
       if (!permsOk) {
         state = state.copyWith(
@@ -1143,9 +1147,19 @@ class AppNotifier extends Notifier<AppState> {
         lastBatchMessages = messages;
         final perSmsDelayMs = await AppSettings.getSmsDelayMs();
 
+        final simSlotsByCampaign = campaignSimSlots(payload);
+
         for (int i = 0; i < messages.length; i++) {
+          // Rafraichit le verrou pour qu'il n'expire pas au milieu d'un long
+          // lot (delai par SMS configurable jusqu'a plusieurs secondes).
+          await BackgroundSyncService.setForegroundLock(true);
           final msg = messages[i];
-          final routing = resolveSimRouting(msg, state.availableSims);
+          final routing = resolveSimRouting(
+            msg,
+            state.availableSims,
+            campaignSlotFallback:
+                msg.campaignId == null ? null : simSlotsByCampaign[msg.campaignId],
+          );
 
           final sendResult = await ref.read(smsSenderProvider).send(
                 msg,
@@ -1187,6 +1201,7 @@ class AppNotifier extends Notifier<AppState> {
       }
 
       try {
+        await BackgroundSyncService.setForegroundLock(false);
         await BackgroundSyncService.setPaused(false);
         await BackgroundSyncService.ensureAutoSync();
       } catch (_) {}
@@ -1194,6 +1209,9 @@ class AppNotifier extends Notifier<AppState> {
       ref.read(loggerProvider).e('syncOnce error', error: e, stackTrace: st);
       state = state.copyWith(lastStatus: 'Erreur sync: $e');
     } finally {
+      try {
+        await BackgroundSyncService.setForegroundLock(false);
+      } catch (_) {}
       state = state.copyWith(syncing: false);
     }
   }

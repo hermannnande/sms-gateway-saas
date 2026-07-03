@@ -101,8 +101,8 @@ object SmsChannel {
         }
 
         try {
-            val smsManager = resolveSmsManager(context, subscriptionId, simSlotIndex, strictSimRouting)
-            if (smsManager == null) {
+            val resolved = resolveSmsTarget(context, subscriptionId, simSlotIndex, strictSimRouting)
+            if (resolved == null) {
                 val detail = when {
                     simSlotIndex != null && simSlotIndex >= 0 ->
                         "SIM ${simSlotIndex + 1} introuvable ou inactive"
@@ -114,15 +114,18 @@ object SmsChannel {
                 return
             }
 
-            val parts = smsManager.divideMessage(body)
-            smsManager.sendMultipartTextMessage(to, null, parts, null, null)
+            val parts = resolved.manager.divideMessage(body)
+            resolved.manager.sendMultipartTextMessage(to, null, parts, null, null)
 
             // Ecrit une copie dans la boite "Envoyes" du systeme pour que le SMS
             // apparaisse dans l'application Messages du telephone (comme les apps
             // concurrentes). Best-effort: si l'OS refuse l'ecriture (app non
             // definie comme app SMS par defaut sur Android stock), on ignore
             // silencieusement sans faire echouer l'envoi.
-            saveToSentBox(context, to, body, subscriptionId)
+            // IMPORTANT: on enregistre la subscription REELLEMENT utilisee (et pas
+            // l'argument brut, souvent null en routage par slot) pour que l'app
+            // Messages affiche la bonne SIM (SIM 2 et non la SIM par defaut).
+            saveToSentBox(context, to, body, resolved.subscriptionId ?: subscriptionId)
 
             result.success(true)
         } catch (e: SecurityException) {
@@ -172,17 +175,22 @@ object SmsChannel {
         }
     }
 
+    /** SmsManager pret a l'emploi + subscription reellement ciblee (null si inconnue). */
+    private class ResolvedSmsTarget(val manager: SmsManager, val subscriptionId: Int?)
+
     @Suppress("DEPRECATION")
-    private fun resolveSmsManager(
+    private fun resolveSmsTarget(
         context: Context,
         subscriptionId: Int?,
         simSlotIndex: Int?,
         strictRouting: Boolean,
-    ): SmsManager? {
+    ): ResolvedSmsTarget? {
         if (subscriptionId != null && subscriptionId > 0) {
-            managerForSubscriptionId(context, subscriptionId)?.let { return it }
+            managerForSubscriptionId(context, subscriptionId)?.let {
+                return ResolvedSmsTarget(it, subscriptionId)
+            }
             if (strictRouting) {
-                Log.e(TAG, "resolveSmsManager: subscription $subscriptionId unavailable")
+                Log.e(TAG, "resolveSmsTarget: subscription $subscriptionId unavailable")
                 return null
             }
         }
@@ -194,19 +202,27 @@ object SmsChannel {
                 val info = subMgr.activeSubscriptionInfoList
                     ?.firstOrNull { it.simSlotIndex == simSlotIndex }
                 if (info != null) {
-                    managerForSubscriptionId(context, info.subscriptionId)?.let { return it }
+                    managerForSubscriptionId(context, info.subscriptionId)?.let {
+                        return ResolvedSmsTarget(it, info.subscriptionId)
+                    }
                 }
-                Log.e(TAG, "resolveSmsManager: no active subscription for slot $simSlotIndex")
+                Log.e(TAG, "resolveSmsTarget: no active subscription for slot $simSlotIndex")
             } catch (e: SecurityException) {
-                Log.e(TAG, "resolveSmsManager: permission denied reading SIM slot $simSlotIndex", e)
+                Log.e(TAG, "resolveSmsTarget: permission denied reading SIM slot $simSlotIndex", e)
             } catch (e: Exception) {
-                Log.e(TAG, "resolveSmsManager: slot lookup failed for $simSlotIndex", e)
+                Log.e(TAG, "resolveSmsTarget: slot lookup failed for $simSlotIndex", e)
             }
             if (strictRouting) return null
         }
 
         if (strictRouting) return null
-        return defaultSmsManager(context)
+        val defaultMgr = defaultSmsManager(context) ?: return null
+        val defaultSub = try {
+            SubscriptionManager.getDefaultSmsSubscriptionId()
+        } catch (_: Exception) {
+            -1
+        }
+        return ResolvedSmsTarget(defaultMgr, if (defaultSub >= 0) defaultSub else null)
     }
 
     @Suppress("DEPRECATION")

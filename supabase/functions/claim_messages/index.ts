@@ -210,6 +210,41 @@ Deno.serve(async (req) => {
 
     console.log(`Claimed ${claimedMessages.length} messages for device ${device_id}`)
 
+    // Compat/auto-réparation: si la fonction SQL déployée est une ANCIENNE
+    // version (3 colonnes, sans campaign_id ni sim_subscription_id), le mobile
+    // ne recevrait aucune consigne SIM et enverrait via la SIM par défaut.
+    // On enrichit ici les lignes incomplètes: campaign_id + jeton SIM dérivé
+    // de campaigns.sim_slot_index ('slot:0' / 'slot:1').
+    try {
+      const incomplete = (claimedMessages as Array<Record<string, unknown>>).filter(
+        (m) => m && (m.campaign_id === undefined || m.campaign_id === null
+          || m.sim_subscription_id === undefined),
+      )
+      if (incomplete.length > 0) {
+        const ids = incomplete.map((m) => m.id).filter(Boolean)
+        const { data: enrichRows } = await supabaseClient
+          .from('messages')
+          .select('id, campaign_id, sim_subscription_id, campaigns(sim_slot_index)')
+          .in('id', ids)
+        const byId = new Map((enrichRows ?? []).map((r: any) => [r.id, r]))
+        for (const m of claimedMessages as Array<Record<string, any>>) {
+          const extra: any = byId.get(m.id)
+          if (!extra) continue
+          if (m.campaign_id === undefined || m.campaign_id === null) {
+            m.campaign_id = extra.campaign_id ?? null
+          }
+          if (m.sim_subscription_id === undefined || m.sim_subscription_id === null) {
+            const slot = extra?.campaigns?.sim_slot_index
+            m.sim_subscription_id = extra.sim_subscription_id
+              ?? (typeof slot === 'number' ? `slot:${slot}` : null)
+          }
+        }
+        console.warn(`Enriched ${incomplete.length} claimed rows (old claim_messages_atomic still deployed? apply migration 20260703000000)`)
+      }
+    } catch (e) {
+      console.warn('Claim enrichment failed (non-blocking):', e)
+    }
+
     // Retourner aussi l'avancement des campagnes concernées (pour la notif mobile)
     let campaigns: Array<Record<string, unknown>> = []
     try {
@@ -223,7 +258,7 @@ Deno.serve(async (req) => {
       if (ids.length > 0) {
         const { data: rows } = await supabaseClient
           .from('campaigns')
-          .select('id,name,status,total_count,sent_count')
+          .select('id,name,status,total_count,sent_count,sim_slot_index')
           .eq('org_id', org_id)
           .in('id', ids)
         campaigns = (rows as any) ?? []

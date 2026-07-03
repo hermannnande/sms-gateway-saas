@@ -152,6 +152,12 @@ CREATE TABLE campaigns (
     template_id UUID REFERENCES templates(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'queued', 'running', 'paused', 'done', 'canceled')),
     scheduled_at TIMESTAMPTZ,
+    -- Colonnes ajoutées par migrations (incluses ici pour un setup frais cohérent)
+    sim_slot_index INTEGER CHECK (sim_slot_index IS NULL OR sim_slot_index IN (0, 1)),
+    priority INTEGER NOT NULL DEFAULT 0,
+    device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    sent_count INTEGER NOT NULL DEFAULT 0,
     created_by UUID REFERENCES auth.users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -424,8 +430,49 @@ WITH CHECK (
 -- =============================================
 -- ATOMIC CLAIM FUNCTION
 -- =============================================
+-- ⚠️ NE PAS remplacer cette définition par une version plus ancienne.
+-- Cette version DOIT rester identique à la dernière migration
+-- (supabase/migrations/20260703000000_restore_claim_sim_routing.sql) :
+-- elle respecte la SIM choisie (campaigns.sim_slot_index), la priorité,
+-- l'appareil assigné (campaigns.device_id) et le statut 'running'.
+-- L'ancienne version (3 colonnes) ignorait tout cela et bloquait ensuite
+-- les migrations (changement du type de retour impossible via CREATE OR REPLACE).
 
-CREATE OR REPLACE FUNCTION claim_messages_atomic(
+-- Helper requis par claim_messages_atomic : clôture une campagne quand tous
+-- ses messages sont dans un état terminal (sent / failed / skipped_optout).
+CREATE OR REPLACE FUNCTION finalize_campaign_if_complete(p_campaign_id UUID)
+RETURNS BOOLEAN AS $func$
+DECLARE
+  v_total INT;
+  v_terminal INT;
+  v_status TEXT;
+BEGIN
+  SELECT status INTO v_status FROM campaigns WHERE id = p_campaign_id;
+  IF v_status IS NULL OR v_status IN ('done', 'canceled') THEN
+    RETURN FALSE;
+  END IF;
+
+  SELECT COUNT(*) INTO v_total FROM messages WHERE campaign_id = p_campaign_id;
+  SELECT COUNT(*) INTO v_terminal
+    FROM messages
+   WHERE campaign_id = p_campaign_id
+     AND status IN ('sent', 'failed', 'skipped_optout');
+
+  IF v_total > 0 AND v_terminal >= v_total THEN
+    UPDATE campaigns
+       SET status = 'done',
+           updated_at = NOW()
+     WHERE id = p_campaign_id
+       AND status NOT IN ('done', 'canceled');
+    RETURN TRUE;
+  END IF;
+  RETURN FALSE;
+END;
+$func$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP FUNCTION IF EXISTS public.claim_messages_atomic(uuid, uuid, text, integer, text[]);
+
+CREATE FUNCTION claim_messages_atomic(
   p_org_id UUID,
   p_device_id UUID,
   p_sim_subscription_id TEXT,
@@ -435,40 +482,76 @@ CREATE OR REPLACE FUNCTION claim_messages_atomic(
 RETURNS TABLE (
   id UUID,
   to_phone_e164 TEXT,
-  body_final TEXT
-) AS $$
+  body_final TEXT,
+  campaign_id UUID,
+  sim_subscription_id TEXT
+) AS $func$
 DECLARE
-  v_message_id UUID;
+  rec RECORD;
+  v_sim_token TEXT;
+  v_affected_campaigns UUID[];
 BEGIN
-  FOR v_message_id IN
-    SELECT m.id
-    FROM messages m
-    WHERE m.org_id = p_org_id
-      AND m.status = 'queued'
-      AND NOT (m.to_phone_e164 = ANY(p_optout_phones))
-    ORDER BY m.created_at ASC
-    LIMIT p_limit
-    FOR UPDATE SKIP LOCKED
+  WITH skipped AS (
+    UPDATE messages m
+       SET status = 'skipped_optout',
+           last_error = 'Numéro en liste noire (optout)'
+     WHERE m.org_id = p_org_id
+       AND m.status = 'queued'
+       AND (
+            (p_optout_phones IS NOT NULL AND m.to_phone_e164 = ANY(p_optout_phones))
+         OR EXISTS (
+              SELECT 1 FROM optouts o
+               WHERE o.org_id = p_org_id
+                 AND o.phone_e164 = m.to_phone_e164
+            )
+       )
+     RETURNING m.campaign_id AS cid
+  )
+  SELECT COALESCE(array_agg(DISTINCT cid) FILTER (WHERE cid IS NOT NULL), ARRAY[]::UUID[])
+    INTO v_affected_campaigns
+    FROM skipped;
+
+  FOR rec IN
+    SELECT m.id AS mid, c.sim_slot_index AS slot_idx, c.priority AS prio
+      FROM messages m
+      JOIN campaigns c ON c.id = m.campaign_id
+     WHERE m.org_id = p_org_id
+       AND m.status = 'queued'
+       AND c.status = 'running'
+       AND (c.device_id IS NULL OR c.device_id = p_device_id)
+     ORDER BY c.priority DESC, m.created_at ASC
+     LIMIT p_limit
+     FOR UPDATE SKIP LOCKED
   LOOP
+    v_sim_token := CASE
+      WHEN rec.slot_idx IS NOT NULL THEN 'slot:' || rec.slot_idx::text
+      ELSE p_sim_subscription_id
+    END;
+
     UPDATE messages
-    SET 
-      status = 'sending',
-      device_id = p_device_id,
-      sim_subscription_id = p_sim_subscription_id
-    WHERE messages.id = v_message_id;
-    
+       SET status = 'sending',
+           device_id = p_device_id,
+           sim_subscription_id = v_sim_token
+     WHERE messages.id = rec.mid;
+
     RETURN QUERY
-    SELECT 
-      messages.id,
-      messages.to_phone_e164,
-      messages.body_final
-    FROM messages
-    WHERE messages.id = v_message_id;
+    SELECT m2.id,
+           m2.to_phone_e164,
+           m2.body_final,
+           m2.campaign_id,
+           m2.sim_subscription_id
+      FROM messages m2
+     WHERE m2.id = rec.mid;
   END LOOP;
-  
+
+  IF v_affected_campaigns IS NOT NULL THEN
+    PERFORM finalize_campaign_if_complete(c_id)
+       FROM unnest(v_affected_campaigns) AS c_id;
+  END IF;
+
   RETURN;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 -- =============================================
 -- SEED DATA: PLANS

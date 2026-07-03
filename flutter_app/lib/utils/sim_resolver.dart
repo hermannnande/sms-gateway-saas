@@ -15,13 +15,20 @@ class SimRouting {
   bool get requiresSpecificSim => subscriptionId != null || simSlotIndex != null;
 }
 
-SimRouting resolveSimRouting(Message message, List<SimCard> sims) {
+SimRouting resolveSimRouting(
+  Message message,
+  List<SimCard> sims, {
+  int? campaignSlotFallback,
+}) {
   if (message.simSubscriptionId != null && message.simSubscriptionId! > 0) {
     return SimRouting(subscriptionId: message.simSubscriptionId);
   }
 
-  final slot = message.simSlotIndex;
-  if (slot == null) {
+  // Filet de sécurité: si le serveur n'a pas propagé la SIM sur le message
+  // (ancienne fonction SQL claim_messages_atomic encore déployée), on applique
+  // quand même le slot défini sur la campagne (renvoyé dans le payload claim).
+  final slot = message.simSlotIndex ?? campaignSlotFallback;
+  if (slot == null || slot < 0) {
     return const SimRouting();
   }
 
@@ -32,4 +39,23 @@ SimRouting resolveSimRouting(Message message, List<SimCard> sims) {
   }
 
   return SimRouting(simSlotIndex: slot);
+}
+
+/// Extrait la map campagne → slot SIM depuis le payload claim
+/// (`campaigns: [{id, sim_slot_index, ...}]`). Tolère l'absence du champ.
+Map<String, int> campaignSimSlots(Map<String, dynamic> payload) {
+  final raw = payload['campaigns'];
+  if (raw is! List) return const {};
+  final out = <String, int>{};
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final id = item['id']?.toString().trim();
+    if (id == null || id.isEmpty) continue;
+    final slotRaw = item['sim_slot_index'];
+    final slot = slotRaw is int ? slotRaw : int.tryParse('${slotRaw ?? ''}');
+    if (slot != null && slot >= 0) {
+      out[id] = slot;
+    }
+  }
+  return out;
 }
