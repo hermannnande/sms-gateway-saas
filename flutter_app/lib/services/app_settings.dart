@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase/supabase.dart';
 
@@ -16,6 +18,8 @@ import 'package:smsgateway_flutter/config.dart';
 /// value after the user changes a setting from the UI.
 class AppSettings {
   static const _kSmsDelayMs = 'cfg_sms_delay_ms';
+  static const _kSmsDelayMaxMs = 'cfg_sms_delay_max_ms';
+  static final _rng = Random();
 
   /// Minimum allowed delay between two SMS (in ms). Below this value,
   /// some carriers drop or rate-limit messages.
@@ -44,6 +48,35 @@ class AppSettings {
     await prefs.setInt(_kSmsDelayMs, clamped);
   }
 
+  /// Read the OPTIONAL upper bound of the random delay, in ms.
+  /// Returns 0 when random mode is disabled (no value, or <= the min delay).
+  static Future<int> getSmsDelayMaxMs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final raw = prefs.getInt(_kSmsDelayMaxMs);
+    if (raw == null) return 0;
+    return raw.clamp(minDelayMs, maxDelayMs);
+  }
+
+  /// Persist the upper bound of the random delay. Pass 0 (or a value <= the
+  /// min delay) to disable random mode and go back to a fixed delay.
+  static Future<void> setSmsDelayMaxMs(int ms) async {
+    final prefs = await SharedPreferences.getInstance();
+    final clamped = ms.clamp(minDelayMs, maxDelayMs);
+    await prefs.setInt(_kSmsDelayMaxMs, clamped);
+  }
+
+  /// Pick the delay to apply BEFORE the next SMS.
+  /// - If a max > min is configured => uniform random in [min, max] (anti-spam).
+  /// - Otherwise => the fixed min delay (100% backward compatible).
+  /// Reads once; callers may cache [minMs]/[maxMs] per batch to avoid re-reading.
+  static int pickDelayMs(int minMs, int maxMs) {
+    if (maxMs > minMs) {
+      return minMs + _rng.nextInt(maxMs - minMs + 1);
+    }
+    return minMs;
+  }
+
   /// Pull the SMS delay from the web dashboard (`user_settings.message_delay_seconds`)
   /// and mirror it locally. Safe to call repeatedly; silently ignores any
   /// network/RLS error so it never blocks login.
@@ -53,21 +86,28 @@ class AppSettings {
       if (user == null) return null;
       final row = await client
           .from('user_settings')
-          .select('message_delay_seconds')
+          .select('message_delay_seconds, message_delay_max_seconds')
           .eq('user_id', user.id)
           .maybeSingle();
       if (row == null) return null;
-      final raw = row['message_delay_seconds'];
-      if (raw == null) return null;
-      int seconds;
-      if (raw is int) {
-        seconds = raw;
-      } else if (raw is num) {
-        seconds = raw.toInt();
-      } else {
-        seconds = int.tryParse(raw.toString()) ?? -1;
+
+      int? toSeconds(dynamic raw) {
+        if (raw == null) return null;
+        if (raw is int) return raw;
+        if (raw is num) return raw.toInt();
+        return int.tryParse(raw.toString());
       }
-      if (seconds < 0) return null;
+
+      // Borne haute (aléatoire) — facultative.
+      final maxSeconds = toSeconds(row['message_delay_max_seconds']);
+      if (maxSeconds != null && maxSeconds >= 0) {
+        await setSmsDelayMaxMs((maxSeconds * 1000).clamp(minDelayMs, maxDelayMs));
+      } else {
+        await setSmsDelayMaxMs(0);
+      }
+
+      final seconds = toSeconds(row['message_delay_seconds']);
+      if (seconds == null || seconds < 0) return null;
       final ms = (seconds * 1000).clamp(minDelayMs, maxDelayMs);
       await setSmsDelayMs(ms);
       return ms;
@@ -83,10 +123,14 @@ class AppSettings {
       final user = client.auth.currentUser;
       if (user == null) return;
       final seconds = (ms / 1000).round().clamp(0, 120);
+      final maxMs = await getSmsDelayMaxMs();
+      final maxSeconds = (maxMs / 1000).round().clamp(0, 120);
       await client.from('user_settings').upsert(
         {
           'user_id': user.id,
           'message_delay_seconds': seconds,
+          // 0 => délai fixe (pas d'aléatoire)
+          'message_delay_max_seconds': maxSeconds,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         },
         onConflict: 'user_id',

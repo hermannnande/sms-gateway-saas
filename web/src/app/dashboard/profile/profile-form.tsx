@@ -25,6 +25,7 @@ type UserSettings = {
   timezone?: string
   language?: string
   message_delay_seconds?: number
+  message_delay_max_seconds?: number | null
   email_notifications?: boolean
   notification_email?: string
   sleep_start_time?: string
@@ -56,6 +57,8 @@ export function ProfileForm({
 
   // Message settings
   const [messageDelay, setMessageDelay] = useState(userSettings?.message_delay_seconds || 2)
+  // Délai maximum (aléatoire). 0 = désactivé (délai fixe).
+  const [messageDelayMax, setMessageDelayMax] = useState(userSettings?.message_delay_max_seconds || 0)
   const [emailNotifications, setEmailNotifications] = useState(userSettings?.email_notifications || false)
   const [notificationEmail, setNotificationEmail] = useState(userSettings?.notification_email || user.email || '')
   const [sleepStartTime, setSleepStartTime] = useState(userSettings?.sleep_start_time || '')
@@ -122,6 +125,8 @@ export function ProfileForm({
           timezone,
           language,
           message_delay_seconds: messageDelay,
+          // 0 ou <= min => délai fixe (aléatoire désactivé)
+          message_delay_max_seconds: messageDelayMax > messageDelay ? messageDelayMax : 0,
           email_notifications: emailNotifications,
           notification_email: notificationEmail,
           sleep_start_time: sleepStartTime || null,
@@ -393,20 +398,54 @@ export function ProfileForm({
               <h3 className="font-semibold text-lg">Paramètres des messages</h3>
             </div>
             <div className="p-6 space-y-5">
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Délai entre les messages (0-120 secondes)
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="range"
-                    min="0"
-                    max="120"
-                    value={messageDelay}
-                    onChange={(e) => setMessageDelay(parseInt(e.target.value))}
-                    className="flex-1"
-                  />
-                  <span className="font-mono font-semibold text-primary w-12 text-center">{messageDelay}s</span>
+              <div className="space-y-4 bg-muted/20 border border-border rounded-lg p-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Délai minimum entre les messages (0-120 secondes)
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range"
+                      min="0"
+                      max="120"
+                      value={messageDelay}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value)
+                        setMessageDelay(v)
+                        // Le max ne peut pas passer sous le min
+                        if (messageDelayMax !== 0 && messageDelayMax < v) setMessageDelayMax(v)
+                      }}
+                      className="flex-1"
+                    />
+                    <span className="font-mono font-semibold text-primary w-12 text-center">{messageDelay}s</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2 flex items-center gap-2">
+                    <Radio className="h-4 w-4" />
+                    Délai maximum (envoi aléatoire) — facultatif
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range"
+                      min="0"
+                      max="120"
+                      value={messageDelayMax}
+                      onChange={(e) => setMessageDelayMax(parseInt(e.target.value))}
+                      className="flex-1"
+                    />
+                    <span className="font-mono font-semibold text-primary w-16 text-center">
+                      {messageDelayMax > messageDelay ? `${messageDelayMax}s` : 'off'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {messageDelayMax > messageDelay ? (
+                      <>✅ Chaque SMS attendra un temps <b>aléatoire entre {messageDelay}s et {messageDelayMax}s</b>. Cela imite un envoi humain et réduit le risque de blocage par l’opérateur (anti-spam).</>
+                    ) : (
+                      <>Mettez cette valeur <b>au-dessus du minimum</b> (ex. min 3s, max 8s) pour espacer les envois de façon aléatoire. Laissé sur « off », le délai reste fixe.</>
+                    )}
+                  </p>
                 </div>
               </div>
 

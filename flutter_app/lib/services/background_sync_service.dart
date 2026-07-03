@@ -558,7 +558,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       String? lastErr;
       // Read user-configurable delay between two sends. We re-read it once per
       // batch so a change in Settings is picked up by the next batch.
-      final perSmsDelayMs = await AppSettings.getSmsDelayMs();
+      // minDelay = borne basse ; maxDelay > minDelay => délai ALÉATOIRE par SMS
+      // (anti-blocage opérateur). maxDelay <= minDelay => délai fixe.
+      final minDelayMs = await AppSettings.getSmsDelayMs();
+      final maxDelayMs = await AppSettings.getSmsDelayMaxMs();
 
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
       final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
@@ -683,6 +686,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         // in the notification so the user sees that the app is *working*
         // (not frozen). We skip the wait on the very last message of the
         // batch — there is nothing to wait for after it.
+        // Délai TIRÉ AU HASARD pour ce message (borne [min, max]) afin de ne pas
+        // envoyer à cadence régulière (déclencheur d'anti-spam opérateur).
+        final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
         final isLastInBatch = attempted >= batchTotal;
         if (!isLastInBatch && perSmsDelayMs > 0) {
           final tickMs = 500; // refresh notification twice per second

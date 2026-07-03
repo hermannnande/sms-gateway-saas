@@ -187,6 +187,11 @@ export async function POST(req: Request) {
     if (action === 'create') {
       const name = (body?.name || '').trim()
       const messageBody = (body?.message || '').trim()
+      // Variantes FACULTATIVES : chaque contact reçoit l'une d'elles au hasard.
+      const rawVariants: string[] = Array.isArray(body?.messages) ? body.messages : []
+      const messageVariants = [messageBody, ...rawVariants]
+        .map((m) => (typeof m === 'string' ? m.trim() : ''))
+        .filter((m) => m.length > 0)
       const contacts: string[] = body?.contacts || []
       const simSlot = body?.sim_slot_index ?? null
       const priority = typeof body?.priority === 'number' ? body.priority : 0
@@ -194,7 +199,7 @@ export async function POST(req: Request) {
       if (!name) {
         return NextResponse.json({ ok: false, error: 'Nom de campagne requis' }, { status: 400 })
       }
-      if (!messageBody) {
+      if (messageVariants.length === 0) {
         return NextResponse.json({ ok: false, error: 'Message SMS requis' }, { status: 400 })
       }
       if (!contacts || contacts.length === 0) {
@@ -268,7 +273,8 @@ export async function POST(req: Request) {
         org_id: device.org_id,
         campaign_id: campaign.id,
         to_phone_e164: phone,
-        body_final: messageBody,
+        // Tirage aléatoire d'une variante par contact (une seule => identique pour tous)
+        body_final: messageVariants[Math.floor(Math.random() * messageVariants.length)],
         status: 'queued',
       }))
 

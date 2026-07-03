@@ -338,6 +338,7 @@ class DeviceService {
     required String name,
     required String message,
     required List<String> contacts,
+    List<String> extraMessages = const [],
     int? simSlotIndex,
     int priority = 0,
   }) async {
@@ -346,6 +347,8 @@ class DeviceService {
       'action': 'create',
       'name': name,
       'message': message,
+      // Variantes facultatives : tirage aléatoire par contact côté serveur.
+      'messages': extraMessages,
       'contacts': contacts,
       'sim_slot_index': simSlotIndex,
       'priority': priority,

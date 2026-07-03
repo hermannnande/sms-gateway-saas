@@ -78,6 +78,9 @@ export function NewCampaignForm({
   const [name, setName] = useState('')
   const [templateId, setTemplateId] = useState('')
   const [messageBody, setMessageBody] = useState('')
+  // Variantes de message FACULTATIVES : chaque contact reçoit l'une d'elles au
+  // hasard (rotation anti-spam). Vide par défaut => un seul message pour tous.
+  const [extraMessages, setExtraMessages] = useState<string[]>([])
   const [contactInputMode, setContactInputMode] = useState<ContactInputMode>('manual')
   const [manualContacts, setManualContacts] = useState('')
   const [simSlotIndex, setSimSlotIndex] = useState<number | null>(null)
@@ -406,8 +409,16 @@ export function NewCampaignForm({
 
       if (campaignError) throw campaignError
 
+      // Variantes de message : message principal + variantes non vides.
+      // Chaque contact reçoit UNE variante tirée au hasard (rotation anti-spam).
+      const messageVariants = [messageBody, ...extraMessages]
+        .map((m) => m.trim())
+        .filter((m) => m.length > 0)
+
       const messages = contactsToProcess.map((contact) => {
-        let finalBody = messageBody
+        const variant =
+          messageVariants[Math.floor(Math.random() * messageVariants.length)]
+        let finalBody = variant
         if (contact.name) {
           finalBody = finalBody.replace(/{nom}/gi, contact.name)
           finalBody = finalBody.replace(/{name}/gi, contact.name)
@@ -774,6 +785,57 @@ export function NewCampaignForm({
             <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-medium">
               Variables : {'{nom}'}, {'{name}'}
             </div>
+          </div>
+
+          {/* Variantes de message (facultatif) — rotation aléatoire anti-spam */}
+          <div className="mt-4 space-y-3">
+            {extraMessages.map((variant, idx) => (
+              <div key={idx} className="relative">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-muted-foreground">
+                    Variante {idx + 2}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExtraMessages((prev) => prev.filter((_, i) => i !== idx))
+                    }
+                    className="text-xs font-medium text-red-500 hover:text-red-700"
+                  >
+                    Retirer
+                  </button>
+                </div>
+                <textarea
+                  rows={4}
+                  value={variant}
+                  onChange={(e) =>
+                    setExtraMessages((prev) =>
+                      prev.map((m, i) => (i === idx ? e.target.value : m)),
+                    )
+                  }
+                  className="w-full px-4 py-3 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-background font-mono text-sm transition resize-none"
+                  placeholder={`Variante ${idx + 2} du message (envoyée à une partie des contacts, au hasard)`}
+                />
+              </div>
+            ))}
+
+            <button
+              type="button"
+              onClick={() => setExtraMessages((prev) => [...prev, ''])}
+              className="flex items-center gap-2 text-sm font-semibold text-primary hover:underline"
+            >
+              ➕ Ajouter une variante de message (facultatif)
+            </button>
+
+            {extraMessages.length > 0 && (
+              <div className="flex items-start gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <span>🎲</span>
+                <p>
+                  <b>Rotation activée</b> : chaque numéro recevra <b>l’un de ces {extraMessages.filter((m) => m.trim()).length + 1} messages au hasard</b>.
+                  Utile pour éviter d’envoyer exactement le même texte à tout le monde (anti-spam).
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

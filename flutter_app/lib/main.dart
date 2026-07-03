@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart' as xl;
@@ -1145,7 +1146,10 @@ class AppNotifier extends Notifier<AppState> {
 
         batchesProcessed++;
         lastBatchMessages = messages;
-        final perSmsDelayMs = await AppSettings.getSmsDelayMs();
+        // Délai entre SMS : [min, max]. Si max > min, chaque envoi attend un
+        // temps ALÉATOIRE dans cet intervalle (anti-blocage opérateur).
+        final minDelayMs = await AppSettings.getSmsDelayMs();
+        final maxDelayMs = await AppSettings.getSmsDelayMaxMs();
 
         final simSlotsByCampaign = campaignSimSlots(payload);
 
@@ -1182,6 +1186,7 @@ class AppNotifier extends Notifier<AppState> {
             allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
           }
 
+          final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
           if (i < messages.length - 1 && perSmsDelayMs > 0) {
             await Future.delayed(Duration(milliseconds: perSmsDelayMs));
           }
@@ -3005,6 +3010,9 @@ class _HomePageState extends ConsumerState<HomePage>
       try {
         final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
               deviceToken: deviceToken,
+              // Sans ça, devices.app_version reste NULL côté serveur et on ne
+              // peut pas savoir quelle version tourne sur les téléphones.
+              appVersion: appState.appVersion,
             );
         await ref.read(appProvider.notifier).refreshDeviceStatus(silent: true);
         await ref.read(appProvider.notifier).ensureAutoSyncRunning();
@@ -3686,6 +3694,8 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   bool _creating = false;
   final _nameCtrl = TextEditingController();
   final _messageCtrl = TextEditingController();
+  // Variantes de message FACULTATIVES (rotation aléatoire par numéro).
+  final List<TextEditingController> _extraMessageCtrls = [];
   final _contactsCtrl = TextEditingController();
   int _priority = 0;
   int? _simSlot;
@@ -3709,6 +3719,9 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   void dispose() {
     _nameCtrl.dispose();
     _messageCtrl.dispose();
+    for (final c in _extraMessageCtrls) {
+      c.dispose();
+    }
     _contactsCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -3899,6 +3912,12 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
       return;
     }
 
+    // Variantes non vides (facultatif) : tirage aléatoire par numéro côté serveur.
+    final extraMessages = _extraMessageCtrls
+        .map((c) => c.text.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+
     setState(() => _creating = true);
     try {
       await ref.read(deviceServiceProvider).createCampaign(
@@ -3906,11 +3925,16 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
         name: name,
         message: message,
         contacts: contacts,
+        extraMessages: extraMessages,
         simSlotIndex: _simSlot,
         priority: _priority,
       );
       _nameCtrl.clear();
       _messageCtrl.clear();
+      for (final c in _extraMessageCtrls) {
+        c.dispose();
+      }
+      _extraMessageCtrls.clear();
       _contactsCtrl.clear();
       setState(() { _showCreate = false; _creating = false; _priority = 0; _simSlot = null; });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4268,6 +4292,66 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
             style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
           ),
         ),
+
+        // ─── Variantes de message (facultatif, rotation aléatoire) ──────────
+        for (int vi = 0; vi < _extraMessageCtrls.length; vi++) ...[
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Text('Variante ${vi + 2}',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _extraMessageCtrls[vi].dispose();
+                  _extraMessageCtrls.removeAt(vi);
+                }),
+                child: Text('Retirer',
+                    style: TextStyle(fontSize: 12, color: Colors.red.shade400, fontWeight: FontWeight.w500)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          TextField(
+            controller: _extraMessageCtrls[vi],
+            maxLines: 3,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              hintText: 'Variante ${vi + 2} (envoyee a une partie des numeros, au hasard)',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => setState(() => _extraMessageCtrls.add(TextEditingController())),
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Ajouter une variante de message', style: TextStyle(fontSize: 13)),
+            style: TextButton.styleFrom(foregroundColor: green, padding: EdgeInsets.zero),
+          ),
+        ),
+        if (_extraMessageCtrls.any((c) => c.text.trim().isNotEmpty))
+          Container(
+            margin: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: green.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                const Text('🎲 ', style: TextStyle(fontSize: 14)),
+                Expanded(
+                  child: Text(
+                    'Chaque numero recevra un de ces messages au hasard (anti-spam).',
+                    style: TextStyle(fontSize: 11.5, color: Colors.green.shade900),
+                  ),
+                ),
+              ],
+            ),
+          ),
         const SizedBox(height: 14),
 
         // Contacts
@@ -7341,16 +7425,19 @@ Future<void> _showSettingsSheet(BuildContext context) async {
           bool enabled = false;
           bool paused = false;
           int delayMs = AppSettings.defaultDelayMs;
+          int delayMaxMs = 0; // 0 => pas d'aléatoire (délai fixe)
           bool delayLoaded = false;
 
           Future<void> load() async {
             final e = await BackgroundSyncService.isEnabled();
             final p = await BackgroundSyncService.isPaused();
             final d = await AppSettings.getSmsDelayMs();
+            final dMax = await AppSettings.getSmsDelayMaxMs();
             setState(() {
               enabled = e;
               paused = p;
               delayMs = d;
+              delayMaxMs = dMax;
               delayLoaded = true;
             });
           }
@@ -7386,22 +7473,48 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             setState(() => loading = false);
           }
 
-          Future<void> saveDelay(int ms) async {
-            await AppSettings.setSmsDelayMs(ms);
-            setState(() => delayMs = ms);
-            // Mirror to web so /dashboard/profile shows the same value.
+          Future<void> pushDelays() async {
             try {
               final container = ProviderScope.containerOf(ctx);
               final supabase = container.read(supabaseClientProvider);
-              await AppSettings.pushToSupabase(supabase, ms);
+              // pushToSupabase envoie le min ET lit le max courant => les deux
+              // sont synchronisés vers /dashboard/profile.
+              await AppSettings.pushToSupabase(supabase, delayMs);
             } catch (_) {}
+          }
+
+          Future<void> saveDelay(int ms) async {
+            await AppSettings.setSmsDelayMs(ms);
+            // Le max ne peut pas être sous le min : on le remonte si besoin.
+            if (delayMaxMs != 0 && delayMaxMs < ms) {
+              await AppSettings.setSmsDelayMaxMs(ms);
+              setState(() => delayMaxMs = ms);
+            }
+            setState(() => delayMs = ms);
+            await pushDelays();
+          }
+
+          Future<void> saveDelayMax(int ms) async {
+            // ms <= min => on désactive l'aléatoire (0).
+            final effective = ms <= delayMs ? 0 : ms;
+            await AppSettings.setSmsDelayMaxMs(effective);
+            setState(() => delayMaxMs = effective);
+            await pushDelays();
+          }
+
+          String fmtMs(int ms) {
+            if (ms < 1000) return '${ms}ms';
+            final secs = (ms / 1000).toStringAsFixed(ms % 1000 == 0 ? 0 : 1);
+            return '${secs}s';
           }
 
           String delayLabel() {
             if (!delayLoaded) return 'Chargement...';
+            if (delayMaxMs > delayMs) {
+              return '${fmtMs(delayMs)}–${fmtMs(delayMaxMs)}';
+            }
             if (delayMs < 1000) return '${delayMs}ms (rapide)';
-            final secs = (delayMs / 1000).toStringAsFixed(delayMs % 1000 == 0 ? 0 : 1);
-            return '${secs}s';
+            return fmtMs(delayMs);
           }
 
           return SafeArea(
@@ -7453,6 +7566,8 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                     ],
                   ),
                   const SizedBox(height: 6),
+                  Text('Délai minimum : ${fmtMs(delayMs)}',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
                   Slider(
                     min: AppSettings.minDelayMs.toDouble(),
                     max: AppSettings.maxDelayMs.toDouble(),
@@ -7460,7 +7575,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                     value: delayMs
                         .clamp(AppSettings.minDelayMs, AppSettings.maxDelayMs)
                         .toDouble(),
-                    label: delayLabel(),
+                    label: fmtMs(delayMs),
                     onChanged: !delayLoaded
                         ? null
                         : (v) {
@@ -7468,9 +7583,34 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                           },
                     onChangeEnd: !delayLoaded ? null : (v) => saveDelay((v / 500).round() * 500),
                   ),
+                  // ─── Délai maximum (ALÉATOIRE, facultatif) ────────────────
                   Text(
-                    'Plus rapide = plus de risque que l\'opérateur bloque les SMS. '
-                    'Recommandé : 1,5s à 2s.',
+                    delayMaxMs > delayMs
+                        ? 'Délai maximum (aléatoire) : ${fmtMs(delayMaxMs)}'
+                        : 'Délai maximum (aléatoire) : désactivé',
+                    style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                  ),
+                  Slider(
+                    min: AppSettings.minDelayMs.toDouble(),
+                    max: AppSettings.maxDelayMs.toDouble(),
+                    divisions: (AppSettings.maxDelayMs - AppSettings.minDelayMs) ~/ 500,
+                    value: (delayMaxMs == 0 ? delayMs : delayMaxMs)
+                        .clamp(AppSettings.minDelayMs, AppSettings.maxDelayMs)
+                        .toDouble(),
+                    label: delayMaxMs > delayMs ? fmtMs(delayMaxMs) : 'off',
+                    onChanged: !delayLoaded
+                        ? null
+                        : (v) {
+                            setState(() => delayMaxMs = (v / 500).round() * 500);
+                          },
+                    onChangeEnd: !delayLoaded ? null : (v) => saveDelayMax((v / 500).round() * 500),
+                  ),
+                  Text(
+                    delayMaxMs > delayMs
+                        ? '✅ Mode aléatoire : chaque SMS attend un temps au hasard entre '
+                            '${fmtMs(delayMs)} et ${fmtMs(delayMaxMs)}. Réduit le risque de blocage opérateur.'
+                        : 'Astuce anti-blocage : mettez le maximum au-dessus du minimum '
+                            '(ex. min 3s, max 8s) pour espacer les envois de façon aléatoire.',
                     style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
                   ),
                   const SizedBox(height: 18),
