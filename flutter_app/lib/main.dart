@@ -1101,6 +1101,10 @@ class AppNotifier extends Notifier<AppState> {
       var totalFail = 0;
       final allResults = <String>[];
       List<Message> lastBatchMessages = const [];
+      // Pause anti-spam PAR LOT : compteur de SMS envoyés depuis la dernière
+      // pause, persistant à travers les lots réclamés (le seuil peut être
+      // plus petit que AppConfig.claimBatchSize).
+      var sentSinceBatchPause = 0;
 
       while (batchesProcessed < maxBatches) {
         final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
@@ -1150,6 +1154,10 @@ class AppNotifier extends Notifier<AppState> {
         // temps ALÉATOIRE dans cet intervalle (anti-blocage opérateur).
         final minDelayMs = await AppSettings.getSmsDelayMs();
         final maxDelayMs = await AppSettings.getSmsDelayMaxMs();
+        final batchPauseEnabled = await AppSettings.getBatchPauseEnabled();
+        final batchPauseCount = await AppSettings.getBatchPauseCount();
+        final batchPauseMinMs = await AppSettings.getBatchPauseMinMs();
+        final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
 
         final simSlotsByCampaign = campaignSimSlots(payload);
 
@@ -1186,9 +1194,23 @@ class AppNotifier extends Notifier<AppState> {
             allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
           }
 
-          final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
-          if (i < messages.length - 1 && perSmsDelayMs > 0) {
-            await Future.delayed(Duration(milliseconds: perSmsDelayMs));
+          if (i < messages.length - 1) {
+            sentSinceBatchPause++;
+            if (batchPauseEnabled && sentSinceBatchPause >= batchPauseCount) {
+              sentSinceBatchPause = 0;
+              final pauseMs = AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs);
+              if (pauseMs > 0) {
+                state = state.copyWith(
+                  lastStatus: '🛡️ Pause anti-spam (~${(pauseMs / 1000).round()}s) après $batchPauseCount SMS...',
+                );
+                await Future.delayed(Duration(milliseconds: pauseMs));
+              }
+            } else {
+              final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
+              if (perSmsDelayMs > 0) {
+                await Future.delayed(Duration(milliseconds: perSmsDelayMs));
+              }
+            }
           }
         }
 
@@ -7427,18 +7449,30 @@ Future<void> _showSettingsSheet(BuildContext context) async {
           int delayMs = AppSettings.defaultDelayMs;
           int delayMaxMs = 0; // 0 => pas d'aléatoire (délai fixe)
           bool delayLoaded = false;
+          bool batchPauseEnabled = true;
+          int batchPauseCount = AppSettings.defaultBatchPauseCount;
+          int batchPauseMinMs = AppSettings.defaultBatchPauseMinMs;
+          int batchPauseMaxMs = AppSettings.defaultBatchPauseMaxMs;
 
           Future<void> load() async {
             final e = await BackgroundSyncService.isEnabled();
             final p = await BackgroundSyncService.isPaused();
             final d = await AppSettings.getSmsDelayMs();
             final dMax = await AppSettings.getSmsDelayMaxMs();
+            final bpEnabled = await AppSettings.getBatchPauseEnabled();
+            final bpCount = await AppSettings.getBatchPauseCount();
+            final bpMin = await AppSettings.getBatchPauseMinMs();
+            final bpMax = await AppSettings.getBatchPauseMaxMs();
             setState(() {
               enabled = e;
               paused = p;
               delayMs = d;
               delayMaxMs = dMax;
               delayLoaded = true;
+              batchPauseEnabled = bpEnabled;
+              batchPauseCount = bpCount;
+              batchPauseMinMs = bpMin;
+              batchPauseMaxMs = bpMax;
             });
           }
 
@@ -7501,6 +7535,46 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             setState(() => delayMaxMs = effective);
             await pushDelays();
           }
+
+          Future<void> pushBatchPause() async {
+            try {
+              final container = ProviderScope.containerOf(ctx);
+              final supabase = container.read(supabaseClientProvider);
+              await AppSettings.pushBatchPauseToSupabase(supabase);
+            } catch (_) {}
+          }
+
+          Future<void> saveBatchPauseEnabled(bool v) async {
+            await AppSettings.setBatchPauseEnabled(v);
+            setState(() => batchPauseEnabled = v);
+            await pushBatchPause();
+          }
+
+          Future<void> saveBatchPauseCount(int count) async {
+            await AppSettings.setBatchPauseCount(count);
+            setState(() => batchPauseCount = count);
+            await pushBatchPause();
+          }
+
+          Future<void> saveBatchPauseMin(int ms) async {
+            await AppSettings.setBatchPauseMinMs(ms);
+            // Le max ne peut pas être sous le min : on le remonte si besoin.
+            if (batchPauseMaxMs != 0 && batchPauseMaxMs < ms) {
+              await AppSettings.setBatchPauseMaxMs(ms);
+              setState(() => batchPauseMaxMs = ms);
+            }
+            setState(() => batchPauseMinMs = ms);
+            await pushBatchPause();
+          }
+
+          Future<void> saveBatchPauseMax(int ms) async {
+            final effective = ms <= batchPauseMinMs ? batchPauseMinMs : ms;
+            await AppSettings.setBatchPauseMaxMs(effective);
+            setState(() => batchPauseMaxMs = effective);
+            await pushBatchPause();
+          }
+
+          String fmtSecs(int ms) => '${(ms / 1000).round()}s';
 
           String fmtMs(int ms) {
             if (ms < 1000) return '${ms}ms';
@@ -7613,6 +7687,93 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                             '(ex. min 3s, max 8s) pour espacer les envois de façon aléatoire.',
                     style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
                   ),
+                  const SizedBox(height: 18),
+                  const Divider(),
+                  const SizedBox(height: 12),
+
+                  // ─── Pause anti-spam PAR LOT ──────────────────────────────
+                  Row(
+                    children: [
+                      Icon(Icons.shield_outlined, size: 18, color: Colors.grey.shade700),
+                      const SizedBox(width: 8),
+                      const Text('Pause anti-spam par lot',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      Switch(
+                        value: batchPauseEnabled,
+                        onChanged: !delayLoaded ? null : saveBatchPauseEnabled,
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'Après un lot de SMS envoyés, l\'appli marque une pause plus longue '
+                    'et ALÉATOIRE avant de reprendre (en plus du délai ci-dessus). '
+                    'Réduit encore le risque de blocage par l\'opérateur.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                  ),
+                  if (batchPauseEnabled) ...[
+                    const SizedBox(height: 10),
+                    Text('SMS avant pause : $batchPauseCount',
+                        style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+                    Slider(
+                      min: 1,
+                      max: 100,
+                      divisions: 99,
+                      value: batchPauseCount.clamp(1, 100).toDouble(),
+                      label: '$batchPauseCount',
+                      onChanged: !delayLoaded
+                          ? null
+                          : (v) => setState(() => batchPauseCount = v.round()),
+                      onChangeEnd:
+                          !delayLoaded ? null : (v) => saveBatchPauseCount(v.round()),
+                    ),
+                    Text('Pause minimum : ${fmtSecs(batchPauseMinMs)}',
+                        style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+                    Slider(
+                      min: 0,
+                      max: 300000,
+                      divisions: 60,
+                      value: batchPauseMinMs.clamp(0, 300000).toDouble(),
+                      label: fmtSecs(batchPauseMinMs),
+                      onChanged: !delayLoaded
+                          ? null
+                          : (v) =>
+                              setState(() => batchPauseMinMs = (v / 5000).round() * 5000),
+                      onChangeEnd: !delayLoaded
+                          ? null
+                          : (v) => saveBatchPauseMin((v / 5000).round() * 5000),
+                    ),
+                    Text(
+                      batchPauseMaxMs > batchPauseMinMs
+                          ? 'Pause maximum (aléatoire) : ${fmtSecs(batchPauseMaxMs)}'
+                          : 'Pause maximum (aléatoire) : fixe',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                    ),
+                    Slider(
+                      min: 0,
+                      max: 300000,
+                      divisions: 60,
+                      value: (batchPauseMaxMs == 0 ? batchPauseMinMs : batchPauseMaxMs)
+                          .clamp(0, 300000)
+                          .toDouble(),
+                      label: batchPauseMaxMs > batchPauseMinMs
+                          ? fmtSecs(batchPauseMaxMs)
+                          : fmtSecs(batchPauseMinMs),
+                      onChanged: !delayLoaded
+                          ? null
+                          : (v) =>
+                              setState(() => batchPauseMaxMs = (v / 5000).round() * 5000),
+                      onChangeEnd: !delayLoaded
+                          ? null
+                          : (v) => saveBatchPauseMax((v / 5000).round() * 5000),
+                    ),
+                    Text(
+                      '🛡️ Toutes les $batchPauseCount SMS, l\'envoi marque une pause '
+                      'aléatoire entre ${fmtSecs(batchPauseMinMs)} et '
+                      '${fmtSecs(batchPauseMaxMs > batchPauseMinMs ? batchPauseMaxMs : batchPauseMinMs)}.',
+                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                    ),
+                  ],
                   const SizedBox(height: 18),
                   const Divider(),
                   const SizedBox(height: 12),

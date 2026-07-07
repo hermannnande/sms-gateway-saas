@@ -26,6 +26,10 @@ type UserSettings = {
   language?: string
   message_delay_seconds?: number
   message_delay_max_seconds?: number | null
+  batch_pause_enabled?: boolean
+  batch_pause_count?: number
+  batch_pause_min_seconds?: number
+  batch_pause_max_seconds?: number
   email_notifications?: boolean
   notification_email?: string
   sleep_start_time?: string
@@ -59,6 +63,12 @@ export function ProfileForm({
   const [messageDelay, setMessageDelay] = useState(userSettings?.message_delay_seconds || 2)
   // Délai maximum (aléatoire). 0 = désactivé (délai fixe).
   const [messageDelayMax, setMessageDelayMax] = useState(userSettings?.message_delay_max_seconds || 0)
+
+  // Pause anti-spam PAR LOT (ex: pause de 20-60s toutes les 10 SMS)
+  const [batchPauseEnabled, setBatchPauseEnabled] = useState(userSettings?.batch_pause_enabled ?? true)
+  const [batchPauseCount, setBatchPauseCount] = useState(userSettings?.batch_pause_count || 10)
+  const [batchPauseMin, setBatchPauseMin] = useState(userSettings?.batch_pause_min_seconds ?? 20)
+  const [batchPauseMax, setBatchPauseMax] = useState(userSettings?.batch_pause_max_seconds ?? 60)
   const [emailNotifications, setEmailNotifications] = useState(userSettings?.email_notifications || false)
   const [notificationEmail, setNotificationEmail] = useState(userSettings?.notification_email || user.email || '')
   const [sleepStartTime, setSleepStartTime] = useState(userSettings?.sleep_start_time || '')
@@ -127,6 +137,10 @@ export function ProfileForm({
           message_delay_seconds: messageDelay,
           // 0 ou <= min => délai fixe (aléatoire désactivé)
           message_delay_max_seconds: messageDelayMax > messageDelay ? messageDelayMax : 0,
+          batch_pause_enabled: batchPauseEnabled,
+          batch_pause_count: batchPauseCount,
+          batch_pause_min_seconds: batchPauseMin,
+          batch_pause_max_seconds: batchPauseMax > batchPauseMin ? batchPauseMax : batchPauseMin,
           email_notifications: emailNotifications,
           notification_email: notificationEmail,
           sleep_start_time: sleepStartTime || null,
@@ -447,6 +461,90 @@ export function ProfileForm({
                     )}
                   </p>
                 </div>
+              </div>
+
+              {/* Pause anti-spam PAR LOT */}
+              <div className="space-y-4 bg-muted/20 border border-border rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    id="batchPauseEnabled"
+                    checked={batchPauseEnabled}
+                    onChange={(e) => setBatchPauseEnabled(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded accent-primary"
+                  />
+                  <div className="flex-1">
+                    <label htmlFor="batchPauseEnabled" className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                      <Radio className="h-4 w-4" />
+                      Pause anti-spam par lot
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Au-delà d’un certain nombre de SMS envoyés d’affilée, l’envoi marque une pause plus longue et <b>aléatoire</b> avant de reprendre (en plus du délai entre chaque SMS ci-dessus).
+                    </p>
+                  </div>
+                </div>
+
+                {batchPauseEnabled && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Nombre de SMS avant pause
+                      </label>
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="range"
+                          min="1"
+                          max="100"
+                          value={batchPauseCount}
+                          onChange={(e) => setBatchPauseCount(parseInt(e.target.value))}
+                          className="flex-1"
+                        />
+                        <span className="font-mono font-semibold text-primary w-16 text-center">{batchPauseCount} SMS</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Pause minimum (secondes)
+                      </label>
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="range"
+                          min="0"
+                          max="300"
+                          value={batchPauseMin}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value)
+                            setBatchPauseMin(v)
+                            if (batchPauseMax < v) setBatchPauseMax(v)
+                          }}
+                          className="flex-1"
+                        />
+                        <span className="font-mono font-semibold text-primary w-12 text-center">{batchPauseMin}s</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Pause maximum (aléatoire)
+                      </label>
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="range"
+                          min="0"
+                          max="300"
+                          value={batchPauseMax}
+                          onChange={(e) => setBatchPauseMax(parseInt(e.target.value))}
+                          className="flex-1"
+                        />
+                        <span className="font-mono font-semibold text-primary w-12 text-center">{batchPauseMax}s</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        🛡️ Toutes les <b>{batchPauseCount} SMS</b>, l’envoi marquera une pause aléatoire entre <b>{batchPauseMin}s et {Math.max(batchPauseMax, batchPauseMin)}s</b>.
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="flex items-start gap-3">

@@ -491,6 +491,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var batchesProcessed = 0;
       const maxBatchesPerCycle = 200;
       var shouldChainImmediately = false;
+      // Pause anti-spam PAR LOT : compteur de SMS envoyés depuis la dernière
+      // pause, persistant à travers les lots réclamés dans ce tick.
+      var sentSinceBatchPause = 0;
 
       while (batchesProcessed < maxBatchesPerCycle) {
         if (await _isPaused()) break;
@@ -562,6 +565,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       // (anti-blocage opérateur). maxDelay <= minDelay => délai fixe.
       final minDelayMs = await AppSettings.getSmsDelayMs();
       final maxDelayMs = await AppSettings.getSmsDelayMaxMs();
+      final batchPauseEnabled = await AppSettings.getBatchPauseEnabled();
+      final batchPauseCount = await AppSettings.getBatchPauseCount();
+      final batchPauseMinMs = await AppSettings.getBatchPauseMinMs();
+      final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
 
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
       final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
@@ -685,11 +692,25 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         // Apply the user-configured delay between SMS, with a live countdown
         // in the notification so the user sees that the app is *working*
         // (not frozen). We skip the wait on the very last message of the
-        // batch — there is nothing to wait for after it.
-        // Délai TIRÉ AU HASARD pour ce message (borne [min, max]) afin de ne pas
-        // envoyer à cadence régulière (déclencheur d'anti-spam opérateur).
-        final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
+        // batch, there is nothing to wait for after it. Délai TIRÉ AU HASARD
+        // pour ce message (borne [min, max]) afin de ne pas envoyer à cadence
+        // régulière (anti-blocage opérateur).
         final isLastInBatch = attempted >= batchTotal;
+        if (!isLastInBatch) {
+          sentSinceBatchPause++;
+        }
+        // Pause anti-spam PAR LOT : au-dela de N SMS envoyes d'affilee, on
+        // marque une pause plus longue et ALEATOIRE (au lieu du simple delai
+        // par SMS) pour casser tout motif regulier detectable par l'operateur.
+        final useBatchPause = !isLastInBatch &&
+            batchPauseEnabled &&
+            sentSinceBatchPause >= batchPauseCount;
+        if (useBatchPause) {
+          sentSinceBatchPause = 0;
+        }
+        final perSmsDelayMs = useBatchPause
+            ? AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs)
+            : AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
         if (!isLastInBatch && perSmsDelayMs > 0) {
           final tickMs = 500; // refresh notification twice per second
           var elapsed = 0;
@@ -698,6 +719,17 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             final remainMs = perSmsDelayMs - elapsed;
             final waitMs = remainMs < tickMs ? remainMs : tickMs;
             // Live countdown shown only when waiting >= 1 second
+            if (useBatchPause) {
+              final secsLeft = ((remainMs + 999) / 1000).floor();
+              await FlutterForegroundTask.updateService(
+                notificationTitle: 'SMSenvoie',
+                notificationText: '🛡️ Pause anti-spam • reprise dans ${secsLeft}s',
+                notificationButtons: _activeButtons(),
+              );
+              await Future.delayed(Duration(milliseconds: waitMs));
+              elapsed += waitMs;
+              continue;
+            }
             if (perSmsDelayMs >= 1000) {
               final s = hasCampaignTotals ? sentNow() : 0;
               final total = hasCampaignTotals ? totalSum : batchTotal;
