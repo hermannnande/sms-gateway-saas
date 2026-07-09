@@ -27,6 +27,7 @@ import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/auth_session_storage.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
+import 'package:smsgateway_flutter/utils/auto_vary.dart';
 import 'package:smsgateway_flutter/services/background_sync_service.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:supabase/supabase.dart';
@@ -1103,8 +1104,12 @@ class AppNotifier extends Notifier<AppState> {
       List<Message> lastBatchMessages = const [];
       // Pause anti-spam PAR LOT : compteur de SMS envoyés depuis la dernière
       // pause, persistant à travers les lots réclamés (le seuil peut être
-      // plus petit que AppConfig.claimBatchSize).
+      // plus petit que AppConfig.claimBatchSize). Le seuil est LUI-MÊME
+      // aléatoire (±30 % autour du réglage, re-tiré après chaque pause) :
+      // une pause exactement toutes les N SMS serait une périodicité
+      // détectable de plus.
       var sentSinceBatchPause = 0;
+      int? nextBatchPauseAt;
 
       while (batchesProcessed < maxBatches) {
         final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
@@ -1158,6 +1163,8 @@ class AppNotifier extends Notifier<AppState> {
         final batchPauseCount = await AppSettings.getBatchPauseCount();
         final batchPauseMinMs = await AppSettings.getBatchPauseMinMs();
         final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
+        // Variation automatique du texte (anti-signature opérateur).
+        final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
 
         final simSlotsByCampaign = campaignSimSlots(payload);
 
@@ -1173,8 +1180,11 @@ class AppNotifier extends Notifier<AppState> {
                 msg.campaignId == null ? null : simSlotsByCampaign[msg.campaignId],
           );
 
+          // Applique la variation automatique au CORPS uniquement (l'id et le
+          // routage SIM restent ceux du message d'origine).
+          final variedBody = AutoVary.apply(msg.content, enabled: autoVaryEnabled);
           final sendResult = await ref.read(smsSenderProvider).send(
-                msg,
+                variedBody == msg.content ? msg : msg.copyWith(content: variedBody),
                 subscriptionIdOverride: routing.subscriptionId,
                 simSlotIndexOverride: routing.simSlotIndex,
               );
@@ -1194,14 +1204,20 @@ class AppNotifier extends Notifier<AppState> {
             allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
           }
 
+          // Compte TOUS les SMS envoyés : les lots réclamés s'enchaînent, le
+          // dernier d'un lot est souvent suivi immédiatement du lot suivant.
+          sentSinceBatchPause++;
           if (i < messages.length - 1) {
-            sentSinceBatchPause++;
-            if (batchPauseEnabled && sentSinceBatchPause >= batchPauseCount) {
+            // Seuil re-tiré au hasard après chaque pause (±30 % autour du
+            // réglage) pour casser aussi la périodicité de la pause elle-même.
+            nextBatchPauseAt ??= AppSettings.pickBatchThreshold(batchPauseCount);
+            if (batchPauseEnabled && sentSinceBatchPause >= nextBatchPauseAt) {
               sentSinceBatchPause = 0;
+              nextBatchPauseAt = AppSettings.pickBatchThreshold(batchPauseCount);
               final pauseMs = AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs);
               if (pauseMs > 0) {
                 state = state.copyWith(
-                  lastStatus: '🛡️ Pause anti-spam (~${(pauseMs / 1000).round()}s) après $batchPauseCount SMS...',
+                  lastStatus: '🛡️ Pause anti-spam (~${(pauseMs / 1000).round()}s)...',
                 );
                 await Future.delayed(Duration(milliseconds: pauseMs));
               }
@@ -7453,6 +7469,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
           int batchPauseCount = AppSettings.defaultBatchPauseCount;
           int batchPauseMinMs = AppSettings.defaultBatchPauseMinMs;
           int batchPauseMaxMs = AppSettings.defaultBatchPauseMaxMs;
+          bool autoVaryEnabled = true;
 
           Future<void> load() async {
             final e = await BackgroundSyncService.isEnabled();
@@ -7463,6 +7480,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             final bpCount = await AppSettings.getBatchPauseCount();
             final bpMin = await AppSettings.getBatchPauseMinMs();
             final bpMax = await AppSettings.getBatchPauseMaxMs();
+            final av = await AppSettings.getAutoVaryEnabled();
             setState(() {
               enabled = e;
               paused = p;
@@ -7473,6 +7491,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
               batchPauseCount = bpCount;
               batchPauseMinMs = bpMin;
               batchPauseMaxMs = bpMax;
+              autoVaryEnabled = av;
             });
           }
 
@@ -7572,6 +7591,11 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             await AppSettings.setBatchPauseMaxMs(effective);
             setState(() => batchPauseMaxMs = effective);
             await pushBatchPause();
+          }
+
+          Future<void> saveAutoVary(bool v) async {
+            await AppSettings.setAutoVaryEnabled(v);
+            setState(() => autoVaryEnabled = v);
           }
 
           String fmtSecs(int ms) => '${(ms / 1000).round()}s';
@@ -7768,12 +7792,45 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                           : (v) => saveBatchPauseMax((v / 5000).round() * 5000),
                     ),
                     Text(
-                      '🛡️ Toutes les $batchPauseCount SMS, l\'envoi marque une pause '
-                      'aléatoire entre ${fmtSecs(batchPauseMinMs)} et '
+                      '🛡️ Environ toutes les $batchPauseCount SMS (seuil aléatoire '
+                      '±30 %), l\'envoi marque une pause aléatoire entre '
+                      '${fmtSecs(batchPauseMinMs)} et '
                       '${fmtSecs(batchPauseMaxMs > batchPauseMinMs ? batchPauseMaxMs : batchPauseMinMs)}.',
                       style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
                     ),
                   ],
+                  const SizedBox(height: 18),
+                  const Divider(),
+                  const SizedBox(height: 12),
+
+                  // ─── Variation automatique du texte ──────────────────────
+                  Row(
+                    children: [
+                      Icon(Icons.shuffle_rounded, size: 18, color: Colors.grey.shade700),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text('Variation automatique du texte',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      ),
+                      Switch(
+                        value: autoVaryEnabled,
+                        onChanged: !delayLoaded ? null : saveAutoVary,
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'Modifie légèrement chaque SMS (espaces invisibles) pour qu\'ils '
+                    'ne soient pas tous identiques — sans changer un seul mot. '
+                    'Casse la signature « message dupliqué » repérée par l\'opérateur.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Astuce : pour varier vraiment le texte, écris des alternatives '
+                    'entre accolades, ex. « {Bonjour|Salut} cher client » — l\'appli '
+                    'en choisit une au hasard pour chaque destinataire.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                  ),
                   const SizedBox(height: 18),
                   const Divider(),
                   const SizedBox(height: 12),

@@ -36,6 +36,14 @@ class AppSettings {
   /// Default delay if the user has never customized it.
   static int get defaultDelayMs => AppConfig.smsDelayMs;
 
+  /// Largeur de la plage aléatoire appliquée PAR DÉFAUT au-dessus du délai
+  /// minimum quand l'utilisateur n'a rien réglé. Les délais sont donc
+  /// aléatoires d'office (anti-blocage opérateur) : bande = [min, min + spread].
+  static const int defaultRandomSpreadMs = 3000;
+
+  /// Clé du réglage « variation automatique du texte ».
+  static const _kAutoVaryEnabled = 'cfg_auto_vary_enabled';
+
   /// Read the user-configured delay between two SMS sends, in ms.
   static Future<int> getSmsDelayMs() async {
     final prefs = await SharedPreferences.getInstance();
@@ -52,13 +60,19 @@ class AppSettings {
     await prefs.setInt(_kSmsDelayMs, clamped);
   }
 
-  /// Read the OPTIONAL upper bound of the random delay, in ms.
-  /// Returns 0 when random mode is disabled (no value, or <= the min delay).
+  /// Read the upper bound of the random delay, in ms.
+  /// - Jamais réglé => aléatoire PAR DÉFAUT : borne haute = min + spread.
+  /// - Réglé à 0 (ou <= min) => l'utilisateur a explicitement choisi un délai
+  ///   FIXE (pickDelayMs renverra alors le min).
   static Future<int> getSmsDelayMaxMs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     final raw = prefs.getInt(_kSmsDelayMaxMs);
-    if (raw == null) return 0;
+    if (raw == null) {
+      final min =
+          (prefs.getInt(_kSmsDelayMs) ?? defaultDelayMs).clamp(minDelayMs, maxDelayMs);
+      return (min + defaultRandomSpreadMs).clamp(minDelayMs, maxDelayMs);
+    }
     return raw.clamp(minDelayMs, maxDelayMs);
   }
 
@@ -155,6 +169,33 @@ class AppSettings {
     return minMs;
   }
 
+  /// Prochain seuil de pause par lot, tiré au hasard autour de [count] (±30 %).
+  /// Une pause EXACTEMENT toutes les N SMS est elle-même une périodicité
+  /// détectable par l'opérateur ; on varie donc aussi le seuil (ex. N=10
+  /// => pause après 7 à 13 SMS, re-tiré après chaque pause).
+  static int pickBatchThreshold(int count) {
+    if (count <= 1) return 1;
+    final jitter = (count * 0.3).floor();
+    if (jitter <= 0) return count;
+    return max(1, count - jitter + _rng.nextInt(2 * jitter + 1));
+  }
+
+  // ─── Variation automatique du texte (anti-signature opérateur) ───────────
+  // Casse le contenu strictement identique d'un SMS à l'autre (spintax +
+  // micro-variations d'espaces). Activée PAR DÉFAUT. Réglage local (SharedPrefs)
+  // — non synchronisé au tableau de bord web.
+
+  static Future<bool> getAutoVaryEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    return prefs.getBool(_kAutoVaryEnabled) ?? true;
+  }
+
+  static Future<void> setAutoVaryEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoVaryEnabled, enabled);
+  }
+
   /// Pull the SMS delay from the web dashboard (`user_settings.message_delay_seconds`)
   /// and mirror it locally. Safe to call repeatedly; silently ignores any
   /// network/RLS error so it never blocks login.
@@ -178,12 +219,13 @@ class AppSettings {
         return int.tryParse(raw.toString());
       }
 
-      // Borne haute (aléatoire) — facultative.
+      // Borne haute (aléatoire). Si le tableau de bord fournit une valeur, on
+      // la respecte (y compris 0 = délai fixe explicitement choisi). Si la
+      // colonne est absente/NULL, on NE force PAS 0 : on laisse l'aléatoire
+      // par défaut (voir getSmsDelayMaxMs).
       final maxSeconds = toSeconds(row['message_delay_max_seconds']);
       if (maxSeconds != null && maxSeconds >= 0) {
         await setSmsDelayMaxMs((maxSeconds * 1000).clamp(minDelayMs, maxDelayMs));
-      } else {
-        await setSmsDelayMaxMs(0);
       }
 
       // Pause anti-spam par lot (toutes les N SMS).

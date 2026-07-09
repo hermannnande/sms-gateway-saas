@@ -57,6 +57,20 @@ class Message {
     return defaultValue ?? 0;
   }
 
+  /// Copie du message avec un contenu remplacé (utilisé pour envoyer une
+  /// variante du texte sans altérer l'id/destinataire/routage SIM).
+  Message copyWith({String? content}) {
+    return Message(
+      id: id,
+      to: to,
+      content: content ?? this.content,
+      tryCount: tryCount,
+      campaignId: campaignId,
+      simSubscriptionId: simSubscriptionId,
+      simSlotIndex: simSlotIndex,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,

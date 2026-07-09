@@ -14,6 +14,7 @@ import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
+import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
 class BackgroundSyncService {
   static const int serviceId = 701;
@@ -492,8 +493,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       const maxBatchesPerCycle = 200;
       var shouldChainImmediately = false;
       // Pause anti-spam PAR LOT : compteur de SMS envoyés depuis la dernière
-      // pause, persistant à travers les lots réclamés dans ce tick.
+      // pause, persistant à travers les lots réclamés dans ce tick. Le seuil
+      // est LUI-MÊME aléatoire (±30 % autour du réglage, re-tiré après chaque
+      // pause) : une pause exactement toutes les N SMS serait une périodicité
+      // détectable de plus.
       var sentSinceBatchPause = 0;
+      int? nextBatchPauseAt;
 
       while (batchesProcessed < maxBatchesPerCycle) {
         if (await _isPaused()) break;
@@ -569,6 +574,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final batchPauseCount = await AppSettings.getBatchPauseCount();
       final batchPauseMinMs = await AppSettings.getBatchPauseMinMs();
       final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
+      // Variation automatique du texte (anti-signature opérateur).
+      final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
 
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
       final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
@@ -643,7 +650,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           );
           await _channel.invokeMethod('sendSms', {
             'to': msg.to,
-            'body': msg.content,
+            'body': AutoVary.apply(msg.content, enabled: autoVaryEnabled, rng: _rng),
             'subscriptionId': routing.subscriptionId,
             'simSlotIndex': routing.simSlotIndex,
           });
@@ -696,17 +703,21 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         // pour ce message (borne [min, max]) afin de ne pas envoyer à cadence
         // régulière (anti-blocage opérateur).
         final isLastInBatch = attempted >= batchTotal;
-        if (!isLastInBatch) {
-          sentSinceBatchPause++;
-        }
-        // Pause anti-spam PAR LOT : au-dela de N SMS envoyes d'affilee, on
-        // marque une pause plus longue et ALEATOIRE (au lieu du simple delai
-        // par SMS) pour casser tout motif regulier detectable par l'operateur.
+        // Compte TOUS les SMS envoyés : les lots réclamés s'enchaînent, le
+        // dernier d'un lot est souvent suivi immédiatement du lot suivant.
+        sentSinceBatchPause++;
+        // Pause anti-spam PAR LOT : au-dela d'un certain nombre de SMS envoyes
+        // d'affilee, on marque une pause plus longue et ALEATOIRE (au lieu du
+        // simple delai par SMS). Le seuil est re-tire au hasard apres chaque
+        // pause (±30 % autour du reglage) pour casser aussi la periodicite de
+        // la pause elle-meme.
+        nextBatchPauseAt ??= AppSettings.pickBatchThreshold(batchPauseCount);
         final useBatchPause = !isLastInBatch &&
             batchPauseEnabled &&
-            sentSinceBatchPause >= batchPauseCount;
+            sentSinceBatchPause >= nextBatchPauseAt;
         if (useBatchPause) {
           sentSinceBatchPause = 0;
+          nextBatchPauseAt = AppSettings.pickBatchThreshold(batchPauseCount);
         }
         final perSmsDelayMs = useBatchPause
             ? AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs)
