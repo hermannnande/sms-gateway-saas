@@ -450,14 +450,14 @@ export function ProfileForm({
                       className="flex-1"
                     />
                     <span className="font-mono font-semibold text-primary w-16 text-center">
-                      {messageDelayMax > messageDelay ? `${messageDelayMax}s` : 'off'}
+                      {messageDelayMax > messageDelay ? `${messageDelayMax}s` : 'auto'}
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
                     {messageDelayMax > messageDelay ? (
                       <>✅ Chaque SMS attendra un temps <b>aléatoire entre {messageDelay}s et {messageDelayMax}s</b>. Cela imite un envoi humain et réduit le risque de blocage par l’opérateur (anti-spam).</>
                     ) : (
-                      <>Mettez cette valeur <b>au-dessus du minimum</b> (ex. min 3s, max 8s) pour espacer les envois de façon aléatoire. Laissé sur « off », le délai reste fixe.</>
+                      <>✅ <b>Aléatoire automatique</b> : chaque SMS attendra un temps au hasard entre <b>{messageDelay}s et {messageDelay + 3}s</b> (jamais de cadence fixe). Montez ce curseur <b>au-dessus du minimum</b> pour élargir la plage (ex. min 3s, max 8s).</>
                     )}
                   </p>
                 </div>

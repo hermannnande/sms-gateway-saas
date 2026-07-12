@@ -36,9 +36,10 @@ class AppSettings {
   /// Default delay if the user has never customized it.
   static int get defaultDelayMs => AppConfig.smsDelayMs;
 
-  /// Largeur de la plage aléatoire appliquée PAR DÉFAUT au-dessus du délai
-  /// minimum quand l'utilisateur n'a rien réglé. Les délais sont donc
-  /// aléatoires d'office (anti-blocage opérateur) : bande = [min, min + spread].
+  /// Largeur de la plage aléatoire appliquée automatiquement au-dessus du délai
+  /// minimum dès que l'utilisateur n'a pas défini de borne haute supérieure au
+  /// minimum. Les délais sont donc aléatoires d'office (anti-blocage opérateur) :
+  /// bande = [min, min + spread].
   static const int defaultRandomSpreadMs = 3000;
 
   /// Clé du réglage « variation automatique du texte ».
@@ -61,23 +62,27 @@ class AppSettings {
   }
 
   /// Read the upper bound of the random delay, in ms.
-  /// - Jamais réglé => aléatoire PAR DÉFAUT : borne haute = min + spread.
-  /// - Réglé à 0 (ou <= min) => l'utilisateur a explicitement choisi un délai
-  ///   FIXE (pickDelayMs renverra alors le min).
+  ///
+  /// L'aléatoire est TOUJOURS actif (anti-blocage opérateur). Une borne haute
+  /// absente, nulle ou <= au minimum n'entraîne PLUS un délai fixe : on applique
+  /// alors automatiquement une bande [min, min + spread]. Seule une borne haute
+  /// explicitement supérieure au minimum élargit la plage. Il n'existe donc plus
+  /// de mode « délai fixe » : deux SMS ne partent jamais à cadence régulière.
   static Future<int> getSmsDelayMaxMs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
+    final min =
+        (prefs.getInt(_kSmsDelayMs) ?? defaultDelayMs).clamp(minDelayMs, maxDelayMs);
     final raw = prefs.getInt(_kSmsDelayMaxMs);
-    if (raw == null) {
-      final min =
-          (prefs.getInt(_kSmsDelayMs) ?? defaultDelayMs).clamp(minDelayMs, maxDelayMs);
+    if (raw == null || raw <= min) {
       return (min + defaultRandomSpreadMs).clamp(minDelayMs, maxDelayMs);
     }
     return raw.clamp(minDelayMs, maxDelayMs);
   }
 
-  /// Persist the upper bound of the random delay. Pass 0 (or a value <= the
-  /// min delay) to disable random mode and go back to a fixed delay.
+  /// Persist the upper bound of the random delay. Une valeur 0 (ou <= au délai
+  /// minimum) ne désactive PLUS l'aléatoire : le lecteur `getSmsDelayMaxMs`
+  /// applique dans ce cas une bande automatique [min, min + spread].
   static Future<void> setSmsDelayMaxMs(int ms) async {
     final prefs = await SharedPreferences.getInstance();
     final clamped = ms.clamp(minDelayMs, maxDelayMs);

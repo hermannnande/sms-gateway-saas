@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.17+64",
+  "latestVersion": "1.3.18+65",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• NOUVEAU: variation automatique du texte — chaque SMS est légèrement modifié (espaces invisibles) pour ne jamais être identique aux autres, sans changer un seul mot ni le prix du SMS\n• NOUVEAU: spintax {Bonjour|Salut} — écris des alternatives entre accolades, l'appli en choisit une au hasard par destinataire\n• Délais d'envoi désormais ALÉATOIRES par défaut (plus aucune cadence régulière détectable)\n• Pause anti-spam par lot : le seuil varie lui aussi (±30%) — plus jamais une pause exactement toutes les N SMS"
+  "notes": "• Délai aléatoire entre SMS TOUJOURS actif par défaut — même sans réglage, chaque envoi attend un temps au hasard (min → min+3s). Fini la cadence fixe repérée comme spam par l'opérateur.\n• Si tu avais un délai fixe, il repasse automatiquement en aléatoire après la mise à jour (rien à faire).\n• Le curseur « Délai maximum » ne sert plus qu'à ÉLARGIR la plage (ex. min 3s, max 8s).\n• Rappel: pause anti-spam par lot et variation automatique du texte restent activées."
 }

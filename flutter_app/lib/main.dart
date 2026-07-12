@@ -7685,7 +7685,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                   Text(
                     delayMaxMs > delayMs
                         ? 'Délai maximum (aléatoire) : ${fmtMs(delayMaxMs)}'
-                        : 'Délai maximum (aléatoire) : désactivé',
+                        : 'Délai maximum (aléatoire) : auto',
                     style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
                   ),
                   Slider(
@@ -7695,7 +7695,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                     value: (delayMaxMs == 0 ? delayMs : delayMaxMs)
                         .clamp(AppSettings.minDelayMs, AppSettings.maxDelayMs)
                         .toDouble(),
-                    label: delayMaxMs > delayMs ? fmtMs(delayMaxMs) : 'off',
+                    label: delayMaxMs > delayMs ? fmtMs(delayMaxMs) : 'auto',
                     onChanged: !delayLoaded
                         ? null
                         : (v) {
@@ -7707,8 +7707,9 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                     delayMaxMs > delayMs
                         ? '✅ Mode aléatoire : chaque SMS attend un temps au hasard entre '
                             '${fmtMs(delayMs)} et ${fmtMs(delayMaxMs)}. Réduit le risque de blocage opérateur.'
-                        : 'Astuce anti-blocage : mettez le maximum au-dessus du minimum '
-                            '(ex. min 3s, max 8s) pour espacer les envois de façon aléatoire.',
+                        : '✅ Aléatoire automatique : chaque SMS attend un temps au hasard entre '
+                            '${fmtMs(delayMs)} et ${fmtMs(delayMs + AppSettings.defaultRandomSpreadMs)}. '
+                            'Montez le maximum pour élargir la plage.',
                     style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
                   ),
                   const SizedBox(height: 18),
