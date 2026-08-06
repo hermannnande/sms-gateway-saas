@@ -14,6 +14,7 @@ const navigation = [
   { name: 'Templates', href: '/dashboard/templates', icon: '📝' },
   { name: 'Appareils', href: '/dashboard/devices', icon: '📱' },
   { name: 'Liste noire', href: '/dashboard/optouts', icon: '🚫' },
+  { name: 'Clefs API', href: '/dashboard/api-keys', icon: '🔑' },
   { name: 'Profil', href: '/dashboard/profile', icon: '👤' },
   { name: 'Facturation', href: '/billing/plans', icon: '💳' },
 ]
