@@ -366,13 +366,18 @@ export default function ApiDocsPage() {
             </p>
             <Code title="Reponse 200">{`{
   "ok": true,
-  "plan": "monthly_1",
-  "sms_quota_month": -1,
+  "plan": {
+    "id": "monthly_1",
+    "name": "Monthly 1",
+    "max_devices": 1,
+    "sms_quota_month": 0
+  },
   "sms_used_this_month": 342,
-  "quota_remaining": -1
+  "quota_remaining": null
 }`}</Code>
             <p className="text-muted-foreground text-xs mt-2">
-              <code className="font-mono bg-muted px-1 rounded">-1</code> = illimite. Sur le plan Gratuit : 100 SMS/mois.
+              <code className="font-mono bg-muted px-1 rounded">quota_remaining: null</code> = illimite
+              (plan mensuel). Sur le plan Gratuit : <code className="font-mono bg-muted px-1 rounded">sms_quota_month = 100</code>.
             </p>
           </section>
 

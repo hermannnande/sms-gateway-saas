@@ -63,13 +63,21 @@ export async function POST(req: Request) {
 
     const service = createServiceClient()
 
-    // ── Quota ──
-    const { data: quotaData } = await service.rpc('get_effective_plan_and_quota', {
+    // ── Quota (meme logique que l'Edge Function heartbeat) ──
+    const { data: plan } = await service.rpc('get_effective_plan', {
       p_org_id: identity.orgId,
     })
-    if (quotaData && typeof quotaData === 'object') {
-      const remaining = (quotaData as any).quota_remaining
-      if (typeof remaining === 'number' && remaining <= 0) {
+    const smsQuota = typeof plan?.sms_quota_month === 'number' ? plan.sms_quota_month : 0
+    if (smsQuota > 0) {
+      const now = new Date()
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+      const { count } = await service
+        .from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', identity.orgId)
+        .eq('status', 'sent')
+        .gte('sent_at', monthStart)
+      if ((count || 0) >= smsQuota) {
         return NextResponse.json(
           { ok: false, error: 'Quota SMS epuise. Passez a un plan superieur.', code: 'quota_exceeded' },
           { status: 403 }
