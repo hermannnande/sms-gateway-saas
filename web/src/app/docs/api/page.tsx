@@ -179,6 +179,18 @@ export default function ApiDocsPage() {
               ⚠️ Gardez vos clefs secretes : ne les exposez jamais dans du code cote client (navigateur, app mobile publique),
               dans un depot Git public ou dans des URLs. Utilisez-les uniquement cote serveur.
             </div>
+
+            <h3 className="text-base font-semibold text-foreground mt-6 mb-3">Gerer vos clefs</h3>
+            <ul className="space-y-2 text-sm text-muted-foreground list-disc list-inside">
+              <li><strong className="text-foreground">Creer</strong> : Dashboard → Clefs API → « + Nouvelle clef ». Donnez-lui un nom parlant (ex. « Boutique Shopify »).</li>
+              <li><strong className="text-foreground">Suivre</strong> : le dashboard affiche le prefixe de chaque clef et sa derniere date d'utilisation.</li>
+              <li>
+                <strong className="text-foreground">Revoquer</strong> : bouton « Revoquer » a cote de la clef. La revocation est{' '}
+                <strong className="text-foreground">immediate et definitive</strong> : la clef est verifiee a chaque requete
+                (aucun cache), elle renvoie instantanement <code className="font-mono text-xs bg-muted px-1 rounded">401 invalid_api_key</code>{' '}
+                et ne peut pas etre reactivee — il faut en creer une nouvelle.
+              </li>
+            </ul>
           </section>
 
           {/* ── SEND ── */}
@@ -516,7 +528,7 @@ send_sms('+2250707000000', 'Rappel : votre rendez-vous est demain a 10h.')`}</Co
             <ul className="space-y-3 text-sm text-muted-foreground">
               <li className="flex gap-3">
                 <span>🔒</span>
-                <span><strong className="text-foreground">Clefs hachees.</strong> SMSenvoie ne stocke que le hash SHA-256 de votre clef. Personne — pas meme nous — ne peut la retrouver. En cas de perte, revoquez-la et creez-en une nouvelle.</span>
+                <span><strong className="text-foreground">Clefs hachees.</strong> SMSenvoie ne stocke que le hash SHA-256 de votre clef. Personne — pas meme nous — ne peut la retrouver. En cas de perte, revoquez-la et creez-en une nouvelle. Une clef revoquee est bloquee immediatement et de facon definitive : la verification est faite a chaque requete, sans cache.</span>
               </li>
               <li className="flex gap-3">
                 <span>🖥️</span>
