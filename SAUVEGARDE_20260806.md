@@ -13,9 +13,8 @@
 | URL web | https://smsenvoie.com |
 | Repository | https://github.com/hermannnande/sms-gateway-saas.git |
 | Branche | main |
-| Dernier commit | 6058881 - feat(anti-spam): delai aleatoire toujours actif par defaut (v1.3.18+65) |
-| Total commits | 188 |
-| Version APK | 1.3.18+65 |
+| Dernier commit | 415d6b8 - fix(android): connexion permanente + redemarrage auto au boot (v1.3.19+66) |
+| Version APK | 1.3.19+66 |
 | Taille APK | ~29 Mo (arm64-v8a) |
 | Hebergement web | Vercel |
 | Base de donnees | Supabase (PostgreSQL) |
@@ -224,6 +223,7 @@ Nouvelles migrations :
 
 | Version | Build | Description |
 |---------|-------|-------------|
+| 1.3.19 | 66 | Connexion permanente (refresh token persiste) + redemarrage auto au boot |
 | 1.3.18 | 65 | Delai aleatoire toujours actif par defaut |
 | 1.3.17 | 64 | Variation auto texte + delais aleatoires par defaut |
 | 1.3.16 | 63 | Pause aleatoire par lot de SMS |
