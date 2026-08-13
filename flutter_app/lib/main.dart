@@ -273,6 +273,18 @@ class AppNotifier extends Notifier<AppState> {
   Future<void> init() async {
     // Restaurer la session Supabase en premier (le token appareil dépend du compte).
     final supabase = ref.read(supabaseClientProvider);
+
+    // Persister automatiquement chaque refresh token ROTÉ par Supabase.
+    // Sans ça, le refresh token stocké devient invalide après une seule
+    // utilisation (rotation côté serveur) et l'utilisateur est déconnecté
+    // au prochain démarrage de l'app ou du téléphone.
+    supabase.auth.onAuthStateChange.listen((data) {
+      final rt = data.session?.refreshToken;
+      if (rt != null && rt.isNotEmpty) {
+        ref.read(authSessionStorageProvider).saveRefreshToken(rt);
+      }
+    });
+
     var session = supabase.auth.currentSession;
     var hasSession = session != null;
 
@@ -284,7 +296,15 @@ class AppNotifier extends Notifier<AppState> {
           final res = await supabase.auth.refreshSession(refreshToken);
           session = res.session;
           hasSession = session != null;
-          if (!hasSession) {
+          if (hasSession) {
+            // Sauvegarder IMMÉDIATEMENT le nouveau refresh token (rotation)
+            final newRt = res.session?.refreshToken;
+            if (newRt != null && newRt.isNotEmpty) {
+              await ref
+                  .read(authSessionStorageProvider)
+                  .saveRefreshToken(newRt);
+            }
+          } else {
             await ref.read(authSessionStorageProvider).clear();
           }
         } catch (e) {
@@ -703,7 +723,15 @@ class AppNotifier extends Notifier<AppState> {
             if (s.expiresAt! <= nowSec + 90) {
               final rt = s.refreshToken;
               if (rt != null && rt.trim().isNotEmpty) {
-                await supabase.auth.refreshSession(rt);
+                final res = await supabase.auth.refreshSession(rt);
+                // Persister le nouveau refresh token (rotation Supabase)
+                // pour rester connecté en permanence.
+                final newRt = res.session?.refreshToken;
+                if (newRt != null && newRt.isNotEmpty) {
+                  await ref
+                      .read(authSessionStorageProvider)
+                      .saveRefreshToken(newRt);
+                }
               }
             }
           }
