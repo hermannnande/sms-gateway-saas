@@ -188,7 +188,9 @@ export default function ApiDocsPage() {
                 <strong className="text-foreground">Revoquer</strong> : bouton « Revoquer » a cote de la clef. La revocation est{' '}
                 <strong className="text-foreground">immediate et definitive</strong> : la clef est verifiee a chaque requete
                 (aucun cache), elle renvoie instantanement <code className="font-mono text-xs bg-muted px-1 rounded">401 invalid_api_key</code>{' '}
-                et ne peut pas etre reactivee — il faut en creer une nouvelle.
+                et ne peut pas etre reactivee — il faut en creer une nouvelle.{' '}
+                <strong className="text-foreground">Les campagnes en cours creees via cette clef sont automatiquement annulees</strong>{' '}
+                (leurs SMS en file d'attente ne seront jamais envoyes).
               </li>
             </ul>
           </section>

@@ -144,6 +144,7 @@ export async function POST(req: Request) {
         name: campaignName,
         template_id: null,
         device_id: deviceId,
+        api_key_id: identity.keyId,
         sim_slot_index: simSlot,
         priority,
         status: 'running',

@@ -64,7 +64,7 @@ export function ApiKeysClient() {
   }
 
   async function revokeKey(id: string) {
-    if (!confirm('Revoquer cette clef ? Les applications qui l\'utilisent seront immediatement bloquees.')) return
+    if (!confirm('Revoquer cette clef ? Les applications qui l\'utilisent seront immediatement bloquees ET les campagnes en cours creees via cette clef seront annulees. Cette action est definitive.')) return
     try {
       const res = await fetch(`/api/keys/${id}`, { method: 'DELETE' })
       const data = await res.json()
