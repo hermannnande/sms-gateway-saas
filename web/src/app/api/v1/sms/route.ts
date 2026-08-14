@@ -8,6 +8,15 @@ export const dynamic = 'force-dynamic'
 
 const MAX_RECIPIENTS = 1000
 
+// ── Anti-spam cote API ──
+// L'appareil Android espace deja physiquement les envois (delais aleatoires,
+// pauses par lot). Ces limites protegent en plus la FILE D'ATTENTE contre les
+// abus cote API (clef compromise, boucle d'envoi mal codee, etc.) :
+//   - max RATE_MAX_REQUESTS_PER_MIN requetes d'envoi par minute et par clef
+//   - max RATE_MAX_SMS_PER_HOUR destinataires par heure et par clef
+const RATE_MAX_REQUESTS_PER_MIN = 10
+const RATE_MAX_SMS_PER_HOUR = 1000
+
 /**
  * POST /api/v1/sms
  * Envoie un SMS a un ou plusieurs destinataires.
@@ -22,6 +31,7 @@ const MAX_RECIPIENTS = 1000
  *   priority  number             (optionnel) 0=normale, 1=haute, 2=urgente
  *
  * Reponse: { ok, campaign_id, total, skipped_optout, invalid }
+ * Limites: 429 rate_limited (> 10 req/min) | 429 api_hourly_limit (> 1000 SMS/h)
  */
 export async function POST(req: Request) {
   try {
@@ -36,6 +46,29 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => null)
     if (!body) {
       return NextResponse.json({ ok: false, error: 'Body JSON invalide', code: 'invalid_body' }, { status: 400 })
+    }
+
+    const service = createServiceClient()
+
+    // ── Anti-spam API : limite de requetes par minute (par clef) ──
+    const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString()
+    const { count: recentRequests } = await service
+      .from('campaigns')
+      .select('*', { count: 'exact', head: true })
+      .eq('api_key_id', identity.keyId)
+      .gte('created_at', oneMinuteAgo)
+
+    if ((recentRequests || 0) >= RATE_MAX_REQUESTS_PER_MIN) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Trop de requetes : maximum ${RATE_MAX_REQUESTS_PER_MIN} envois par minute. Patientez avant de reessayer.`,
+          code: 'rate_limited',
+          limit_per_minute: RATE_MAX_REQUESTS_PER_MIN,
+          retry_after_seconds: 60,
+        },
+        { status: 429, headers: { 'Retry-After': '60' } }
+      )
     }
 
     // ── Destinataires ──
@@ -60,8 +93,6 @@ export async function POST(req: Request) {
     if (variants.length === 0) {
       return NextResponse.json({ ok: false, error: 'Parametre "message" requis', code: 'missing_message' }, { status: 400 })
     }
-
-    const service = createServiceClient()
 
     // ── Quota (meme logique que l'Edge Function heartbeat) ──
     const { data: plan } = await service.rpc('get_effective_plan', {
@@ -108,6 +139,36 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { ok: false, error: 'Tous les destinataires sont dans la liste noire (STOP)', code: 'all_opted_out' },
         { status: 400 }
+      )
+    }
+
+    // ── Anti-spam API : limite de SMS par heure (par clef) ──
+    // Evite de saturer la file d'attente de l'appareil : l'envoi physique
+    // est deja espace par l'anti-spam du telephone, on plafonne ici le
+    // volume injecte via l'API.
+    const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString()
+    const { data: hourCampaigns } = await service
+      .from('campaigns')
+      .select('total_count')
+      .eq('api_key_id', identity.keyId)
+      .gte('created_at', oneHourAgo)
+
+    const usedThisHour = (hourCampaigns || []).reduce(
+      (sum: number, c: any) => sum + (c.total_count || 0),
+      0
+    )
+
+    if (usedThisHour + recipients.length > RATE_MAX_SMS_PER_HOUR) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Limite horaire API atteinte : maximum ${RATE_MAX_SMS_PER_HOUR} SMS par heure via l'API.`,
+          code: 'api_hourly_limit',
+          limit_per_hour: RATE_MAX_SMS_PER_HOUR,
+          used_this_hour: usedThisHour,
+          retry_after_seconds: 3600,
+        },
+        { status: 429, headers: { 'Retry-After': '3600' } }
       )
     }
 

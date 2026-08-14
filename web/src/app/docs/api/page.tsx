@@ -255,6 +255,24 @@ export default function ApiDocsPage() {
               puis envoyes automatiquement par votre telephone en quelques secondes, avec des delais aleatoires anti-spam
               pour proteger votre SIM du blocage operateur.
             </div>
+
+            <h3 className="text-base font-semibold text-foreground mt-6">🛡️ Limites anti-spam de l'API</h3>
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              En plus de l'anti-spam applique par votre telephone lors de l'envoi physique, l'API plafonne le volume
+              injecte dans la file d'attente, par clef API :
+            </p>
+            <ParamTable
+              rows={[
+                ['10 requetes / minute', '-', '-', 'Au-dela : HTTP 429 code rate_limited, header Retry-After: 60'],
+                ['1 000 SMS / heure', '-', '-', 'Total de destinataires cumules. Au-dela : HTTP 429 code api_hourly_limit, Retry-After: 3600'],
+                ['1 000 destinataires / requete', '-', '-', 'Au-dela : HTTP 400 code too_many_recipients'],
+              ]}
+            />
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              Ces limites evitent de saturer votre appareil : l'envoi physique reste espace (delais aleatoires +
+              pauses par lot). Pour un gros envoi, decoupez en lots et espacez vos requetes — votre telephone
+              enverra tout, au bon rythme.
+            </p>
           </section>
 
           {/* ── SMS STATUS ── */}
@@ -407,6 +425,8 @@ export default function ApiDocsPage() {
                 ['400 no_valid_recipient', '-', '-', 'Aucun numero valide apres normalisation'],
                 ['400 all_opted_out', '-', '-', 'Tous les destinataires sont dans la liste noire'],
                 ['403 quota_exceeded', '-', '-', 'Quota SMS mensuel epuise'],
+                ['429 rate_limited', '-', '-', 'Plus de 10 requetes d\'envoi par minute — patienter 60s'],
+                ['429 api_hourly_limit', '-', '-', 'Plus de 1 000 SMS par heure via l\'API — patienter'],
                 ['404 device_not_found', '-', '-', 'device_id inexistant dans votre organisation'],
                 ['404 not_found', '-', '-', 'Message ou campagne introuvable'],
                 ['500 server_error', '-', '-', 'Erreur interne — reessayez ou contactez le support'],
