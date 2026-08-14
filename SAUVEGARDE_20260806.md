@@ -13,7 +13,8 @@
 | URL web | https://smsenvoie.com |
 | Repository | https://github.com/hermannnande/sms-gateway-saas.git |
 | Branche | main |
-| Dernier commit | 415d6b8 - fix(android): connexion permanente + redemarrage auto au boot (v1.3.19+66) |
+| Dernier commit | e1d5e2f - feat(api): revocation definitive - annule les campagnes en cours de la cle |
+| Total commits | 195 |
 | Version APK | 1.3.19+66 |
 | Taille APK | ~29 Mo (arm64-v8a) |
 | Hebergement web | Vercel |
@@ -137,6 +138,8 @@ Nouvelles migrations :
 20260703000000_restore_claim_sim_routing.sql
 20260703120000_user_settings_delay_max.sql
 20260707000000_user_settings_batch_pause.sql
+20260806000000_api_keys.sql
+20260814140000_campaigns_api_key_id.sql
 ```
 
 ---
@@ -170,16 +173,53 @@ Nouvelles migrations :
 - Controle campagne depuis notification (Pause/Reprendre) + compte a rebours
 - Detection multi-SIM avec routage strict par campagne
 - Isolation du token appareil par compte
+- **Connexion permanente (v1.3.19)** : refresh token rote sauvegarde a chaque rotation
+  (listener onAuthStateChange + init + refreshActiveCampaign) - fini les deconnexions
+- **Redemarrage auto au boot** : BootReceiver flutter_foreground_task relance le service SMS
 - Heartbeat + mise a jour auto (latest.json)
 - Reception des SMS entrants → boite de reception web
 
 ### Backend (Supabase)
-- 43 migrations SQL, 9 Edge Functions (Deno)
+- 45 migrations SQL (+ migrations temporaires de test non commitees), 9 Edge Functions (Deno)
 - RLS sur toutes les tables (multi-tenant par org_id)
 - claim_messages_atomic : SELECT FOR UPDATE SKIP LOCKED + priorite + optouts + routage SIM
 - Auto-requeue des messages bloques en "sending"
 - Finalisation automatique des campagnes terminees
 - Plans d'abonnement avec quotas + user_settings (delais, pause par lot)
+
+---
+
+## 4bis. API PUBLIQUE v1 (ajoutee le 06/08/2026)
+
+Chaque utilisateur peut generer des clefs API pour connecter ses apps/SaaS
+(e-commerce, relance client, OTP, notifications) et envoyer des SMS via
+son appareil Android.
+
+### Clefs API
+- Format : `sk_live_` + 48 chars hex, stockees en hash SHA-256 (jamais en clair)
+- Table `api_keys` (RLS) : key_prefix visible, last_used_at, revoked_at
+- Gestion : Dashboard → Clefs API (creation, suivi, revocation)
+- Routes session : GET/POST `/api/keys`, DELETE `/api/keys/{id}`
+- **Revocation immediate et definitive** : verifiee a chaque requete (aucun cache)
+  → 401 `invalid_api_key` + **annulation automatique des campagnes en cours
+  creees via cette clef** (lien `campaigns.api_key_id`, cascade : campagne
+  canceled + jobs canceled + messages en attente marques 'canceled')
+
+### Endpoints publics (auth: `Authorization: Bearer sk_live_...`)
+
+| Route | Description |
+|-------|-------------|
+| POST /api/v1/sms | Envoyer 1 a 1000 SMS (variantes anti-spam, device_id, sim_slot, priorite) |
+| GET /api/v1/sms | Lister les messages (page, limit<=100, status, campaign_id, phone) |
+| GET /api/v1/sms/{id} | Statut d'un message |
+| GET /api/v1/campaigns | Lister les campagnes |
+| GET /api/v1/campaigns/{id} | Detail + stats par statut |
+| GET /api/v1/devices | Appareils + statut en ligne |
+| GET /api/v1/quota | Plan actif + SMS utilises + quota restant (RPC get_effective_plan) |
+
+- Les envois respectent : quota plan, liste noire STOP, normalisation E.164,
+  anti-spam cote appareil (delais aleatoires, pauses par lot, variation texte)
+- Documentation publique : https://smsenvoie.com/docs/api
 
 ---
 
@@ -191,8 +231,9 @@ Nouvelles migrations :
 | organizations | Organisations |
 | org_members | Membres par organisation |
 | devices | Appareils Android (token isole par compte) |
-| campaigns | Campagnes SMS (priorite + device_id + sim_slot) |
+| campaigns | Campagnes SMS (priorite + device_id + sim_slot + api_key_id) |
 | campaign_jobs | Jobs de campagne |
+| api_keys | Clefs API publiques (hash SHA-256, revocation definitive) |
 | templates | Modeles SMS |
 | messages | File d'attente SMS |
 | inbox_messages | Messages recus |
@@ -246,6 +287,13 @@ Nouvelles migrations :
 ## 8. DERNIERS COMMITS (15 derniers)
 
 ```
+e1d5e2f feat(api): revocation definitive - annule les campagnes en cours de la cle
+e359d20 docs: gestion des cles API (revocation definitive) dans la doc + guide client v1.3.19
+d27a392 docs: maj sauvegarde v1.3.19+66
+415d6b8 fix(android): connexion permanente + redemarrage auto au boot (v1.3.19+66)
+dc5e32f fix(api): utiliser le bon RPC get_effective_plan pour le quota (v1/sms + v1/quota)
+0dcac6f fix(migration): utiliser gen_random_uuid() pour api_keys
+2655774 feat(api): API publique v1 avec clefs par utilisateur + documentation
 6058881 feat(anti-spam): delai aleatoire toujours actif par defaut (v1.3.18+65)
 4a2521e feat(anti-spam): variation auto du texte + delais aleatoires par defaut (v1.3.17+64)
 b3a9aad feat(anti-spam): pause aleatoire par lot de SMS (v1.3.16+63)
@@ -254,13 +302,6 @@ b3a9aad feat(anti-spam): pause aleatoire par lot de SMS (v1.3.16+63)
 3a7e529 chore(release): republier APK v1.3.13+60 en arm64 (~29 Mo)
 aeb4c40 fix(android): isoler token appareil par compte (v1.3.13+60)
 0602f4c feat(campaigns): selection appareil avant lancement campagne multi-devices
-0890317 fix(inbox): activer reception SMS entrants vers boite de reception web
-ba945ad feat(inbox): boite de reception web avec blocage liste noire en 1 clic
-ab78fcd fix(android): auto-resume sending without manual Force button (v1.3.11+58)
-7a3c037 fix(android): chain SMS batches continuously after 10-message limit (v1.3.10+57)
-bfeaa5d fix(android): fully automatic campaign sync without manual action (v1.3.9+56)
-d4fbf43 fix(android): keep SMS sending alive in background and sleep (v1.3.8+55)
-d3e3041 fix(android): enforce campaign SIM slot routing (v1.3.7+54)
 ```
 
 ---
