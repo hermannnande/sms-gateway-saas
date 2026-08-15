@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.20+67",
+  "latestVersion": "1.3.21+68",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CADENCE RESPONSABLE : 8 à 12 secondes entre deux SMS par défaut.\n• Pause de régulation de 60 à 120 secondes après environ 10 SMS.\n• Ralentissement automatique supplémentaire après des erreurs réseau consécutives.\n• La variation automatique du contenu est désactivée : le texte envoyé reste auditable."
+  "notes": "• STATUT RÉEL : un SMS n'est marqué envoyé qu'après confirmation du réseau.\n• Les refus opérateur sont enregistrés comme échecs avec leur code Android.\n• La campagne est suspendue après 3 rejets opérateur consécutifs.\n• Routage strict vers la SIM sélectionnée."
 }

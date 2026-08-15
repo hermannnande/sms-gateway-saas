@@ -500,6 +500,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var sentSinceBatchPause = 0;
       int? nextBatchPauseAt;
       var consecutiveSendFailures = 0;
+      var consecutiveNetworkRejections = 0;
 
       while (batchesProcessed < maxBatchesPerCycle) {
         if (await _isPaused()) break;
@@ -577,6 +578,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
       // Variation automatique du texte (anti-signature opérateur).
       final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
+      var autoPausedForNetwork = false;
 
       final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
       final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
@@ -657,6 +659,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           });
           await _updateStatus(token, msg, true, null);
           consecutiveSendFailures = 0;
+          consecutiveNetworkRejections = 0;
 
           final cid = msg.campaignId;
           if (cid != null && campaigns.containsKey(cid)) {
@@ -672,11 +675,39 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           failed++;
           lastErr = formatted;
           consecutiveSendFailures++;
+          if (e.code == 'SMS_NETWORK_REJECTED') {
+            consecutiveNetworkRejections++;
+          } else {
+            consecutiveNetworkRejections = 0;
+          }
         } catch (e) {
           await _updateStatus(token, msg, false, e.toString());
           failed++;
           lastErr = e.toString();
           consecutiveSendFailures++;
+          consecutiveNetworkRejections = 0;
+        }
+
+        if (consecutiveNetworkRejections >=
+            AppConfig.operatorRejectionPauseThreshold) {
+          final campaignId = msg.campaignId;
+          if (campaignId != null && campaignId.isNotEmpty) {
+            try {
+              await _postJson(
+                _proxyUri('/api/mobile/campaign-control'),
+                {
+                  'action': 'pause',
+                  'campaign_id': campaignId,
+                  'device_token': token,
+                },
+              );
+            } catch (_) {
+              // Le verrou local ci-dessous stoppe quand même les envois.
+            }
+          }
+          await BackgroundSyncService.setPaused(true);
+          autoPausedForNetwork = true;
+          break;
         }
 
         if (hasCampaignTotals) {
@@ -782,7 +813,14 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         final errShort = (lastErr ?? '').replaceAll('\n', ' ');
         final errMsg = errShort.isEmpty ? '' : ' \u2022 err: ${errShort.substring(0, errShort.length.clamp(0, 60))}';
 
-        if (pausedAfterLoop) {
+        if (autoPausedForNetwork) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMSenvoie',
+            notificationText:
+                '⛔ $campaignLabel en pause • ${AppConfig.operatorRejectionPauseThreshold} rejets opérateur consécutifs',
+            notificationButtons: _pausedButtons(),
+          );
+        } else if (pausedAfterLoop) {
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMSenvoie',
             notificationText: '\u23f8\ufe0f $campaignLabel \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 En pause',
@@ -808,7 +846,14 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           );
         }
       } else {
-        if (pausedAfterLoop) {
+        if (autoPausedForNetwork) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMSenvoie',
+            notificationText:
+                '⛔ En pause • ${AppConfig.operatorRejectionPauseThreshold} rejets opérateur consécutifs',
+            notificationButtons: _pausedButtons(),
+          );
+        } else if (pausedAfterLoop) {
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMSenvoie',
             notificationText: '\u23f8\ufe0f Batch $attempted/$batchTotal \u2022 En pause',
@@ -825,6 +870,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
       }
 
+        if (autoPausedForNetwork) break;
         if (pausedAfterLoop) break;
         if (failed > 0) break;
 

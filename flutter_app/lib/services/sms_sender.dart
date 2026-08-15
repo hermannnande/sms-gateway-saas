@@ -6,10 +6,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:smsgateway_flutter/models/message.dart';
 
 class SmsSendResult {
-  SmsSendResult(this.success, {this.error});
+  SmsSendResult(this.success, {this.error, this.code});
 
   final bool success;
   final String? error;
+  final String? code;
 }
 
 class SmsSender {
@@ -61,14 +62,16 @@ class SmsSender {
           }) ??
           false;
 
-      return SmsSendResult(ok, error: ok ? null : 'Echec natif (pas de retour OS)');
+      return SmsSendResult(ok,
+          error: ok ? null : 'Echec natif (pas de retour OS)');
     } on PlatformException catch (e) {
       _logger.e('Erreur envoi SMS (platform)', error: e);
-      // Code natif: SMS_PERMISSION / SMS_NO_MANAGER / SMS_SEND_FAILED / SMS_TIMEOUT / SMS_INVALID / SMS_ERROR
+      // Code natif: SMS_NETWORK_REJECTED / SMS_ANDROID_LIMIT / SMS_NO_SERVICE /
+      // SMS_PERMISSION / SMS_NO_MANAGER / SMS_SEND_FAILED / SMS_TIMEOUT / etc.
       final code = e.code;
       final msg = (e.message ?? '').trim();
       final composed = msg.isEmpty ? code : '[$code] $msg';
-      return SmsSendResult(false, error: composed);
+      return SmsSendResult(false, error: composed, code: code);
     } catch (e, st) {
       _logger.e('Erreur envoi SMS', error: e, stackTrace: st);
       return SmsSendResult(false, error: e.toString());

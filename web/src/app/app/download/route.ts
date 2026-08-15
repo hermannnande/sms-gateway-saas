@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const APK_VERSION = '1.3.20-67'
+const APK_VERSION = '1.3.21-68'
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
@@ -28,4 +28,3 @@ export async function GET(req: Request) {
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
   return res
 }
-

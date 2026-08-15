@@ -18,6 +18,10 @@ class AppConfig {
   /// marge bornée pour lisser la charge du gateway.
   static const smsDelayMs = 8000;
 
+  /// Après plusieurs refus explicites du réseau/opérateur, suspendre la
+  /// campagne au lieu de continuer à consommer la file avec des échecs.
+  static const operatorRejectionPauseThreshold = 3;
+
   /// URL du manifeste de mise à jour (public).
   /// Format JSON: { "latestVersion": "1.0.1+3", "apkUrl": "https://.../sms-gateway.apk", "notes": "..." }
   static const appUpdateManifestUrl = 'https://smsenvoie.com/app/latest.json';
