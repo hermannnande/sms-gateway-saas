@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { verifyApiKey } from '@/lib/api-keys'
 import { smartParsePhone } from '@/lib/smart-phone'
+import {
+  MAX_CAMPAIGN_MESSAGE_VARIANTS,
+  createSmartVariantRotation,
+  normalizeMessageVariants,
+} from '@/lib/message-variants'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,7 +29,7 @@ const RATE_MAX_SMS_PER_HOUR = 1000
  * Body JSON:
  *   to        string | string[]  (obligatoire) numero(s) E.164 ou local
  *   message   string             (obligatoire) texte du SMS
- *   messages  string[]           (optionnel) variantes anti-spam (tirage aleatoire)
+ *   messages  string[]           (optionnel) jusqu'a 14 variantes supplémentaires
  *   name      string             (optionnel) nom de la campagne (defaut: "API - <date>")
  *   device_id string             (optionnel) forcer un appareil precis
  *   sim_slot  number             (optionnel) slot SIM (0, 1, ...)
@@ -86,12 +91,30 @@ export async function POST(req: Request) {
     // ── Message + variantes ──
     const messageBody = typeof body.message === 'string' ? body.message.trim() : ''
     const rawVariants: string[] = Array.isArray(body.messages) ? body.messages : []
-    const variants = [messageBody, ...rawVariants]
-      .map((m) => (typeof m === 'string' ? m.trim() : ''))
-      .filter((m) => m.length > 0)
+    if (rawVariants.length > MAX_CAMPAIGN_MESSAGE_VARIANTS - 1) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Maximum ${MAX_CAMPAIGN_MESSAGE_VARIANTS} messages différents par campagne`,
+          code: 'too_many_message_variants',
+        },
+        { status: 400 },
+      )
+    }
+    const variants = normalizeMessageVariants(messageBody, rawVariants)
 
     if (variants.length === 0) {
       return NextResponse.json({ ok: false, error: 'Parametre "message" requis', code: 'missing_message' }, { status: 400 })
+    }
+    if (variants.length > MAX_CAMPAIGN_MESSAGE_VARIANTS) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Maximum ${MAX_CAMPAIGN_MESSAGE_VARIANTS} messages différents par campagne`,
+          code: 'too_many_message_variants',
+        },
+        { status: 400 },
+      )
     }
 
     // ── Quota (meme logique que l'Edge Function heartbeat) ──
@@ -223,11 +246,13 @@ export async function POST(req: Request) {
       )
     }
 
-    const messages = recipients.map((phone) => ({
+    const variantRotation = createSmartVariantRotation(variants, recipients.length)
+    const messages = recipients.map((phone, index) => ({
       org_id: identity.orgId,
       campaign_id: campaign.id,
       to_phone_e164: phone,
-      body_final: variants[Math.floor(Math.random() * variants.length)],
+      body_final: variantRotation[index],
+      campaign_sequence: index,
       status: 'queued',
     }))
 

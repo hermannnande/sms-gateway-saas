@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sha256Hex } from '@/lib/device-token'
+import {
+  MAX_CAMPAIGN_MESSAGE_VARIANTS,
+  createSmartVariantRotation,
+  normalizeMessageVariants,
+} from '@/lib/message-variants'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -187,11 +192,18 @@ export async function POST(req: Request) {
     if (action === 'create') {
       const name = (body?.name || '').trim()
       const messageBody = (body?.message || '').trim()
-      // Variantes FACULTATIVES : chaque contact reçoit l'une d'elles au hasard.
+      // Variantes facultatives, nettoyées et dédupliquées avant répartition.
       const rawVariants: string[] = Array.isArray(body?.messages) ? body.messages : []
-      const messageVariants = [messageBody, ...rawVariants]
-        .map((m) => (typeof m === 'string' ? m.trim() : ''))
-        .filter((m) => m.length > 0)
+      if (rawVariants.length > MAX_CAMPAIGN_MESSAGE_VARIANTS - 1) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Maximum ${MAX_CAMPAIGN_MESSAGE_VARIANTS} messages différents par campagne`,
+          },
+          { status: 400 },
+        )
+      }
+      const messageVariants = normalizeMessageVariants(messageBody, rawVariants)
       const contacts: string[] = body?.contacts || []
       const simSlot = body?.sim_slot_index ?? null
       const priority = typeof body?.priority === 'number' ? body.priority : 0
@@ -201,6 +213,15 @@ export async function POST(req: Request) {
       }
       if (messageVariants.length === 0) {
         return NextResponse.json({ ok: false, error: 'Message SMS requis' }, { status: 400 })
+      }
+      if (messageVariants.length > MAX_CAMPAIGN_MESSAGE_VARIANTS) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Maximum ${MAX_CAMPAIGN_MESSAGE_VARIANTS} messages différents par campagne`,
+          },
+          { status: 400 },
+        )
       }
       if (!contacts || contacts.length === 0) {
         return NextResponse.json({ ok: false, error: 'Au moins un contact requis' }, { status: 400 })
@@ -269,12 +290,16 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: campError.message }, { status: 500 })
       }
 
-      const messages = filteredContacts.map(phone => ({
+      const variantRotation = createSmartVariantRotation(
+        messageVariants,
+        filteredContacts.length,
+      )
+      const messages = filteredContacts.map((phone, index) => ({
         org_id: device.org_id,
         campaign_id: campaign.id,
         to_phone_e164: phone,
-        // Tirage aléatoire d'une variante par contact (une seule => identique pour tous)
-        body_final: messageVariants[Math.floor(Math.random() * messageVariants.length)],
+        body_final: variantRotation[index],
+        campaign_sequence: index,
         status: 'queued',
       }))
 

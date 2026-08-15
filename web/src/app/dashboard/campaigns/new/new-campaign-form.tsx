@@ -6,6 +6,11 @@ import { createClient } from '@/lib/supabase/client'
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
 import * as XLSX from 'xlsx'
 import { Users, FileText, Database, Send } from 'lucide-react'
+import {
+  MAX_CAMPAIGN_MESSAGE_VARIANTS,
+  createSmartVariantRotation,
+  normalizeMessageVariants,
+} from '@/lib/message-variants'
 
 /**
  * Try to parse a phone number in multiple ways to maximize acceptance
@@ -78,8 +83,8 @@ export function NewCampaignForm({
   const [name, setName] = useState('')
   const [templateId, setTemplateId] = useState('')
   const [messageBody, setMessageBody] = useState('')
-  // Variantes de message FACULTATIVES : chaque contact reçoit l'une d'elles au
-  // hasard (rotation anti-spam). Vide par défaut => un seul message pour tous.
+  // Jusqu'à 14 textes supplémentaires (15 avec le message principal), répartis
+  // ensuite par rotation aléatoire équilibrée.
   const [extraMessages, setExtraMessages] = useState<string[]>([])
   const [contactInputMode, setContactInputMode] = useState<ContactInputMode>('manual')
   const [manualContacts, setManualContacts] = useState('')
@@ -390,6 +395,19 @@ export function NewCampaignForm({
         )
       }
 
+      // Rotation équilibrée : chaque variante passe une fois dans un ordre
+      // mélangé avant d'être réutilisée, sans répétition consécutive.
+      const messageVariants = normalizeMessageVariants(messageBody, extraMessages)
+      if (messageVariants.length > MAX_CAMPAIGN_MESSAGE_VARIANTS) {
+        throw new Error(
+          `Maximum ${MAX_CAMPAIGN_MESSAGE_VARIANTS} messages différents par campagne.`,
+        )
+      }
+      const variantRotation = createSmartVariantRotation(
+        messageVariants,
+        contactsToProcess.length,
+      )
+
       const { data: campaign, error: campaignError } = await supabase
         .from('campaigns')
         .insert({
@@ -409,15 +427,8 @@ export function NewCampaignForm({
 
       if (campaignError) throw campaignError
 
-      // Variantes de message : message principal + variantes non vides.
-      // Chaque contact reçoit UNE variante tirée au hasard (rotation anti-spam).
-      const messageVariants = [messageBody, ...extraMessages]
-        .map((m) => m.trim())
-        .filter((m) => m.length > 0)
-
-      const messages = contactsToProcess.map((contact) => {
-        const variant =
-          messageVariants[Math.floor(Math.random() * messageVariants.length)]
+      const messages = contactsToProcess.map((contact, index) => {
+        const variant = variantRotation[index]
         let finalBody = variant
         if (contact.name) {
           finalBody = finalBody.replace(/{nom}/gi, contact.name)
@@ -429,6 +440,7 @@ export function NewCampaignForm({
           campaign_id: campaign.id,
           to_phone_e164: contact.phone_e164,
           body_final: finalBody,
+          campaign_sequence: index,
           status: 'queued',
         }
       })
@@ -822,17 +834,25 @@ export function NewCampaignForm({
             <button
               type="button"
               onClick={() => setExtraMessages((prev) => [...prev, ''])}
-              className="flex items-center gap-2 text-sm font-semibold text-primary hover:underline"
+              disabled={extraMessages.length >= MAX_CAMPAIGN_MESSAGE_VARIANTS - 1}
+              className="flex items-center gap-2 text-sm font-semibold text-primary hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
             >
-              ➕ Ajouter une variante de message (facultatif)
+              ➕ Ajouter un message différent ({extraMessages.length + 1}/{MAX_CAMPAIGN_MESSAGE_VARIANTS})
             </button>
+
+            {extraMessages.length >= MAX_CAMPAIGN_MESSAGE_VARIANTS - 1 && (
+              <p className="text-xs font-medium text-amber-700">
+                Limite atteinte : {MAX_CAMPAIGN_MESSAGE_VARIANTS} messages par campagne.
+              </p>
+            )}
 
             {extraMessages.length > 0 && (
               <div className="flex items-start gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
                 <span>🎲</span>
                 <p>
-                  <b>Rotation activée</b> : chaque numéro recevra <b>l’un de ces {extraMessages.filter((m) => m.trim()).length + 1} messages au hasard</b>.
-                  Utile pour éviter d’envoyer exactement le même texte à tout le monde (anti-spam).
+                  <b>Rotation intelligente activée</b> : les messages sont mélangés,
+                  répartis équitablement et utilisés chacun une fois avant de recommencer.
+                  Deux numéros consécutifs ne recevront pas le même texte.
                 </p>
               </div>
             )}

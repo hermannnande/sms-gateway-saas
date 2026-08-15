@@ -211,7 +211,7 @@ export default function ApiDocsPage() {
               rows={[
                 ['to', 'string | string[]', 'oui', 'Numero(s) destinataire(s). Ex: "+2250707000000" ou ["+22507...", "+22505..."]'],
                 ['message', 'string', 'oui', 'Texte du SMS'],
-                ['messages', 'string[]', 'non', 'Variantes du texte (anti-spam) : chaque destinataire recoit une variante au hasard'],
+                ['messages', 'string[]', 'non', 'Jusqu’à 14 textes supplémentaires (15 au total), répartis par rotation aléatoire équilibrée sans répétition consécutive'],
                 ['name', 'string', 'non', 'Nom de la campagne creee (defaut: "API - date")'],
                 ['device_id', 'string', 'non', "Forcer l'envoi via un appareil precis (voir GET /devices)"],
                 ['sim_slot', 'number', 'non', 'Slot SIM a utiliser (0 ou 1) sur un appareil double SIM'],
