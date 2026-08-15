@@ -1139,8 +1139,7 @@ class AppNotifier extends Notifier<AppState> {
       var sentSinceBatchPause = 0;
       int? nextBatchPauseAt;
       var consecutiveSendFailures = 0;
-      var consecutiveNetworkRejections = 0;
-      var autoPausedForNetwork = false;
+      var networkRejectionCount = 0;
 
       while (batchesProcessed < maxBatches) {
         final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
@@ -1229,41 +1228,15 @@ class AppNotifier extends Notifier<AppState> {
           if (sendResult.success) {
             totalOk++;
             consecutiveSendFailures = 0;
-            consecutiveNetworkRejections = 0;
             allResults.add('✅ sent → ${msg.to}');
           } else {
             totalFail++;
             consecutiveSendFailures++;
             if (sendResult.code == 'SMS_NETWORK_REJECTED') {
-              consecutiveNetworkRejections++;
-            } else {
-              consecutiveNetworkRejections = 0;
+              networkRejectionCount++;
             }
             final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
             allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
-          }
-
-          if (consecutiveNetworkRejections >=
-              AppConfig.operatorRejectionPauseThreshold) {
-            final campaignId = msg.campaignId;
-            if (campaignId != null && campaignId.isNotEmpty) {
-              try {
-                await ref.read(deviceServiceProvider).campaignControl(
-                      action: 'pause',
-                      campaignId: campaignId,
-                      deviceToken: token,
-                    );
-              } catch (_) {
-                // Le verrou local ci-dessous stoppe quand même les envois.
-              }
-            }
-            await BackgroundSyncService.setPaused(true);
-            autoPausedForNetwork = true;
-            allResults.add(
-              '⛔ Envoi mis en pause après '
-              '${AppConfig.operatorRejectionPauseThreshold} rejets opérateur consécutifs.',
-            );
-            break;
           }
 
           // Compte TOUS les SMS envoyés : les lots réclamés s'enchaînent, le
@@ -1293,19 +1266,17 @@ class AppNotifier extends Notifier<AppState> {
           }
         }
 
-        if (autoPausedForNetwork) break;
-
         if (messages.length < AppConfig.claimBatchSize) break;
       }
 
       if (batchesProcessed > 0) {
+        final rejectionSummary = networkRejectionCount > 0
+            ? ' • $networkRejectionCount rejets opérateur'
+            : '';
         state = state.copyWith(
           lastMessages: lastBatchMessages,
-          lastStatus: autoPausedForNetwork
-              ? '⛔ Envoi en pause : le réseau de l\'opérateur a rejeté '
-                  '${AppConfig.operatorRejectionPauseThreshold} SMS consécutifs.\n\n'
-                  '${allResults.take(20).join('\n')}'
-              : 'Résultat: $totalOk OK • $totalFail échecs${batchesProcessed > 1 ? ' ($batchesProcessed lots)' : ''}\n\n${allResults.take(20).join('\n')}',
+          lastStatus:
+              'Résultat: $totalOk OK • $totalFail échecs$rejectionSummary${batchesProcessed > 1 ? ' ($batchesProcessed lots)' : ''}\n\n${allResults.take(20).join('\n')}',
         );
         await refreshDeviceStatus(silent: true);
         await refreshActiveCampaign(silent: true);
@@ -1313,10 +1284,8 @@ class AppNotifier extends Notifier<AppState> {
 
       try {
         await BackgroundSyncService.setForegroundLock(false);
-        if (!autoPausedForNetwork) {
-          await BackgroundSyncService.setPaused(false);
-          await BackgroundSyncService.ensureAutoSync();
-        }
+        await BackgroundSyncService.setPaused(false);
+        await BackgroundSyncService.ensureAutoSync();
       } catch (_) {}
     } catch (e, st) {
       ref.read(loggerProvider).e('syncOnce error', error: e, stackTrace: st);

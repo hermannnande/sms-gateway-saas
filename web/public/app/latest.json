@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.21+68",
+  "latestVersion": "1.3.22+69",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• STATUT RÉEL : un SMS n'est marqué envoyé qu'après confirmation du réseau.\n• Les refus opérateur sont enregistrés comme échecs avec leur code Android.\n• La campagne est suspendue après 3 rejets opérateur consécutifs.\n• Routage strict vers la SIM sélectionnée."
+  "notes": "• STATUT RÉEL : un SMS n'est marqué envoyé qu'après confirmation du réseau.\n• Les refus opérateur restent visibles dans le rapport avec leur code Android.\n• Aucun arrêt automatique après un rejet : seule une action manuelle met la campagne en pause ou l'annule.\n• Routage strict vers la SIM sélectionnée."
 }
