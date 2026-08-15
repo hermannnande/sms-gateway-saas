@@ -25,9 +25,8 @@ class AppSettings {
   static const _kBatchPauseMaxMs = 'cfg_batch_pause_max_ms';
   static final _rng = Random();
 
-  /// Minimum allowed delay between two SMS (in ms). Below this value,
-  /// some carriers drop or rate-limit messages.
-  static const int minDelayMs = 0;
+  /// Minimum responsible pacing between two SMS sends.
+  static const int minDelayMs = 5000;
 
   /// Maximum allowed delay between two SMS (in ms). Aligned with the web
   /// dashboard limit of 120 seconds.
@@ -36,11 +35,9 @@ class AppSettings {
   /// Default delay if the user has never customized it.
   static int get defaultDelayMs => AppConfig.smsDelayMs;
 
-  /// Largeur de la plage aléatoire appliquée automatiquement au-dessus du délai
-  /// minimum dès que l'utilisateur n'a pas défini de borne haute supérieure au
-  /// minimum. Les délais sont donc aléatoires d'office (anti-blocage opérateur) :
-  /// bande = [min, min + spread].
-  static const int defaultRandomSpreadMs = 3000;
+  /// Marge bornée ajoutée au délai minimum pour lisser la charge du gateway.
+  /// Elle ne remplace pas le consentement, l'identification ni la gestion STOP.
+  static const int defaultRandomSpreadMs = 4000;
 
   /// Clé du réglage « variation automatique du texte ».
   static const _kAutoVaryEnabled = 'cfg_auto_vary_enabled';
@@ -63,11 +60,9 @@ class AppSettings {
 
   /// Read the upper bound of the random delay, in ms.
   ///
-  /// L'aléatoire est TOUJOURS actif (anti-blocage opérateur). Une borne haute
-  /// absente, nulle ou <= au minimum n'entraîne PLUS un délai fixe : on applique
-  /// alors automatiquement une bande [min, min + spread]. Seule une borne haute
-  /// explicitement supérieure au minimum élargit la plage. Il n'existe donc plus
-  /// de mode « délai fixe » : deux SMS ne partent jamais à cadence régulière.
+  /// Une borne haute absente, nulle ou <= au minimum applique automatiquement
+  /// une marge [min, min + spread]. Une borne explicitement supérieure élargit
+  /// cette plage dans la limite de 120 secondes.
   static Future<int> getSmsDelayMaxMs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
@@ -90,7 +85,7 @@ class AppSettings {
   }
 
   /// Pick the delay to apply BEFORE the next SMS.
-  /// - If a max > min is configured => uniform random in [min, max] (anti-spam).
+  /// - If a max > min is configured => bounded jitter in [min, max].
   /// - Otherwise => the fixed min delay (100% backward compatible).
   /// Reads once; callers may cache [minMs]/[maxMs] per batch to avoid re-reading.
   static int pickDelayMs(int minMs, int maxMs) {
@@ -100,19 +95,24 @@ class AppSettings {
     return minMs;
   }
 
-  // ─── Pause anti-spam PAR LOT (ex: pause de 20-60s toutes les 10 SMS) ─────
-  // Complète le délai par SMS ci-dessus : au-delà d'un certain nombre de SMS
-  // envoyés d'affilée, on marque une pause plus longue et ALÉATOIRE pour
-  // casser tout motif régulier détectable par l'opérateur (MTN/Orange).
+  /// Extra network backoff after consecutive send failures. Successful sends
+  /// reset the counter in the caller.
+  static int failureBackoffMs(int consecutiveFailures) {
+    if (consecutiveFailures <= 0) return 0;
+    return min(60000, consecutiveFailures * 15000);
+  }
+
+  // ─── Pause de régulation PAR LOT ─────────────────────────────────────────
+  // Complète le délai par SMS par une pause plus longue après plusieurs envois.
 
   static const int minBatchPauseCount = 1;
   static const int maxBatchPauseCount = 500;
   static const int defaultBatchPauseCount = 10;
 
-  static const int minBatchPauseMs = 0;
+  static const int minBatchPauseMs = 30000;
   static const int maxBatchPauseMs = 1800000; // 30 min
-  static const int defaultBatchPauseMinMs = 20000;
-  static const int defaultBatchPauseMaxMs = 60000;
+  static const int defaultBatchPauseMinMs = 60000;
+  static const int defaultBatchPauseMaxMs = 120000;
 
   static Future<bool> getBatchPauseEnabled() async {
     final prefs = await SharedPreferences.getInstance();
@@ -185,15 +185,13 @@ class AppSettings {
     return max(1, count - jitter + _rng.nextInt(2 * jitter + 1));
   }
 
-  // ─── Variation automatique du texte (anti-signature opérateur) ───────────
-  // Casse le contenu strictement identique d'un SMS à l'autre (spintax +
-  // micro-variations d'espaces). Activée PAR DÉFAUT. Réglage local (SharedPrefs)
-  // — non synchronisé au tableau de bord web.
+  // Variation automatique historique du texte. Elle reste désactivée afin que
+  // le contenu envoyé soit explicite et auditable.
 
   static Future<bool> getAutoVaryEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    return prefs.getBool(_kAutoVaryEnabled) ?? true;
+    // Automatic message mutation is intentionally disabled. Legitimate
+    // variants must be supplied explicitly by the sender and remain auditable.
+    return false;
   }
 
   static Future<void> setAutoVaryEnabled(bool enabled) async {

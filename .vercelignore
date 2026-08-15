@@ -1,0 +1,13 @@
+/flutter_app/
+/android/
+/supabase/
+/RELEASE/
+/.claude/
+/.git/
+/.agents/
+/.codex/
+/CREDENTIALS_IMPORTANT.txt
+/web/node_modules/
+/web/.next/
+/web/.vercel/
+/web/.env*

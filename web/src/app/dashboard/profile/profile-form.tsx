@@ -60,15 +60,14 @@ export function ProfileForm({
   const [language, setLanguage] = useState(userSettings?.language || 'fr')
 
   // Message settings
-  const [messageDelay, setMessageDelay] = useState(userSettings?.message_delay_seconds || 2)
-  // Délai maximum (aléatoire). 0 = désactivé (délai fixe).
-  const [messageDelayMax, setMessageDelayMax] = useState(userSettings?.message_delay_max_seconds || 0)
+  const [messageDelay, setMessageDelay] = useState(Math.max(5, userSettings?.message_delay_seconds ?? 8))
+  const [messageDelayMax, setMessageDelayMax] = useState(Math.max(12, userSettings?.message_delay_max_seconds ?? 12))
 
   // Pause anti-spam PAR LOT (ex: pause de 20-60s toutes les 10 SMS)
   const [batchPauseEnabled, setBatchPauseEnabled] = useState(userSettings?.batch_pause_enabled ?? true)
   const [batchPauseCount, setBatchPauseCount] = useState(userSettings?.batch_pause_count || 10)
-  const [batchPauseMin, setBatchPauseMin] = useState(userSettings?.batch_pause_min_seconds ?? 20)
-  const [batchPauseMax, setBatchPauseMax] = useState(userSettings?.batch_pause_max_seconds ?? 60)
+  const [batchPauseMin, setBatchPauseMin] = useState(Math.max(30, userSettings?.batch_pause_min_seconds ?? 60))
+  const [batchPauseMax, setBatchPauseMax] = useState(Math.max(60, userSettings?.batch_pause_max_seconds ?? 120))
   const [emailNotifications, setEmailNotifications] = useState(userSettings?.email_notifications || false)
   const [notificationEmail, setNotificationEmail] = useState(userSettings?.notification_email || user.email || '')
   const [sleepStartTime, setSleepStartTime] = useState(userSettings?.sleep_start_time || '')
@@ -135,8 +134,9 @@ export function ProfileForm({
           timezone,
           language,
           message_delay_seconds: messageDelay,
-          // 0 ou <= min => délai fixe (aléatoire désactivé)
-          message_delay_max_seconds: messageDelayMax > messageDelay ? messageDelayMax : 0,
+          message_delay_max_seconds: messageDelayMax > messageDelay
+            ? messageDelayMax
+            : Math.min(messageDelay + 4, 120),
           batch_pause_enabled: batchPauseEnabled,
           batch_pause_count: batchPauseCount,
           batch_pause_min_seconds: batchPauseMin,
@@ -415,12 +415,12 @@ export function ProfileForm({
               <div className="space-y-4 bg-muted/20 border border-border rounded-lg p-4">
                 <div>
                   <label className="block text-sm font-medium mb-2">
-                    Délai minimum entre les messages (0-120 secondes)
+                    Délai minimum entre les messages (5-120 secondes)
                   </label>
                   <div className="flex items-center gap-4">
                     <input
                       type="range"
-                      min="0"
+                      min="5"
                       max="120"
                       value={messageDelay}
                       onChange={(e) => {
@@ -438,7 +438,7 @@ export function ProfileForm({
                 <div>
                   <label className="block text-sm font-medium mb-2 flex items-center gap-2">
                     <Radio className="h-4 w-4" />
-                    Délai maximum (envoi aléatoire) — facultatif
+                    Marge maximum de régulation
                   </label>
                   <div className="flex items-center gap-4">
                     <input
@@ -455,9 +455,9 @@ export function ProfileForm({
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
                     {messageDelayMax > messageDelay ? (
-                      <>✅ Chaque SMS attendra un temps <b>aléatoire entre {messageDelay}s et {messageDelayMax}s</b>. Cela imite un envoi humain et réduit le risque de blocage par l’opérateur (anti-spam).</>
+                      <>Chaque SMS attendra entre <b>{messageDelay}s et {messageDelayMax}s</b>. Cette marge lisse la charge du gateway, sans garantir le classement du message par l&apos;opérateur.</>
                     ) : (
-                      <>✅ <b>Aléatoire automatique</b> : chaque SMS attendra un temps au hasard entre <b>{messageDelay}s et {messageDelay + 3}s</b> (jamais de cadence fixe). Montez ce curseur <b>au-dessus du minimum</b> pour élargir la plage (ex. min 3s, max 8s).</>
+                      <>Marge automatique : chaque SMS attendra entre <b>{messageDelay}s et {Math.min(messageDelay + 4, 120)}s</b>.</>
                     )}
                   </p>
                 </div>
@@ -476,10 +476,10 @@ export function ProfileForm({
                   <div className="flex-1">
                     <label htmlFor="batchPauseEnabled" className="text-sm font-medium cursor-pointer flex items-center gap-2">
                       <Radio className="h-4 w-4" />
-                      Pause anti-spam par lot
+                      Pause de régulation par lot
                     </label>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Au-delà d’un certain nombre de SMS envoyés d’affilée, l’envoi marque une pause plus longue et <b>aléatoire</b> avant de reprendre (en plus du délai entre chaque SMS ci-dessus).
+                      Après un lot de SMS, l’envoi marque une pause plus longue avant de reprendre. Les destinataires doivent avoir donné leur consentement et pouvoir utiliser STOP.
                     </p>
                   </div>
                 </div>
@@ -510,7 +510,7 @@ export function ProfileForm({
                       <div className="flex items-center gap-4">
                         <input
                           type="range"
-                          min="0"
+                          min="30"
                           max="300"
                           value={batchPauseMin}
                           onChange={(e) => {
@@ -531,7 +531,7 @@ export function ProfileForm({
                       <div className="flex items-center gap-4">
                         <input
                           type="range"
-                          min="0"
+                          min="30"
                           max="300"
                           value={batchPauseMax}
                           onChange={(e) => setBatchPauseMax(parseInt(e.target.value))}
@@ -540,7 +540,7 @@ export function ProfileForm({
                         <span className="font-mono font-semibold text-primary w-12 text-center">{batchPauseMax}s</span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-2">
-                        🛡️ Toutes les <b>{batchPauseCount} SMS</b>, l’envoi marquera une pause aléatoire entre <b>{batchPauseMin}s et {Math.max(batchPauseMax, batchPauseMin)}s</b>.
+                        Toutes les <b>{batchPauseCount} SMS</b>, l’envoi marquera une pause entre <b>{batchPauseMin}s et {Math.max(batchPauseMax, batchPauseMin)}s</b>.
                       </p>
                     </div>
                   </>
@@ -673,6 +673,3 @@ export function ProfileForm({
     </div>
   )
 }
-
-
-

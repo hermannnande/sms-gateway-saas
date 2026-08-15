@@ -1138,6 +1138,7 @@ class AppNotifier extends Notifier<AppState> {
       // détectable de plus.
       var sentSinceBatchPause = 0;
       int? nextBatchPauseAt;
+      var consecutiveSendFailures = 0;
 
       while (batchesProcessed < maxBatches) {
         final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
@@ -1225,9 +1226,11 @@ class AppNotifier extends Notifier<AppState> {
 
           if (sendResult.success) {
             totalOk++;
+            consecutiveSendFailures = 0;
             allResults.add('✅ sent → ${msg.to}');
           } else {
             totalFail++;
+            consecutiveSendFailures++;
             final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
             allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
           }
@@ -1245,12 +1248,13 @@ class AppNotifier extends Notifier<AppState> {
               final pauseMs = AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs);
               if (pauseMs > 0) {
                 state = state.copyWith(
-                  lastStatus: '🛡️ Pause anti-spam (~${(pauseMs / 1000).round()}s)...',
+                  lastStatus: '⏸️ Pause de régulation (~${(pauseMs / 1000).round()}s)...',
                 );
                 await Future.delayed(Duration(milliseconds: pauseMs));
               }
             } else {
-              final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
+              final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs) +
+                  AppSettings.failureBackoffMs(consecutiveSendFailures);
               if (perSmsDelayMs > 0) {
                 await Future.delayed(Duration(milliseconds: perSmsDelayMs));
               }
@@ -8148,4 +8152,3 @@ class _ActionButton extends StatelessWidget {
     );
   }
 }
-

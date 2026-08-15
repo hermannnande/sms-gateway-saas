@@ -14,9 +14,9 @@ class AppConfig {
   /// Limite de messages réclamés par cycle serveur (plusieurs cycles s'enchaînent).
   static const claimBatchSize = 30;
 
-  /// Délai entre chaque SMS (en millisecondes) pour que la progression soit visible.
-  /// Valeurs recommandées: 1000ms (rapide), 2000ms (normal), 3000ms (lent mais visible).
-  static const smsDelayMs = 2000;
+  /// Cadence responsable par défaut entre deux SMS. AppSettings ajoute une
+  /// marge bornée pour lisser la charge du gateway.
+  static const smsDelayMs = 8000;
 
   /// URL du manifeste de mise à jour (public).
   /// Format JSON: { "latestVersion": "1.0.1+3", "apkUrl": "https://.../sms-gateway.apk", "notes": "..." }
@@ -28,4 +28,3 @@ class AppConfig {
   /// Page d'aide (optionnel) liée à la mise à jour.
   static const appUpdateHelpUrl = 'https://smsenvoie.com/onboarding';
 }
-

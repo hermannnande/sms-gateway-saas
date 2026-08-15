@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.19+66",
+  "latestVersion": "1.3.20+67",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CONNEXION PERMANENTE : fini les déconnexions ! L'app garde ta session active en permanence, même après un redémarrage du téléphone — plus besoin de ressaisir ton email et mot de passe.\n• Le service d'envoi SMS redémarre automatiquement avec le téléphone (BOOT_COMPLETED).\n• L'anti-spam reste actif : délais aléatoires entre SMS, pause par lot et variation du texte."
+  "notes": "• CADENCE RESPONSABLE : 8 à 12 secondes entre deux SMS par défaut.\n• Pause de régulation de 60 à 120 secondes après environ 10 SMS.\n• Ralentissement automatique supplémentaire après des erreurs réseau consécutives.\n• La variation automatique du contenu est désactivée : le texte envoyé reste auditable."
 }

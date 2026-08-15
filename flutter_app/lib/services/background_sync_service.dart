@@ -499,6 +499,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       // détectable de plus.
       var sentSinceBatchPause = 0;
       int? nextBatchPauseAt;
+      var consecutiveSendFailures = 0;
 
       while (batchesProcessed < maxBatchesPerCycle) {
         if (await _isPaused()) break;
@@ -655,6 +656,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             'simSlotIndex': routing.simSlotIndex,
           });
           await _updateStatus(token, msg, true, null);
+          consecutiveSendFailures = 0;
 
           final cid = msg.campaignId;
           if (cid != null && campaigns.containsKey(cid)) {
@@ -669,10 +671,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           await _updateStatus(token, msg, false, formatted);
           failed++;
           lastErr = formatted;
+          consecutiveSendFailures++;
         } catch (e) {
           await _updateStatus(token, msg, false, e.toString());
           failed++;
           lastErr = e.toString();
+          consecutiveSendFailures++;
         }
 
         if (hasCampaignTotals) {
@@ -721,7 +725,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
         final perSmsDelayMs = useBatchPause
             ? AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs)
-            : AppSettings.pickDelayMs(minDelayMs, maxDelayMs);
+            : AppSettings.pickDelayMs(minDelayMs, maxDelayMs) +
+                AppSettings.failureBackoffMs(consecutiveSendFailures);
         if (!isLastInBatch && perSmsDelayMs > 0) {
           final tickMs = 500; // refresh notification twice per second
           var elapsed = 0;
@@ -734,7 +739,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
               final secsLeft = ((remainMs + 999) / 1000).floor();
               await FlutterForegroundTask.updateService(
                 notificationTitle: 'SMSenvoie',
-                notificationText: '🛡️ Pause anti-spam • reprise dans ${secsLeft}s',
+                notificationText: '⏸️ Pause de régulation • reprise dans ${secsLeft}s',
                 notificationButtons: _activeButtons(),
               );
               await Future.delayed(Duration(milliseconds: waitMs));

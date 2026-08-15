@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { Trash2, AlertCircle, CheckSquare, Square } from 'lucide-react'
 import { Pagination } from '@/components/ui/pagination'
 
@@ -61,6 +60,22 @@ export function DevicesList({
     }
   }
 
+  const deleteDevices = async (ids: string[]) => {
+    const response = await fetch('/api/devices', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string }
+      | null
+
+    if (!response.ok || !result?.ok) {
+      throw new Error(result?.error || 'La suppression de l’appareil a échoué')
+    }
+  }
+
   // Supprimer un seul device
   const handleDeleteSingle = async (deviceId: string) => {
     if (confirmDeleteId !== deviceId) {
@@ -71,18 +86,11 @@ export function DevicesList({
     setDeletingIds(new Set([deviceId]))
     setIsDeleting(true)
     try {
-      const supabase = createClient()
-      const { error } = await supabase.from('devices').delete().eq('id', deviceId)
-
-      if (error) {
-        console.error('Error deleting device:', error)
-        alert('Erreur lors de la suppression: ' + error.message)
-      } else {
-        router.refresh()
-      }
+      await deleteDevices([deviceId])
+      router.refresh()
     } catch (err) {
-      console.error('Error:', err)
-      alert('Erreur lors de la suppression')
+      console.error('Error deleting device:', err)
+      alert(err instanceof Error ? err.message : 'Erreur lors de la suppression')
     } finally {
       setDeletingIds(new Set())
       setConfirmDeleteId(null)
@@ -100,18 +108,11 @@ export function DevicesList({
     setDeletingIds(new Set(selectedIds))
     setIsDeleting(true)
     try {
-      const supabase = createClient()
-      const { error } = await supabase.from('devices').delete().in('id', Array.from(selectedIds))
-
-      if (error) {
-        console.error('Error deleting devices:', error)
-        alert('Erreur lors de la suppression: ' + error.message)
-      } else {
-        router.refresh()
-      }
+      await deleteDevices(Array.from(selectedIds))
+      router.refresh()
     } catch (err) {
-      console.error('Error:', err)
-      alert('Erreur lors de la suppression')
+      console.error('Error deleting devices:', err)
+      alert(err instanceof Error ? err.message : 'Erreur lors de la suppression')
     } finally {
       setDeletingIds(new Set())
       setConfirmDeleteMultiple(false)
@@ -363,4 +364,3 @@ export function DevicesList({
     </div>
   )
 }
-
