@@ -1104,6 +1104,8 @@ class AppNotifier extends Notifier<AppState> {
     }
     if (state.syncing) return;
 
+    final supabase = ref.read(supabaseClientProvider);
+
     state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
 
     try {
@@ -1140,6 +1142,8 @@ class AppNotifier extends Notifier<AppState> {
       int? nextBatchPauseAt;
       var consecutiveSendFailures = 0;
       var networkRejectionCount = 0;
+      var pacing = await AppSettings.getSmsPacingSettings();
+      var thresholdBatchCount = pacing.batchPauseCount;
 
       while (batchesProcessed < maxBatches) {
         final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
@@ -1185,14 +1189,14 @@ class AppNotifier extends Notifier<AppState> {
 
         batchesProcessed++;
         lastBatchMessages = messages;
-        // Délai entre SMS : [min, max]. Si max > min, chaque envoi attend un
-        // temps ALÉATOIRE dans cet intervalle (anti-blocage opérateur).
-        final minDelayMs = await AppSettings.getSmsDelayMs();
-        final maxDelayMs = await AppSettings.getSmsDelayMaxMs();
-        final batchPauseEnabled = await AppSettings.getBatchPauseEnabled();
-        final batchPauseCount = await AppSettings.getBatchPauseCount();
-        final batchPauseMinMs = await AppSettings.getBatchPauseMinMs();
-        final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
+        // Recharge le profil web avant le lot. L'attente ci-dessous continuera
+        // à le consulter toutes les 2 secondes pendant la campagne active.
+        final refreshedPacing = await AppSettings.refreshFromSupabase(supabase);
+        if (thresholdBatchCount != refreshedPacing.batchPauseCount) {
+          thresholdBatchCount = refreshedPacing.batchPauseCount;
+          nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
+        }
+        pacing = refreshedPacing;
         // Variation automatique du texte (anti-signature opérateur).
         final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
 
@@ -1245,23 +1249,37 @@ class AppNotifier extends Notifier<AppState> {
           if (i < messages.length - 1) {
             // Seuil re-tiré au hasard après chaque pause (±30 % autour du
             // réglage) pour casser aussi la périodicité de la pause elle-même.
-            nextBatchPauseAt ??= AppSettings.pickBatchThreshold(batchPauseCount);
-            if (batchPauseEnabled && sentSinceBatchPause >= nextBatchPauseAt) {
+            if (thresholdBatchCount != pacing.batchPauseCount) {
+              thresholdBatchCount = pacing.batchPauseCount;
+              nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
+            }
+            nextBatchPauseAt ??= AppSettings.pickBatchThreshold(pacing.batchPauseCount);
+            final useBatchPause = pacing.batchPauseEnabled &&
+                sentSinceBatchPause >= nextBatchPauseAt;
+            if (useBatchPause) {
               sentSinceBatchPause = 0;
-              nextBatchPauseAt = AppSettings.pickBatchThreshold(batchPauseCount);
-              final pauseMs = AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs);
-              if (pauseMs > 0) {
+              nextBatchPauseAt = AppSettings.pickBatchThreshold(pacing.batchPauseCount);
+            }
+
+            final previousBatchCount = pacing.batchPauseCount;
+            final waitResult = await AppSettings.waitWithLiveRefresh(
+              initialSettings: pacing,
+              useBatchPause: useBatchPause,
+              consecutiveFailures: consecutiveSendFailures,
+              refreshSettings: () => AppSettings.refreshFromSupabase(supabase),
+              onTick: (remainingMs, isBatchPause) async {
+                final secondsLeft = ((remainingMs + 999) / 1000).floor();
                 state = state.copyWith(
-                  lastStatus: '⏸️ Pause de régulation (~${(pauseMs / 1000).round()}s)...',
+                  lastStatus: isBatchPause
+                      ? '⏸️ Pause de régulation • reprise dans ${secondsLeft}s'
+                      : '⏳ Prochain SMS dans ${secondsLeft}s',
                 );
-                await Future.delayed(Duration(milliseconds: pauseMs));
-              }
-            } else {
-              final perSmsDelayMs = AppSettings.pickDelayMs(minDelayMs, maxDelayMs) +
-                  AppSettings.failureBackoffMs(consecutiveSendFailures);
-              if (perSmsDelayMs > 0) {
-                await Future.delayed(Duration(milliseconds: perSmsDelayMs));
-              }
+              },
+            );
+            pacing = waitResult.settings;
+            if (previousBatchCount != pacing.batchPauseCount) {
+              thresholdBatchCount = pacing.batchPauseCount;
+              nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
             }
           }
         }

@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.24+71",
+  "latestVersion": "1.3.25+72",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• CADENCE PLUS RAPIDE : délai aléatoire réduit à 5–7 secondes entre les SMS.\n• PAUSES RÉDUITES : 30–45 secondes après environ 10 SMS.\n• La rotation facultative répartit jusqu'à 15 formulations distinctes.\n• La personnalisation {nom} reste disponible pour chaque destinataire."
+  "notes": "• RÉGLAGES EN DIRECT : les délais et pauses enregistrés sur le profil sont appliqués automatiquement pendant une campagne active.\n• Une attente déjà en cours est recalculée environ toutes les 2 secondes.\n• Les valeurs restent ajustables depuis smsenvoie.com/dashboard/profile.\n• La rotation facultative et la personnalisation {nom} restent disponibles."
 }

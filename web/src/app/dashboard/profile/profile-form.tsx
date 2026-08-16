@@ -156,7 +156,10 @@ export function ProfileForm({
 
       if (error) throw error
 
-      setMessage({ type: 'success', text: 'Paramètres enregistrés avec succès' })
+      setMessage({
+        type: 'success',
+        text: 'Paramètres enregistrés. Les appareils connectés les appliqueront automatiquement, même pendant une campagne en cours.',
+      })
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message })
     } finally {
@@ -412,6 +415,15 @@ export function ProfileForm({
               <h3 className="font-semibold text-lg">Paramètres des messages</h3>
             </div>
             <div className="p-6 space-y-5">
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-100">
+                <p className="font-medium">Synchronisation en direct avec l’application Android</p>
+                <p className="mt-1 text-xs opacity-90">
+                  Après avoir cliqué sur <b>Enregistrer tous les paramètres</b>, les appareils connectés
+                  vérifient ces valeurs environ toutes les 2 secondes. Le nouveau délai ou la nouvelle pause
+                  s’applique aussi à une campagne et à un compte à rebours déjà en cours.
+                </p>
+              </div>
+
               <div className="space-y-4 bg-muted/20 border border-border rounded-lg p-4">
                 <div>
                   <label className="block text-sm font-medium mb-2">

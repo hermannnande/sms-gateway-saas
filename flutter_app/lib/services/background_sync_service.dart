@@ -242,6 +242,43 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     return v.trim().isEmpty ? null : v.trim();
   }
 
+  Future<String?> _loadOwnerUserId() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final owner = prefs.getString(TokenStorage.ownerKey)?.trim();
+    return owner == null || owner.isEmpty ? null : owner;
+  }
+
+  /// Recharge la cadence depuis le profil web avec le couple sécurisé
+  /// jeton-appareil/compte. Si le réseau est indisponible, les dernières
+  /// valeurs locales restent actives.
+  Future<SmsPacingSettings> _refreshPacingFromDashboard(String deviceToken) async {
+    try {
+      final ownerUserId = await _loadOwnerUserId();
+      if (ownerUserId == null) return AppSettings.getSmsPacingSettings();
+
+      final response = await _http
+          .post(
+            _proxyUri('/api/mobile/runtime-settings'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'device_token': deviceToken,
+              'owner_user_id': ownerUserId,
+            }),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(response.body.isEmpty ? '{}' : response.body);
+        if (decoded is Map && decoded['settings'] is Map) {
+          await AppSettings.applyRemoteSettings(
+            Map<String, dynamic>.from(decoded['settings'] as Map),
+          );
+        }
+      }
+    } catch (_) {}
+    return AppSettings.getSmsPacingSettings();
+  }
+
   Future<bool> _isPaused() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
@@ -501,6 +538,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       int? nextBatchPauseAt;
       var consecutiveSendFailures = 0;
       var networkRejectionCount = 0;
+      var pacing = await AppSettings.getSmsPacingSettings();
+      var thresholdBatchCount = pacing.batchPauseCount;
 
       while (batchesProcessed < maxBatchesPerCycle) {
         if (await _isPaused()) break;
@@ -566,16 +605,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var attempted = 0;
       var failed = 0;
       String? lastErr;
-      // Read user-configurable delay between two sends. We re-read it once per
-      // batch so a change in Settings is picked up by the next batch.
-      // minDelay = borne basse ; maxDelay > minDelay => délai ALÉATOIRE par SMS
-      // (anti-blocage opérateur). maxDelay <= minDelay => délai fixe.
-      final minDelayMs = await AppSettings.getSmsDelayMs();
-      final maxDelayMs = await AppSettings.getSmsDelayMaxMs();
-      final batchPauseEnabled = await AppSettings.getBatchPauseEnabled();
-      final batchPauseCount = await AppSettings.getBatchPauseCount();
-      final batchPauseMinMs = await AppSettings.getBatchPauseMinMs();
-      final batchPauseMaxMs = await AppSettings.getBatchPauseMaxMs();
+      // Source de vérité : /dashboard/profile. Ce premier chargement est
+      // complété par un rafraîchissement toutes les 2 secondes pendant les
+      // attentes, y compris lorsque l'application est fermée.
+      final refreshedPacing = await _refreshPacingFromDashboard(token);
+      if (thresholdBatchCount != refreshedPacing.batchPauseCount) {
+        thresholdBatchCount = refreshedPacing.batchPauseCount;
+        nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
+      }
+      pacing = refreshedPacing;
       // Variation automatique du texte (anti-signature opérateur).
       final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
 
@@ -719,38 +757,37 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         // simple delai par SMS). Le seuil est re-tire au hasard apres chaque
         // pause (±30 % autour du reglage) pour casser aussi la periodicite de
         // la pause elle-meme.
-        nextBatchPauseAt ??= AppSettings.pickBatchThreshold(batchPauseCount);
+        if (thresholdBatchCount != pacing.batchPauseCount) {
+          thresholdBatchCount = pacing.batchPauseCount;
+          nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
+        }
+        nextBatchPauseAt ??= AppSettings.pickBatchThreshold(pacing.batchPauseCount);
         final useBatchPause = !isLastInBatch &&
-            batchPauseEnabled &&
+            pacing.batchPauseEnabled &&
             sentSinceBatchPause >= nextBatchPauseAt;
         if (useBatchPause) {
           sentSinceBatchPause = 0;
-          nextBatchPauseAt = AppSettings.pickBatchThreshold(batchPauseCount);
+          nextBatchPauseAt = AppSettings.pickBatchThreshold(pacing.batchPauseCount);
         }
-        final perSmsDelayMs = useBatchPause
-            ? AppSettings.pickBatchPauseMs(batchPauseMinMs, batchPauseMaxMs)
-            : AppSettings.pickDelayMs(minDelayMs, maxDelayMs) +
-                AppSettings.failureBackoffMs(consecutiveSendFailures);
-        if (!isLastInBatch && perSmsDelayMs > 0) {
-          final tickMs = 500; // refresh notification twice per second
-          var elapsed = 0;
-          while (elapsed < perSmsDelayMs) {
-            if (await _isPaused()) break;
-            final remainMs = perSmsDelayMs - elapsed;
-            final waitMs = remainMs < tickMs ? remainMs : tickMs;
-            // Live countdown shown only when waiting >= 1 second
-            if (useBatchPause) {
+        if (!isLastInBatch) {
+          final previousBatchCount = pacing.batchPauseCount;
+          final waitResult = await AppSettings.waitWithLiveRefresh(
+            initialSettings: pacing,
+            useBatchPause: useBatchPause,
+            consecutiveFailures: consecutiveSendFailures,
+            refreshSettings: () => _refreshPacingFromDashboard(token),
+            shouldInterrupt: _isPaused,
+            onTick: (remainMs, isBatchPause) async {
+              if (isBatchPause) {
               final secsLeft = ((remainMs + 999) / 1000).floor();
               await FlutterForegroundTask.updateService(
                 notificationTitle: 'SMSenvoie',
                 notificationText: '⏸️ Pause de régulation • reprise dans ${secsLeft}s',
                 notificationButtons: _activeButtons(),
               );
-              await Future.delayed(Duration(milliseconds: waitMs));
-              elapsed += waitMs;
-              continue;
-            }
-            if (perSmsDelayMs >= 1000) {
+                return;
+              }
+              if (remainMs >= 1000) {
               final s = hasCampaignTotals ? sentNow() : 0;
               final total = hasCampaignTotals ? totalSum : batchTotal;
               final progressed = hasCampaignTotals ? s : attempted;
@@ -765,9 +802,13 @@ class _SmsGatewayTaskHandler extends TaskHandler {
                     '$progressed/$total \u2022 prochain dans ${secsLeft}s \u2022 reste $remainText',
                 notificationButtons: _activeButtons(),
               );
-            }
-            await Future.delayed(Duration(milliseconds: waitMs));
-            elapsed += waitMs;
+              }
+            },
+          );
+          pacing = waitResult.settings;
+          if (previousBatchCount != pacing.batchPauseCount) {
+            thresholdBatchCount = pacing.batchPauseCount;
+            nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
           }
         }
       }

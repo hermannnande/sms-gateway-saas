@@ -5,6 +5,62 @@ import 'package:supabase/supabase.dart';
 
 import 'package:smsgateway_flutter/config.dart';
 
+/// Instantané cohérent des réglages de cadence utilisés pendant un envoi.
+///
+/// Il est volontairement immutable : le moteur peut comparer deux lectures et
+/// recalculer l'attente en cours seulement lorsque l'utilisateur a vraiment
+/// enregistré une nouvelle valeur sur le tableau de bord.
+class SmsPacingSettings {
+  const SmsPacingSettings({
+    required this.minDelayMs,
+    required this.maxDelayMs,
+    required this.batchPauseEnabled,
+    required this.batchPauseCount,
+    required this.batchPauseMinMs,
+    required this.batchPauseMaxMs,
+  });
+
+  final int minDelayMs;
+  final int maxDelayMs;
+  final bool batchPauseEnabled;
+  final int batchPauseCount;
+  final int batchPauseMinMs;
+  final int batchPauseMaxMs;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmsPacingSettings &&
+          minDelayMs == other.minDelayMs &&
+          maxDelayMs == other.maxDelayMs &&
+          batchPauseEnabled == other.batchPauseEnabled &&
+          batchPauseCount == other.batchPauseCount &&
+          batchPauseMinMs == other.batchPauseMinMs &&
+          batchPauseMaxMs == other.batchPauseMaxMs;
+
+  @override
+  int get hashCode => Object.hash(
+        minDelayMs,
+        maxDelayMs,
+        batchPauseEnabled,
+        batchPauseCount,
+        batchPauseMinMs,
+        batchPauseMaxMs,
+      );
+}
+
+class LivePacingWaitResult {
+  const LivePacingWaitResult({
+    required this.settings,
+    required this.usedBatchPause,
+    required this.interrupted,
+  });
+
+  final SmsPacingSettings settings;
+  final bool usedBatchPause;
+  final bool interrupted;
+}
+
 /// Centralized read/write of user-configurable runtime settings.
 ///
 /// The web dashboard at /dashboard/profile is the SOURCE OF TRUTH for the
@@ -24,6 +80,11 @@ class AppSettings {
   static const _kBatchPauseMinMs = 'cfg_batch_pause_min_ms';
   static const _kBatchPauseMaxMs = 'cfg_batch_pause_max_ms';
   static final _rng = Random();
+
+  /// Fréquence de consultation du tableau de bord pendant une attente active.
+  /// Une valeur enregistrée est donc normalement appliquée en moins de 2 s.
+  static const Duration liveRefreshInterval = Duration(seconds: 2);
+  static const Duration liveWaitTick = Duration(milliseconds: 500);
 
   /// Minimum responsible pacing between two SMS sends.
   static const int minDelayMs = 5000;
@@ -66,8 +127,8 @@ class AppSettings {
   static Future<int> getSmsDelayMaxMs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
-    final min =
-        (prefs.getInt(_kSmsDelayMs) ?? defaultDelayMs).clamp(minDelayMs, maxDelayMs);
+    final min = (prefs.getInt(_kSmsDelayMs) ?? defaultDelayMs)
+        .clamp(minDelayMs, maxDelayMs);
     final raw = prefs.getInt(_kSmsDelayMaxMs);
     if (raw == null || raw <= min) {
       return (min + defaultRandomSpreadMs).clamp(minDelayMs, maxDelayMs);
@@ -149,7 +210,8 @@ class AppSettings {
 
   static Future<void> setBatchPauseMinMs(int ms) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kBatchPauseMinMs, ms.clamp(minBatchPauseMs, maxBatchPauseMs));
+    await prefs.setInt(
+        _kBatchPauseMinMs, ms.clamp(minBatchPauseMs, maxBatchPauseMs));
   }
 
   static Future<int> getBatchPauseMaxMs() async {
@@ -162,7 +224,8 @@ class AppSettings {
 
   static Future<void> setBatchPauseMaxMs(int ms) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kBatchPauseMaxMs, ms.clamp(minBatchPauseMs, maxBatchPauseMs));
+    await prefs.setInt(
+        _kBatchPauseMaxMs, ms.clamp(minBatchPauseMs, maxBatchPauseMs));
   }
 
   /// Pick the pause duration (ms) to apply after a batch of N SMS.
@@ -194,6 +257,166 @@ class AppSettings {
     return false;
   }
 
+  /// Lit toutes les valeurs locales avec un seul rechargement de
+  /// SharedPreferences. Cela évite de mélanger deux versions du réglage si le
+  /// site est enregistré au milieu d'une lecture.
+  static Future<SmsPacingSettings> getSmsPacingSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+
+    final minDelay = (prefs.getInt(_kSmsDelayMs) ?? defaultDelayMs)
+        .clamp(minDelayMs, maxDelayMs);
+    final rawMaxDelay = prefs.getInt(_kSmsDelayMaxMs);
+    final maxDelay = rawMaxDelay == null || rawMaxDelay <= minDelay
+        ? (minDelay + defaultRandomSpreadMs).clamp(minDelayMs, maxDelayMs)
+        : rawMaxDelay.clamp(minDelayMs, maxDelayMs);
+    final batchMin = (prefs.getInt(_kBatchPauseMinMs) ?? defaultBatchPauseMinMs)
+        .clamp(minBatchPauseMs, maxBatchPauseMs);
+    final batchMax = (prefs.getInt(_kBatchPauseMaxMs) ?? defaultBatchPauseMaxMs)
+        .clamp(minBatchPauseMs, maxBatchPauseMs);
+
+    return SmsPacingSettings(
+      minDelayMs: minDelay,
+      maxDelayMs: maxDelay,
+      batchPauseEnabled: prefs.getBool(_kBatchPauseEnabled) ?? true,
+      batchPauseCount:
+          (prefs.getInt(_kBatchPauseCount) ?? defaultBatchPauseCount)
+              .clamp(minBatchPauseCount, maxBatchPauseCount),
+      batchPauseMinMs: batchMin,
+      batchPauseMaxMs: max(batchMin, batchMax),
+    );
+  }
+
+  /// Applique un objet provenant soit de Supabase, soit du proxy mobile.
+  /// Les bornes locales restent la dernière protection contre une valeur
+  /// invalide ou une ancienne version du tableau de bord.
+  static Future<void> applyRemoteSettings(Map<String, dynamic> row) async {
+    int? toInt(dynamic raw) {
+      if (raw == null) return null;
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+      return int.tryParse(raw.toString());
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final minSeconds = toInt(row['message_delay_seconds']);
+    final maxSeconds = toInt(row['message_delay_max_seconds']);
+    final batchCount = toInt(row['batch_pause_count']);
+    final batchMinSeconds = toInt(row['batch_pause_min_seconds']);
+    final batchMaxSeconds = toInt(row['batch_pause_max_seconds']);
+
+    if (minSeconds != null && minSeconds >= 0) {
+      await prefs.setInt(
+        _kSmsDelayMs,
+        (minSeconds * 1000).clamp(minDelayMs, maxDelayMs),
+      );
+    }
+    if (maxSeconds != null && maxSeconds >= 0) {
+      await prefs.setInt(
+        _kSmsDelayMaxMs,
+        (maxSeconds * 1000).clamp(minDelayMs, maxDelayMs),
+      );
+    }
+    final batchEnabled = row['batch_pause_enabled'];
+    if (batchEnabled is bool) {
+      await prefs.setBool(_kBatchPauseEnabled, batchEnabled);
+    }
+    if (batchCount != null && batchCount >= minBatchPauseCount) {
+      await prefs.setInt(
+        _kBatchPauseCount,
+        batchCount.clamp(minBatchPauseCount, maxBatchPauseCount),
+      );
+    }
+    if (batchMinSeconds != null && batchMinSeconds >= 0) {
+      await prefs.setInt(
+        _kBatchPauseMinMs,
+        (batchMinSeconds * 1000).clamp(minBatchPauseMs, maxBatchPauseMs),
+      );
+    }
+    if (batchMaxSeconds != null && batchMaxSeconds >= 0) {
+      await prefs.setInt(
+        _kBatchPauseMaxMs,
+        (batchMaxSeconds * 1000).clamp(minBatchPauseMs, maxBatchPauseMs),
+      );
+    }
+  }
+
+  /// Attend avant le prochain SMS tout en relisant les paramètres. Si le
+  /// profil est enregistré pendant le compte à rebours, la durée cible est
+  /// recalculée immédiatement. Désactiver la pause par lot fait notamment
+  /// reprendre le délai SMS normal sans attendre la fin de l'ancienne pause.
+  static Future<LivePacingWaitResult> waitWithLiveRefresh({
+    required SmsPacingSettings initialSettings,
+    required bool useBatchPause,
+    required int consecutiveFailures,
+    required Future<SmsPacingSettings> Function() refreshSettings,
+    Future<bool> Function()? shouldInterrupt,
+    Future<void> Function(int remainingMs, bool isBatchPause)? onTick,
+    Duration refreshInterval = liveRefreshInterval,
+    Duration tick = liveWaitTick,
+  }) async {
+    var settings = initialSettings;
+    var batchMode = useBatchPause && settings.batchPauseEnabled;
+    int pickTargetMs() => batchMode
+        ? pickBatchPauseMs(settings.batchPauseMinMs, settings.batchPauseMaxMs)
+        : pickDelayMs(settings.minDelayMs, settings.maxDelayMs) +
+            failureBackoffMs(consecutiveFailures);
+
+    var targetMs = pickTargetMs();
+    final stopwatch = Stopwatch()..start();
+    var nextRefreshAtMs = refreshInterval.inMilliseconds;
+
+    while (stopwatch.elapsedMilliseconds < targetMs) {
+      if (shouldInterrupt != null && await shouldInterrupt()) {
+        stopwatch.stop();
+        return LivePacingWaitResult(
+          settings: settings,
+          usedBatchPause: batchMode,
+          interrupted: true,
+        );
+      }
+
+      final elapsedMs = stopwatch.elapsedMilliseconds;
+      if (elapsedMs >= nextRefreshAtMs) {
+        final refreshed = await refreshSettings();
+        nextRefreshAtMs =
+            stopwatch.elapsedMilliseconds + refreshInterval.inMilliseconds;
+        if (refreshed != settings) {
+          final previous = settings;
+          final wasBatchMode = batchMode;
+          settings = refreshed;
+          if (batchMode && !settings.batchPauseEnabled) {
+            batchMode = false;
+          }
+          final relevantDurationChanged = batchMode
+              ? previous.batchPauseMinMs != settings.batchPauseMinMs ||
+                  previous.batchPauseMaxMs != settings.batchPauseMaxMs
+              : previous.minDelayMs != settings.minDelayMs ||
+                  previous.maxDelayMs != settings.maxDelayMs;
+          if (wasBatchMode != batchMode || relevantDurationChanged) {
+            targetMs = pickTargetMs();
+          }
+          if (stopwatch.elapsedMilliseconds >= targetMs) break;
+        }
+      }
+
+      final remainingMs = targetMs - stopwatch.elapsedMilliseconds;
+      if (remainingMs <= 0) break;
+      if (onTick != null) {
+        await onTick(remainingMs, batchMode);
+      }
+      final waitMs = min(tick.inMilliseconds, remainingMs);
+      await Future.delayed(Duration(milliseconds: waitMs));
+    }
+
+    stopwatch.stop();
+    return LivePacingWaitResult(
+      settings: settings,
+      usedBatchPause: batchMode,
+      interrupted: false,
+    );
+  }
+
   static Future<void> setAutoVaryEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kAutoVaryEnabled, enabled);
@@ -214,51 +437,20 @@ class AppSettings {
           .eq('user_id', user.id)
           .maybeSingle();
       if (row == null) return null;
-
-      int? toSeconds(dynamic raw) {
-        if (raw == null) return null;
-        if (raw is int) return raw;
-        if (raw is num) return raw.toInt();
-        return int.tryParse(raw.toString());
-      }
-
-      // Borne haute (aléatoire). Si le tableau de bord fournit une valeur, on
-      // la respecte (y compris 0 = délai fixe explicitement choisi). Si la
-      // colonne est absente/NULL, on NE force PAS 0 : on laisse l'aléatoire
-      // par défaut (voir getSmsDelayMaxMs).
-      final maxSeconds = toSeconds(row['message_delay_max_seconds']);
-      if (maxSeconds != null && maxSeconds >= 0) {
-        await setSmsDelayMaxMs((maxSeconds * 1000).clamp(minDelayMs, maxDelayMs));
-      }
-
-      // Pause anti-spam par lot (toutes les N SMS).
-      final batchEnabled = row['batch_pause_enabled'];
-      if (batchEnabled is bool) {
-        await setBatchPauseEnabled(batchEnabled);
-      }
-      final batchCount = toSeconds(row['batch_pause_count']);
-      if (batchCount != null && batchCount >= minBatchPauseCount) {
-        await setBatchPauseCount(batchCount);
-      }
-      final batchMinSeconds = toSeconds(row['batch_pause_min_seconds']);
-      if (batchMinSeconds != null && batchMinSeconds >= 0) {
-        await setBatchPauseMinMs(
-            (batchMinSeconds * 1000).clamp(minBatchPauseMs, maxBatchPauseMs));
-      }
-      final batchMaxSeconds = toSeconds(row['batch_pause_max_seconds']);
-      if (batchMaxSeconds != null && batchMaxSeconds >= 0) {
-        await setBatchPauseMaxMs(
-            (batchMaxSeconds * 1000).clamp(minBatchPauseMs, maxBatchPauseMs));
-      }
-
-      final seconds = toSeconds(row['message_delay_seconds']);
-      if (seconds == null || seconds < 0) return null;
-      final ms = (seconds * 1000).clamp(minDelayMs, maxDelayMs);
-      await setSmsDelayMs(ms);
-      return ms;
+      await applyRemoteSettings(Map<String, dynamic>.from(row));
+      return (await getSmsPacingSettings()).minDelayMs;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Synchronise puis renvoie un instantané directement consommable par la
+  /// boucle d'envoi. En cas de réseau indisponible, les dernières valeurs
+  /// locales enregistrées restent actives.
+  static Future<SmsPacingSettings> refreshFromSupabase(
+      SupabaseClient client) async {
+    await syncFromSupabase(client);
+    return getSmsPacingSettings();
   }
 
   /// Push the SMS delay to the web dashboard so it stays in sync.

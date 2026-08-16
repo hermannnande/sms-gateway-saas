@@ -41,8 +41,10 @@ void main() {
       const body = 'Offre{ spéciale| du jour|} {ici|là}';
       for (var i = 0; i < 50; i++) {
         final out = AutoVary.apply(body, enabled: true, rng: rng);
-        expect(out.contains('{'), isFalse, reason: 'accolades non résolues: $out');
-        expect(out.contains('}'), isFalse, reason: 'accolades non résolues: $out');
+        expect(out.contains('{'), isFalse,
+            reason: 'accolades non résolues: $out');
+        expect(out.contains('}'), isFalse,
+            reason: 'accolades non résolues: $out');
       }
     });
 
@@ -65,7 +67,8 @@ void main() {
       }
     });
 
-    test('variation GARANTIE : ne renvoie jamais le texte d\'origine '
+    test(
+        'variation GARANTIE : ne renvoie jamais le texte d\'origine '
         '(quand la place le permet)', () {
       final rng = Random(555);
       const body = 'Merci pour votre confiance, a bientot';
@@ -192,6 +195,73 @@ void main() {
       expect(AppSettings.failureBackoffMs(2), 20000);
       expect(AppSettings.failureBackoffMs(4), 40000);
       expect(AppSettings.failureBackoffMs(20), 40000);
+    });
+
+    test('un délai en cours adopte une nouvelle valeur plus courte', () async {
+      const initial = SmsPacingSettings(
+        minDelayMs: 250,
+        maxDelayMs: 250,
+        batchPauseEnabled: true,
+        batchPauseCount: 10,
+        batchPauseMinMs: 500,
+        batchPauseMaxMs: 500,
+      );
+      const updated = SmsPacingSettings(
+        minDelayMs: 35,
+        maxDelayMs: 35,
+        batchPauseEnabled: true,
+        batchPauseCount: 10,
+        batchPauseMinMs: 500,
+        batchPauseMaxMs: 500,
+      );
+      final stopwatch = Stopwatch()..start();
+
+      final result = await AppSettings.waitWithLiveRefresh(
+        initialSettings: initial,
+        useBatchPause: false,
+        consecutiveFailures: 0,
+        refreshSettings: () async => updated,
+        refreshInterval: const Duration(milliseconds: 10),
+        tick: const Duration(milliseconds: 5),
+      );
+      stopwatch.stop();
+
+      expect(result.settings, updated);
+      expect(result.interrupted, isFalse);
+      expect(stopwatch.elapsedMilliseconds, lessThan(180));
+    });
+
+    test('désactiver la pause en cours reprend le délai SMS normal', () async {
+      const initial = SmsPacingSettings(
+        minDelayMs: 40,
+        maxDelayMs: 40,
+        batchPauseEnabled: true,
+        batchPauseCount: 10,
+        batchPauseMinMs: 500,
+        batchPauseMaxMs: 500,
+      );
+      const updated = SmsPacingSettings(
+        minDelayMs: 40,
+        maxDelayMs: 40,
+        batchPauseEnabled: false,
+        batchPauseCount: 10,
+        batchPauseMinMs: 500,
+        batchPauseMaxMs: 500,
+      );
+      final stopwatch = Stopwatch()..start();
+
+      final result = await AppSettings.waitWithLiveRefresh(
+        initialSettings: initial,
+        useBatchPause: true,
+        consecutiveFailures: 0,
+        refreshSettings: () async => updated,
+        refreshInterval: const Duration(milliseconds: 10),
+        tick: const Duration(milliseconds: 5),
+      );
+      stopwatch.stop();
+
+      expect(result.usedBatchPause, isFalse);
+      expect(stopwatch.elapsedMilliseconds, lessThan(180));
     });
   });
 }
