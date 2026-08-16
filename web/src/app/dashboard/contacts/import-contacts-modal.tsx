@@ -242,7 +242,7 @@ export function ImportContactsModal({ onClose }: { onClose: () => void }) {
               <Table className="h-4 w-4 text-blue-600 flex-shrink-0" />
               <div>
                 <p className="text-xs font-semibold text-blue-800">CSV</p>
-                <p className="text-[10px] text-blue-600">phone,name</p>
+                <p className="text-[10px] text-blue-600">Téléphone +225, Nom client</p>
               </div>
             </div>
             <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-100">

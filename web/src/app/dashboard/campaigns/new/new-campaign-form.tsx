@@ -4,13 +4,19 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
-import * as XLSX from 'xlsx'
 import { Users, FileText, Database, Send } from 'lucide-react'
 import {
   MAX_CAMPAIGN_MESSAGE_VARIANTS,
   createSmartVariantRotation,
   normalizeMessageVariants,
 } from '@/lib/message-variants'
+import {
+  hasNameVariable,
+  parseDelimitedContacts,
+  parseExcelContacts,
+  personalizeContactMessage,
+  type ImportedContact,
+} from '@/lib/contact-personalization'
 
 /**
  * Try to parse a phone number in multiple ways to maximize acceptance
@@ -116,99 +122,30 @@ export function NewCampaignForm({
     }
   }, [selectedTemplate])
 
-  const parseTextFile = (text: string) => {
+  const validateImportedContacts = (contacts: ImportedContact[]) => {
     const parsedContacts: { phone_e164: string; name?: string }[] = []
     const invalidPhones: string[] = []
 
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-    if (lines.length === 0) return { parsedContacts, invalidPhones }
-
-    // Auto-detect separator: comma, semicolon, or tab
-    const firstLine = lines[0]
-    const sep = firstLine.includes(';') ? ';' : firstLine.includes('\t') ? '\t' : ','
-
-    const headers = firstLine.split(sep).map((h) => h.trim().toLowerCase().replace(/["']/g, ''))
-
-    // Try to find phone column by various names
-    const phoneAliases = ['phone', 'telephone', 'tel', 'mobile', 'numero', 'numéro', 'phone_e164', 'number', 'n°']
-    const nameAliases = ['name', 'nom', 'prenom', 'prénom', 'firstname', 'first_name', 'contact']
-
-    let phoneIndex = -1
-    let nameIndex = -1
-
-    for (const alias of phoneAliases) {
-      const idx = headers.findIndex((h) => h.includes(alias))
-      if (idx !== -1) { phoneIndex = idx; break }
-    }
-    for (const alias of nameAliases) {
-      const idx = headers.findIndex((h) => h.includes(alias))
-      if (idx !== -1) { nameIndex = idx; break }
-    }
-
-    // If no header detected, assume first column is phone (and no header row)
-    const hasHeader = phoneIndex !== -1
-    if (!hasHeader) {
-      phoneIndex = 0
-      nameIndex = headers.length > 1 ? 1 : -1
-    }
-
-    const startLine = hasHeader ? 1 : 0
-
-    for (let i = startLine; i < lines.length; i++) {
-      const values = lines[i].split(sep).map((v) => v.trim().replace(/["']/g, ''))
-      const rawPhone = values[phoneIndex]?.trim()
-      const name = nameIndex !== -1 ? values[nameIndex]?.trim() : undefined
-
-      if (!rawPhone) continue
-
-      const e164 = smartParsePhone(rawPhone)
+    for (const contact of contacts) {
+      const e164 = smartParsePhone(contact.phone)
       if (e164) {
-        parsedContacts.push({ phone_e164: e164, name })
+        parsedContacts.push({ phone_e164: e164, name: contact.name })
       } else {
-        invalidPhones.push(rawPhone)
+        invalidPhones.push(contact.phone)
       }
     }
-
     return { parsedContacts, invalidPhones }
   }
 
+  const parseTextFile = (text: string) =>
+    validateImportedContacts(parseDelimitedContacts(text))
+
   const parseExcelFile = (data: ArrayBuffer) => {
-    const parsedContacts: { phone_e164: string; name?: string }[] = []
-    const invalidPhones: string[] = []
-
-    const workbook = XLSX.read(data, { type: 'array' })
-    const sheetName = workbook.SheetNames[0]
-    const worksheet = workbook.Sheets[sheetName]
-    const json = XLSX.utils.sheet_to_json(worksheet, { defval: '' }) as Record<string, any>[]
-
-    if (json.length === 0) return { parsedContacts, invalidPhones, empty: true }
-
-    // Find phone and name columns by matching header names
-    const keys = Object.keys(json[0])
-    const phoneAliases = ['phone', 'telephone', 'tel', 'mobile', 'numero', 'numéro', 'phone_e164', 'number']
-    const nameAliases = ['name', 'nom', 'prenom', 'prénom', 'firstname', 'first_name', 'contact']
-
-    let phoneKey = keys.find((k) => phoneAliases.some((a) => k.toLowerCase().includes(a)))
-    const nameKey = keys.find((k) => nameAliases.some((a) => k.toLowerCase().includes(a)))
-
-    // If no phone column found, use first column
-    if (!phoneKey) phoneKey = keys[0]
-
-    for (const row of json) {
-      const rawPhone = row[phoneKey]?.toString().trim()
-      const name = nameKey ? row[nameKey]?.toString().trim() : undefined
-
-      if (!rawPhone) continue
-
-      const e164 = smartParsePhone(rawPhone)
-      if (e164) {
-        parsedContacts.push({ phone_e164: e164, name })
-      } else {
-        invalidPhones.push(rawPhone)
-      }
+    const contacts = parseExcelContacts(data)
+    return {
+      ...validateImportedContacts(contacts),
+      empty: contacts.length === 0,
     }
-
-    return { parsedContacts, invalidPhones, empty: false }
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -429,11 +366,7 @@ export function NewCampaignForm({
 
       const messages = contactsToProcess.map((contact, index) => {
         const variant = variantRotation[index]
-        let finalBody = variant
-        if (contact.name) {
-          finalBody = finalBody.replace(/{nom}/gi, contact.name)
-          finalBody = finalBody.replace(/{name}/gi, contact.name)
-        }
+        const finalBody = personalizeContactMessage(variant, contact.name)
 
         return {
           org_id: orgMember.org_id,
@@ -604,13 +537,26 @@ export function NewCampaignForm({
               <div className="text-xs text-muted-foreground bg-blue-50 border border-blue-200 rounded p-3">
                 <p className="font-semibold text-blue-800 mb-1">📋 Format du fichier</p>
                 <p>• Formats : CSV, TXT, XLS, XLSX</p>
-                <p>• Colonnes requises : <code className="bg-blue-100 px-1 rounded">phone</code></p>
-                <p>• Colonnes optionnelles : <code className="bg-blue-100 px-1 rounded">name</code></p>
+                <p>• Téléphone : <code className="bg-blue-100 px-1 rounded">Téléphone +225</code>, <code className="bg-blue-100 px-1 rounded">phone</code> ou <code className="bg-blue-100 px-1 rounded">numéro</code></p>
+                <p>• Personnalisation : <code className="bg-blue-100 px-1 rounded">Nom client</code>, <code className="bg-blue-100 px-1 rounded">nom</code> ou <code className="bg-blue-100 px-1 rounded">name</code></p>
               </div>
               {fileContacts.length > 0 && (
-                <div className="bg-green-50 border border-green-200 text-green-800 p-3 rounded-lg flex items-center gap-2">
-                  <span className="text-lg">✅</span>
-                  <span className="font-semibold">{fileContacts.length} contacts valides détectés</span>
+                <div className="bg-green-50 border border-green-200 text-green-800 p-3 rounded-lg">
+                  <p className="font-semibold">✅ {fileContacts.length} contacts valides détectés</p>
+                  <p className="text-xs mt-1">
+                    {fileContacts.filter((contact) => contact.name?.trim()).length} nom(s) reconnu(s)
+                    {' • '}
+                    {fileContacts.filter((contact) => !contact.name?.trim()).length} sans nom
+                  </p>
+                  <div className="mt-2 grid gap-1 text-xs">
+                    {fileContacts.slice(0, 3).map((contact, index) => (
+                      <p key={`${contact.phone_e164}-${index}`}>
+                        <span className="font-mono">{contact.phone_e164}</span>
+                        {' → '}
+                        <b>{contact.name || 'client (valeur de secours)'}</b>
+                      </p>
+                    ))}
+                  </div>
                 </div>
               )}
               {fileInvalidPhones.length > 0 && (
@@ -798,6 +744,11 @@ export function NewCampaignForm({
               Variables : {'{nom}'}, {'{name}'}
             </div>
           </div>
+          {[messageBody, ...extraMessages].some(hasNameVariable) && (
+            <p className="mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg p-3">
+              Aperçu : <b>Bonjour Daho</b> avec un contact nommé Daho. Si le nom est vide, la valeur <b>client</b> sera utilisée afin que {'{nom}'} ne reste jamais dans le SMS.
+            </p>
+          )}
 
           {/* Variantes de message (facultatif) — rotation aléatoire anti-spam */}
           <div className="mt-4 space-y-3">

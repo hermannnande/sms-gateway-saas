@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test:message-variants": "node --test test/message-variants.test.mjs"
+    "test:message-variants": "node --test test/message-variants.test.mjs",
+    "test:contacts": "node --test test/contact-personalization.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
