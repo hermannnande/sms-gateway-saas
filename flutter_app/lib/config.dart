@@ -16,7 +16,7 @@ class AppConfig {
 
   /// Cadence responsable par défaut entre deux SMS. AppSettings ajoute une
   /// marge bornée pour lisser la charge du gateway.
-  static const smsDelayMs = 8000;
+  static const smsDelayMs = 6000;
 
   /// URL du manifeste de mise à jour (public).
   /// Format JSON: { "latestVersion": "1.0.1+3", "apkUrl": "https://.../sms-gateway.apk", "notes": "..." }

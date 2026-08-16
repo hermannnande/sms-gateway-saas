@@ -60,14 +60,14 @@ export function ProfileForm({
   const [language, setLanguage] = useState(userSettings?.language || 'fr')
 
   // Message settings
-  const [messageDelay, setMessageDelay] = useState(Math.max(5, userSettings?.message_delay_seconds ?? 8))
-  const [messageDelayMax, setMessageDelayMax] = useState(Math.max(12, userSettings?.message_delay_max_seconds ?? 12))
+  const [messageDelay, setMessageDelay] = useState(Math.max(5, userSettings?.message_delay_seconds ?? 6))
+  const [messageDelayMax, setMessageDelayMax] = useState(Math.max(9, userSettings?.message_delay_max_seconds ?? 9))
 
-  // Pause anti-spam PAR LOT (ex: pause de 20-60s toutes les 10 SMS)
+  // Pause de régulation PAR LOT (par défaut 45-75s toutes les 10 SMS)
   const [batchPauseEnabled, setBatchPauseEnabled] = useState(userSettings?.batch_pause_enabled ?? true)
   const [batchPauseCount, setBatchPauseCount] = useState(userSettings?.batch_pause_count || 10)
-  const [batchPauseMin, setBatchPauseMin] = useState(Math.max(30, userSettings?.batch_pause_min_seconds ?? 60))
-  const [batchPauseMax, setBatchPauseMax] = useState(Math.max(60, userSettings?.batch_pause_max_seconds ?? 120))
+  const [batchPauseMin, setBatchPauseMin] = useState(Math.max(30, userSettings?.batch_pause_min_seconds ?? 45))
+  const [batchPauseMax, setBatchPauseMax] = useState(Math.max(30, userSettings?.batch_pause_max_seconds ?? 75))
   const [emailNotifications, setEmailNotifications] = useState(userSettings?.email_notifications || false)
   const [notificationEmail, setNotificationEmail] = useState(userSettings?.notification_email || user.email || '')
   const [sleepStartTime, setSleepStartTime] = useState(userSettings?.sleep_start_time || '')
