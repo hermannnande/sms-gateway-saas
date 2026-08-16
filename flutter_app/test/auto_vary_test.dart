@@ -179,11 +179,11 @@ void main() {
 
   group('AppSettings responsible pacing', () {
     test('default bounds prevent burst sending', () {
-      expect(AppSettings.defaultDelayMs, 6000);
+      expect(AppSettings.defaultDelayMs, 5000);
       expect(AppSettings.minDelayMs, 5000);
-      expect(AppSettings.defaultRandomSpreadMs, 3000);
-      expect(AppSettings.defaultBatchPauseMinMs, 45000);
-      expect(AppSettings.defaultBatchPauseMaxMs, 75000);
+      expect(AppSettings.defaultRandomSpreadMs, 2000);
+      expect(AppSettings.defaultBatchPauseMinMs, 30000);
+      expect(AppSettings.defaultBatchPauseMaxMs, 45000);
     });
 
     test('failure backoff grows and is capped', () {

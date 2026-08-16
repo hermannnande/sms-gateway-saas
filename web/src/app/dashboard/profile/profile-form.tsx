@@ -60,14 +60,14 @@ export function ProfileForm({
   const [language, setLanguage] = useState(userSettings?.language || 'fr')
 
   // Message settings
-  const [messageDelay, setMessageDelay] = useState(Math.max(5, userSettings?.message_delay_seconds ?? 6))
-  const [messageDelayMax, setMessageDelayMax] = useState(Math.max(9, userSettings?.message_delay_max_seconds ?? 9))
+  const [messageDelay, setMessageDelay] = useState(Math.max(5, userSettings?.message_delay_seconds ?? 5))
+  const [messageDelayMax, setMessageDelayMax] = useState(Math.max(5, userSettings?.message_delay_max_seconds ?? 7))
 
-  // Pause de régulation PAR LOT (par défaut 45-75s toutes les 10 SMS)
+  // Pause de régulation PAR LOT (par défaut 30-45s toutes les 10 SMS)
   const [batchPauseEnabled, setBatchPauseEnabled] = useState(userSettings?.batch_pause_enabled ?? true)
   const [batchPauseCount, setBatchPauseCount] = useState(userSettings?.batch_pause_count || 10)
-  const [batchPauseMin, setBatchPauseMin] = useState(Math.max(30, userSettings?.batch_pause_min_seconds ?? 45))
-  const [batchPauseMax, setBatchPauseMax] = useState(Math.max(30, userSettings?.batch_pause_max_seconds ?? 75))
+  const [batchPauseMin, setBatchPauseMin] = useState(Math.max(30, userSettings?.batch_pause_min_seconds ?? 30))
+  const [batchPauseMax, setBatchPauseMax] = useState(Math.max(30, userSettings?.batch_pause_max_seconds ?? 45))
   const [emailNotifications, setEmailNotifications] = useState(userSettings?.email_notifications || false)
   const [notificationEmail, setNotificationEmail] = useState(userSettings?.notification_email || user.email || '')
   const [sleepStartTime, setSleepStartTime] = useState(userSettings?.sleep_start_time || '')
@@ -136,7 +136,7 @@ export function ProfileForm({
           message_delay_seconds: messageDelay,
           message_delay_max_seconds: messageDelayMax > messageDelay
             ? messageDelayMax
-            : Math.min(messageDelay + 4, 120),
+            : Math.min(messageDelay + 2, 120),
           batch_pause_enabled: batchPauseEnabled,
           batch_pause_count: batchPauseCount,
           batch_pause_min_seconds: batchPauseMin,
@@ -457,7 +457,7 @@ export function ProfileForm({
                     {messageDelayMax > messageDelay ? (
                       <>Chaque SMS attendra entre <b>{messageDelay}s et {messageDelayMax}s</b>. Cette marge lisse la charge du gateway, sans garantir le classement du message par l&apos;opérateur.</>
                     ) : (
-                      <>Marge automatique : chaque SMS attendra entre <b>{messageDelay}s et {Math.min(messageDelay + 4, 120)}s</b>.</>
+                      <>Marge automatique : chaque SMS attendra entre <b>{messageDelay}s et {Math.min(messageDelay + 2, 120)}s</b>.</>
                     )}
                   </p>
                 </div>

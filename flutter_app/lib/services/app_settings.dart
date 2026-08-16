@@ -37,7 +37,7 @@ class AppSettings {
 
   /// Marge bornée ajoutée au délai minimum pour lisser la charge du gateway.
   /// Elle ne remplace pas le consentement, l'identification ni la gestion STOP.
-  static const int defaultRandomSpreadMs = 3000;
+  static const int defaultRandomSpreadMs = 2000;
 
   /// Clé du réglage « variation automatique du texte ».
   static const _kAutoVaryEnabled = 'cfg_auto_vary_enabled';
@@ -111,8 +111,8 @@ class AppSettings {
 
   static const int minBatchPauseMs = 30000;
   static const int maxBatchPauseMs = 1800000; // 30 min
-  static const int defaultBatchPauseMinMs = 45000;
-  static const int defaultBatchPauseMaxMs = 75000;
+  static const int defaultBatchPauseMinMs = 30000;
+  static const int defaultBatchPauseMaxMs = 45000;
 
   static Future<bool> getBatchPauseEnabled() async {
     final prefs = await SharedPreferences.getInstance();
