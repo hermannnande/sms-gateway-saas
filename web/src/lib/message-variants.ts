@@ -25,6 +25,22 @@ export function normalizeMessageVariants(
   return variants
 }
 
+/**
+ * La rotation est facultative. Lorsqu'elle est désactivée, les variantes
+ * éventuellement conservées dans le formulaire sont ignorées sans être
+ * effacées, afin que l'utilisateur puisse les retrouver en la réactivant.
+ */
+export function resolveCampaignMessageVariants(
+  primaryMessage: unknown,
+  extraMessages: readonly unknown[],
+  rotationEnabled: boolean,
+): string[] {
+  return normalizeMessageVariants(
+    primaryMessage,
+    rotationEnabled ? extraMessages : [],
+  )
+}
+
 function shuffledIndexes(size: number, random: RandomSource): number[] {
   const indexes = Array.from({ length: size }, (_, index) => index)
   for (let index = indexes.length - 1; index > 0; index--) {

@@ -5,6 +5,7 @@ import {
   MAX_CAMPAIGN_MESSAGE_VARIANTS,
   createSmartVariantRotation,
   normalizeMessageVariants,
+  resolveCampaignMessageVariants,
 } from '../src/lib/message-variants.ts'
 
 function seededRandom(seed) {
@@ -53,5 +54,23 @@ test('refuse plus de 15 variantes', () => {
   assert.throws(
     () => createSmartVariantRotation(variants, 16),
     /Maximum 15 messages différents/,
+  )
+})
+
+test('ignore les variantes conservées lorsque la rotation est désactivée', () => {
+  assert.deepEqual(
+    resolveCampaignMessageVariants('Message principal', ['Variante 2'], false),
+    ['Message principal'],
+  )
+})
+
+test('utilise les textes distincts lorsque la rotation est activée', () => {
+  assert.deepEqual(
+    resolveCampaignMessageVariants(
+      'Message principal',
+      ['Variante 2', 'Message principal', 'Variante 3'],
+      true,
+    ),
+    ['Message principal', 'Variante 2', 'Variante 3'],
   )
 })

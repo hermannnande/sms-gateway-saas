@@ -8,7 +8,7 @@ import { Users, FileText, Database, Send } from 'lucide-react'
 import {
   MAX_CAMPAIGN_MESSAGE_VARIANTS,
   createSmartVariantRotation,
-  normalizeMessageVariants,
+  resolveCampaignMessageVariants,
 } from '@/lib/message-variants'
 import {
   hasNameVariable,
@@ -89,6 +89,7 @@ export function NewCampaignForm({
   const [name, setName] = useState('')
   const [templateId, setTemplateId] = useState('')
   const [messageBody, setMessageBody] = useState('')
+  const [messageRotationEnabled, setMessageRotationEnabled] = useState(false)
   // Jusqu'à 14 textes supplémentaires (15 avec le message principal), répartis
   // ensuite par rotation aléatoire équilibrée.
   const [extraMessages, setExtraMessages] = useState<string[]>([])
@@ -235,11 +236,26 @@ export function NewCampaignForm({
         ? manualParse.valid.length
         : getContactsForCampaign().length
 
+  const configuredMessageVariants = useMemo(
+    () => resolveCampaignMessageVariants(
+      messageBody,
+      extraMessages,
+      messageRotationEnabled,
+    ),
+    [messageBody, extraMessages, messageRotationEnabled],
+  )
+  const messageRotationReady =
+    !messageRotationEnabled || configuredMessageVariants.length >= 2
+
   const canSubmitDevice =
     devices.length === 1 ||
     (devices.length >= 2 && deviceId.trim() !== '')
 
-  const canSubmit = devices.length > 0 && canSubmitDevice && totalContactsToSend > 0
+  const canSubmit =
+    devices.length > 0 &&
+    canSubmitDevice &&
+    totalContactsToSend > 0 &&
+    messageRotationReady
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -334,7 +350,16 @@ export function NewCampaignForm({
 
       // Rotation équilibrée : chaque variante passe une fois dans un ordre
       // mélangé avant d'être réutilisée, sans répétition consécutive.
-      const messageVariants = normalizeMessageVariants(messageBody, extraMessages)
+      const messageVariants = resolveCampaignMessageVariants(
+        messageBody,
+        extraMessages,
+        messageRotationEnabled,
+      )
+      if (messageRotationEnabled && messageVariants.length < 2) {
+        throw new Error(
+          'Ajoutez au moins une variante différente du message principal, ou désactivez la rotation.',
+        )
+      }
       if (messageVariants.length > MAX_CAMPAIGN_MESSAGE_VARIANTS) {
         throw new Error(
           `Maximum ${MAX_CAMPAIGN_MESSAGE_VARIANTS} messages différents par campagne.`,
@@ -744,67 +769,109 @@ export function NewCampaignForm({
               Variables : {'{nom}'}, {'{name}'}
             </div>
           </div>
-          {[messageBody, ...extraMessages].some(hasNameVariable) && (
+          {[
+            messageBody,
+            ...(messageRotationEnabled ? extraMessages : []),
+          ].some(hasNameVariable) && (
             <p className="mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg p-3">
               Aperçu : <b>Bonjour Daho</b> avec un contact nommé Daho. Si le nom est vide, la valeur <b>client</b> sera utilisée afin que {'{nom}'} ne reste jamais dans le SMS.
             </p>
           )}
 
-          {/* Variantes de message (facultatif) — rotation aléatoire anti-spam */}
-          <div className="mt-4 space-y-3">
-            {extraMessages.map((variant, idx) => (
-              <div key={idx} className="relative">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    Variante {idx + 2}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setExtraMessages((prev) => prev.filter((_, i) => i !== idx))
-                    }
-                    className="text-xs font-medium text-red-500 hover:text-red-700"
-                  >
-                    Retirer
-                  </button>
-                </div>
-                <textarea
-                  rows={4}
-                  value={variant}
-                  onChange={(e) =>
-                    setExtraMessages((prev) =>
-                      prev.map((m, i) => (i === idx ? e.target.value : m)),
-                    )
-                  }
-                  className="w-full px-4 py-3 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-background font-mono text-sm transition resize-none"
-                  placeholder={`Variante ${idx + 2} du message (envoyée à une partie des contacts, au hasard)`}
-                />
-              </div>
-            ))}
-
-            <button
-              type="button"
-              onClick={() => setExtraMessages((prev) => [...prev, ''])}
-              disabled={extraMessages.length >= MAX_CAMPAIGN_MESSAGE_VARIANTS - 1}
-              className="flex items-center gap-2 text-sm font-semibold text-primary hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
+          {/* Rotation facultative de formulations rédigées par l'utilisateur. */}
+          <div className="mt-4 space-y-3 border border-border rounded-xl p-4 bg-muted/20">
+            <label
+              htmlFor="message-rotation-enabled"
+              className="flex items-start gap-3 cursor-pointer"
             >
-              ➕ Ajouter un message différent ({extraMessages.length + 1}/{MAX_CAMPAIGN_MESSAGE_VARIANTS})
-            </button>
+              <input
+                id="message-rotation-enabled"
+                type="checkbox"
+                checked={messageRotationEnabled}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  setMessageRotationEnabled(enabled)
+                  if (enabled && extraMessages.length === 0) {
+                    setExtraMessages([''])
+                  }
+                }}
+                className="mt-1 h-4 w-4 rounded accent-primary"
+              />
+              <span>
+                <span className="block text-sm font-semibold">
+                  🎲 Activer la rotation des messages (facultatif)
+                </span>
+                <span className="block text-xs text-muted-foreground mt-1">
+                  Utilise plusieurs formulations rédigées par vous, dans un ordre mélangé et équilibré.
+                </span>
+              </span>
+            </label>
 
-            {extraMessages.length >= MAX_CAMPAIGN_MESSAGE_VARIANTS - 1 && (
-              <p className="text-xs font-medium text-amber-700">
-                Limite atteinte : {MAX_CAMPAIGN_MESSAGE_VARIANTS} messages par campagne.
+            {!messageRotationEnabled && (
+              <p className="text-xs text-muted-foreground bg-background border border-border rounded-lg p-3">
+                Rotation désactivée : seul le message principal ci-dessus sera utilisé.
               </p>
             )}
 
-            {extraMessages.length > 0 && (
-              <div className="flex items-start gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                <span>🎲</span>
-                <p>
-                  <b>Rotation intelligente activée</b> : les messages sont mélangés,
-                  répartis équitablement et utilisés chacun une fois avant de recommencer.
-                  Deux numéros consécutifs ne recevront pas le même texte.
-                </p>
+            {messageRotationEnabled && (
+              <div className="space-y-3 pt-2 border-t border-border">
+                {extraMessages.map((variant, idx) => (
+                  <div key={idx} className="relative">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold text-muted-foreground">
+                        Variante {idx + 2}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExtraMessages((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        className="text-xs font-medium text-red-500 hover:text-red-700"
+                      >
+                        Retirer
+                      </button>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={variant}
+                      onChange={(e) =>
+                        setExtraMessages((prev) =>
+                          prev.map((m, i) => (i === idx ? e.target.value : m)),
+                        )
+                      }
+                      className="w-full px-4 py-3 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-background font-mono text-sm transition resize-none"
+                      placeholder={`Rédigez la variante ${idx + 2} avec le même sens. Vous pouvez aussi utiliser {nom}.`}
+                    />
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => setExtraMessages((prev) => [...prev, ''])}
+                  disabled={extraMessages.length >= MAX_CAMPAIGN_MESSAGE_VARIANTS - 1}
+                  className="flex items-center gap-2 text-sm font-semibold text-primary hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
+                >
+                  ➕ Ajouter un message différent ({extraMessages.length + 1}/{MAX_CAMPAIGN_MESSAGE_VARIANTS})
+                </button>
+
+                {extraMessages.length >= MAX_CAMPAIGN_MESSAGE_VARIANTS - 1 && (
+                  <p className="text-xs font-medium text-amber-700">
+                    Limite atteinte : {MAX_CAMPAIGN_MESSAGE_VARIANTS} messages par campagne.
+                  </p>
+                )}
+
+                {!messageRotationReady ? (
+                  <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                    Ajoutez au moins une variante différente du message principal pour activer la rotation.
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                    <span>✅</span>
+                    <p>
+                      <b>Rotation prête avec {configuredMessageVariants.length} textes distincts</b> : chaque texte est utilisé une fois avant de recommencer et deux destinataires consécutifs ne reçoivent pas la même formulation.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -826,6 +893,16 @@ export function NewCampaignForm({
               </p>
               <p className="text-xs text-blue-600 mt-1">
                 Estimation : ~{smsCount * totalContactsToSend} SMS au total ({smsCount} SMS par contact)
+              </p>
+              <p className="text-xs text-blue-700 mt-1">
+                Rotation des messages :{' '}
+                <span className="font-semibold">
+                  {messageRotationEnabled
+                    ? messageRotationReady
+                      ? `activée (${configuredMessageVariants.length} textes)`
+                      : 'à compléter'
+                    : 'désactivée'}
+                </span>
               </p>
             </div>
           </div>
