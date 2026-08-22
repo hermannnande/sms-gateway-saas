@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import {
   Search, Filter, Trash2, Download, X, Calendar,
   Phone, MessageSquare, Send, ChevronLeft, ChevronRight,
@@ -71,11 +70,19 @@ export function MessagesInbox({
     })
   }, [messages, searchQuery, filterDateStart, filterDateEnd])
 
+  const selectableMessages = useMemo(
+    () => filteredMessages.filter((message) => message.status === 'queued'),
+    [filteredMessages],
+  )
+  const allSelectableSelected = selectableMessages.length > 0
+    && selectableMessages.every((message) => selectedMessages.includes(message.id))
+
   function toggleSelectAll() {
-    if (selectedMessages.length === filteredMessages.length) {
-      setSelectedMessages([])
+    const selectableIds = new Set(selectableMessages.map((message) => message.id))
+    if (allSelectableSelected) {
+      setSelectedMessages((previous) => previous.filter((id) => !selectableIds.has(id)))
     } else {
-      setSelectedMessages(filteredMessages.map(m => m.id))
+      setSelectedMessages((previous) => [...new Set([...previous, ...selectableIds])])
     }
   }
 
@@ -85,21 +92,48 @@ export function MessagesInbox({
     )
   }
 
-  async function handleDeleteSelected() {
-    if (!confirm(`Supprimer ${selectedMessages.length} message(s) ?`)) return
+  async function deletePendingMessages(payload: { scope: 'selected'; ids: string[] } | { scope: 'all_queued' }) {
     setLoading(true)
+    setActionMessage(null)
     try {
-      const supabase = createClient()
-      const { error } = await supabase.from('messages').delete().in('id', selectedMessages)
-      if (error) throw error
-      setActionMessage({ type: 'success', text: `${selectedMessages.length} message(s) supprimé(s)` })
+      const response = await fetch('/api/messages/pending', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = await response.json().catch(() => null)
+      if (!response.ok || !result?.ok) throw new Error(result?.error || 'Suppression impossible')
+
+      const ignored = Number(result.not_deleted || 0)
+      setActionMessage({
+        type: 'success',
+        text: `${result.deleted} SMS en attente supprimé${result.deleted > 1 ? 's' : ''}${
+          ignored > 0 ? `. ${ignored} SMS déjà récupéré pour envoi n'a pas été supprimé.` : ''
+        }`,
+      })
       setSelectedMessages([])
-      setTimeout(() => router.refresh(), 1000)
+      router.refresh()
     } catch (err: any) {
       setActionMessage({ type: 'error', text: err.message })
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleDeleteSelected() {
+    if (!confirm(`Supprimer définitivement ${selectedMessages.length} SMS en attente ?`)) return
+    await deletePendingMessages({ scope: 'selected', ids: selectedMessages })
+  }
+
+  async function handleDeleteOne(id: string) {
+    if (!confirm('Supprimer définitivement ce SMS en attente ?')) return
+    await deletePendingMessages({ scope: 'selected', ids: [id] })
+  }
+
+  async function handleDeleteAllQueued() {
+    const queuedCount = statusCounts['queued'] ?? 0
+    if (!confirm(`Supprimer définitivement les ${queuedCount} SMS en attente, sur toutes les pages ?`)) return
+    await deletePendingMessages({ scope: 'all_queued' })
   }
 
   function resetFilters() {
@@ -173,6 +207,25 @@ export function MessagesInbox({
         <StatCard label="Échecs" value={statusCounts['failed'] ?? 0} icon={<X className="h-5 w-5" />} color="bg-red-50 text-red-700 border-red-200"
           active={statusFilter === 'failed'} onClick={() => navigateTo(1, 'failed')} />
       </div>
+
+      {(statusCounts['queued'] ?? 0) > 0 && (
+        <div className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-red-900">Nettoyer la file d’attente</p>
+            <p className="text-xs text-red-700">
+              Cette action supprime les SMS encore en attente sur toutes les pages. Les SMS déjà récupérés par le téléphone ne seront pas touchés.
+            </p>
+          </div>
+          <button
+            onClick={handleDeleteAllQueued}
+            disabled={loading}
+            className="flex shrink-0 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            {loading ? 'Suppression…' : `Supprimer tous les SMS en attente (${statusCounts['queued']})`}
+          </button>
+        </div>
+      )}
 
       {/* Search + filters */}
       <div className="bg-card rounded-xl p-4 border border-border shadow-sm">
@@ -274,8 +327,10 @@ export function MessagesInbox({
           <div className="flex items-center gap-4">
             <input
               type="checkbox"
-              checked={filteredMessages.length > 0 && selectedMessages.length === filteredMessages.length}
+              checked={allSelectableSelected}
               onChange={toggleSelectAll}
+              disabled={selectableMessages.length === 0 || loading}
+              title="Sélectionner les SMS en attente de cette page"
               className="w-4 h-4 rounded border-border cursor-pointer accent-primary"
             />
             <div>
@@ -323,14 +378,20 @@ export function MessagesInbox({
                   <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Status</th>
                   <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Campagne</th>
                   <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Date</th>
+                  <th className="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-muted-foreground">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredMessages.map((msg) => (
                   <tr key={msg.id} className="hover:bg-muted/20 transition-colors">
                     <td className="px-6 py-4">
-                      <input type="checkbox" checked={selectedMessages.includes(msg.id)} onChange={() => toggleMessageSelection(msg.id)}
-                        className="w-4 h-4 rounded border-border cursor-pointer accent-primary" />
+                      {msg.status === 'queued' ? (
+                        <input type="checkbox" checked={selectedMessages.includes(msg.id)} onChange={() => toggleMessageSelection(msg.id)}
+                          disabled={loading}
+                          className="w-4 h-4 rounded border-border cursor-pointer accent-primary" />
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -350,6 +411,21 @@ export function MessagesInbox({
                         <span className="text-sm">{new Date(msg.created_at).toLocaleDateString('fr-FR')}</span>
                         <span className="text-xs text-muted-foreground">{new Date(msg.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {msg.status === 'queued' ? (
+                        <button
+                          onClick={() => handleDeleteOne(msg.id)}
+                          disabled={loading}
+                          className="inline-flex items-center justify-center rounded-lg p-2 text-red-600 transition hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
+                          title="Supprimer ce SMS en attente"
+                          aria-label="Supprimer ce SMS en attente"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
