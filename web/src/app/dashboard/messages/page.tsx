@@ -59,7 +59,7 @@ export default async function MessagesPage({
 
   // Counts per status
   const statusCounts: Record<string, number> = {}
-  for (const s of ['queued', 'sent', 'delivered', 'failed']) {
+  for (const s of ['queued', 'sending', 'sent', 'delivered', 'failed']) {
     const { count: c } = await supabase
       .from('messages')
       .select('id', { count: 'exact', head: true })

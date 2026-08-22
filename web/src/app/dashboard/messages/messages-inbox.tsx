@@ -105,14 +105,21 @@ export function MessagesInbox({
       if (!response.ok || !result?.ok) throw new Error(result?.error || 'Suppression impossible')
 
       const ignored = Number(result.not_deleted || 0)
+      const inFlight = Number(result.in_flight || 0)
       setActionMessage({
         type: 'success',
         text: `${result.deleted} SMS en attente supprimé${result.deleted > 1 ? 's' : ''}${
           ignored > 0 ? `. ${ignored} SMS déjà récupéré pour envoi n'a pas été supprimé.` : ''
-        }`,
+        }${inFlight > 0 ? ` ${inFlight} SMS déjà récupéré${inFlight > 1 ? 's' : ''} par le téléphone reste${inFlight > 1 ? 'nt' : ''} en cours d’envoi.` : ''}`,
       })
       setSelectedMessages([])
-      router.refresh()
+      if (payload.scope === 'all_queued') {
+        // Après un nettoyage global, afficher explicitement la file vide au
+        // lieu de revenir à l'historique complet (envoyés/échecs/en cours).
+        navigateTo(1, 'queued')
+      } else {
+        router.refresh()
+      }
     } catch (err: any) {
       setActionMessage({ type: 'error', text: err.message })
     } finally {
@@ -146,12 +153,17 @@ export function MessagesInbox({
   function getStatusBadge(status: string) {
     const badges: Record<string, { color: string; label: string; icon: string }> = {
       queued: { color: 'bg-gray-100 text-gray-700 border-gray-300', label: 'En attente', icon: '⏳' },
-      claimed: { color: 'bg-blue-100 text-blue-700 border-blue-300', label: 'Récupéré', icon: '📲' },
+      sending: { color: 'bg-orange-100 text-orange-700 border-orange-300', label: 'En cours d’envoi', icon: '📲' },
+      claimed: { color: 'bg-orange-100 text-orange-700 border-orange-300', label: 'En cours d’envoi', icon: '📲' },
       sent: { color: 'bg-yellow-100 text-yellow-700 border-yellow-300', label: 'Envoyé', icon: '📤' },
       delivered: { color: 'bg-green-100 text-green-700 border-green-300', label: 'Livré', icon: '✅' },
       failed: { color: 'bg-red-100 text-red-700 border-red-300', label: 'Échec', icon: '❌' },
     }
-    const badge = badges[status] || badges.queued
+    const badge = badges[status] || {
+      color: 'bg-slate-100 text-slate-700 border-slate-300',
+      label: status || 'Inconnu',
+      icon: '•',
+    }
     return (
       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold border ${badge.color}`}>
         <span>{badge.icon}</span>
@@ -195,11 +207,13 @@ export function MessagesInbox({
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard label="Total" value={statusCounts['all'] ?? 0} icon={<MessageSquare className="h-5 w-5" />} color="bg-blue-50 text-blue-700 border-blue-200"
           active={statusFilter === 'all'} onClick={() => navigateTo(1, 'all')} />
         <StatCard label="En attente" value={statusCounts['queued'] ?? 0} icon={<Calendar className="h-5 w-5" />} color="bg-gray-50 text-gray-700 border-gray-200"
           active={statusFilter === 'queued'} onClick={() => navigateTo(1, 'queued')} />
+        <StatCard label="En cours" value={statusCounts['sending'] ?? 0} icon={<Send className="h-5 w-5" />} color="bg-orange-50 text-orange-700 border-orange-200"
+          active={statusFilter === 'sending'} onClick={() => navigateTo(1, 'sending')} />
         <StatCard label="Envoyés" value={statusCounts['sent'] ?? 0} icon={<Send className="h-5 w-5" />} color="bg-yellow-50 text-yellow-700 border-yellow-200"
           active={statusFilter === 'sent'} onClick={() => navigateTo(1, 'sent')} />
         <StatCard label="Livrés" value={statusCounts['delivered'] ?? 0} icon={<Phone className="h-5 w-5" />} color="bg-green-50 text-green-700 border-green-200"
@@ -273,7 +287,7 @@ export function MessagesInbox({
                 >
                   <option value="all">Tous les statuts</option>
                   <option value="queued">En attente</option>
-                  <option value="claimed">Récupéré</option>
+                  <option value="sending">En cours d’envoi</option>
                   <option value="sent">Envoyé</option>
                   <option value="delivered">Livré</option>
                   <option value="failed">Échec</option>

@@ -68,10 +68,18 @@ export async function DELETE(req: Request) {
     const result = Array.isArray(data) ? data[0] : data
     const deletedCount = Number(result?.deleted_count || 0)
     const skippedCount = Number(result?.skipped_count || 0)
+    const { count: inFlightCount, error: countError } = await service
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgMember.org_id)
+      .eq('status', 'sending')
+    if (countError) throw countError
+
     return NextResponse.json({
       ok: true,
       deleted: deletedCount,
       not_deleted: skippedCount,
+      in_flight: inFlightCount ?? 0,
     })
   } catch (error) {
     console.error('[messages/pending] Suppression impossible :', error)
