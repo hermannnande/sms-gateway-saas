@@ -20,6 +20,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/inbox_message.dart';
 import 'package:smsgateway_flutter/models/message.dart';
+import 'package:smsgateway_flutter/models/campaign_progress.dart';
 import 'package:smsgateway_flutter/models/outbox_message.dart';
 import 'package:smsgateway_flutter/services/device_service.dart';
 import 'package:smsgateway_flutter/services/app_update_service.dart';
@@ -252,8 +253,37 @@ enum AppSection {
 final sectionProvider = StateProvider<AppSection>((_) => AppSection.dashboard);
 
 class AppNotifier extends Notifier<AppState> {
+  int _campaignProgressRevision = 0;
+  bool _refreshingCampaign = false;
+  CampaignProgress? _lastCampaignProgress;
+
   @override
-  AppState build() => AppState.initial();
+  AppState build() {
+    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
+    ref.onDispose(() => FlutterForegroundTask.removeTaskDataCallback(_onTaskData));
+    return AppState.initial();
+  }
+
+  void _onTaskData(Object data) {
+    if (data is! Map || data['type'] != 'campaign_progress' ||
+        data['device_token'] != state.deviceToken) return;
+    final row = data['campaign'];
+    if (row is Map) applyCampaignProgress(row);
+  }
+
+  void applyCampaignProgress(Map<dynamic, dynamic> row) {
+    final progress = CampaignProgress.fromJson(row);
+    if (progress.id.isEmpty || progress.isOlderThan(_lastCampaignProgress)) return;
+    _lastCampaignProgress = progress;
+    _campaignProgressRevision++;
+    state = state.copyWith(
+      campaignIdSending: progress.id,
+      campaignNameSending: progress.name,
+      campaignStatusSending: progress.status,
+      campaignSentCount: progress.sent,
+      campaignTotalCount: progress.total,
+    );
+  }
 
   void setLastStatus(String? message) {
     state = state.copyWith(lastStatus: message);
@@ -711,6 +741,10 @@ class AppNotifier extends Notifier<AppState> {
 
   /// Récupère la campagne active (running/paused/queued) et maintient l'envoi auto.
   Future<void> refreshActiveCampaign({bool silent = true}) async {
+    if (_refreshingCampaign) return;
+    _refreshingCampaign = true;
+    final revision = _campaignProgressRevision;
+    final deviceToken = state.deviceToken;
     try {
       Map<String, dynamic>? row;
 
@@ -743,16 +777,29 @@ class AppNotifier extends Notifier<AppState> {
         final orgId = state.orgId;
         if (orgId == null) return;
 
-        final dbRow = await supabase
-            .from('campaigns')
-            .select('id,name,status,sent_count,total_count,updated_at')
-            .eq('org_id', orgId)
-            .inFilter('status', ['running', 'paused', 'queued'])
-            .order('updated_at', ascending: false)
-            .limit(1)
-            .maybeSingle();
-        if (dbRow != null) {
-          row = Map<String, dynamic>.from(dbRow);
+        // Prefer the campaign actually being sent by this phone.
+        final activeId = await BackgroundSyncService.getActiveCampaignId();
+        if (activeId != null) {
+          final activeRow = await supabase.from('campaigns')
+              .select('id,name,status,sent_count,total_count,updated_at')
+              .eq('org_id', orgId).eq('id', activeId).maybeSingle();
+          if (activeRow != null &&
+              ['running', 'paused', 'queued'].contains(activeRow['status'])) {
+            row = Map<String, dynamic>.from(activeRow);
+          }
+        }
+        if (row == null) {
+          final dbRow = await supabase
+              .from('campaigns')
+              .select('id,name,status,sent_count,total_count,updated_at')
+              .eq('org_id', orgId)
+              .inFilter('status', ['running', 'paused', 'queued'])
+              .order('updated_at', ascending: false)
+              .limit(1)
+              .maybeSingle();
+          if (dbRow != null) {
+            row = Map<String, dynamic>.from(dbRow);
+          }
         }
       } else {
         final token = state.deviceToken;
@@ -772,18 +819,14 @@ class AppNotifier extends Notifier<AppState> {
         }
       }
 
+      // An older poll must not overwrite a report received while awaiting HTTP.
+      if (revision != _campaignProgressRevision || deviceToken != state.deviceToken) return;
       if (row == null) {
         state = state.copyWith(clearCampaign: true);
         return;
       }
 
-      state = state.copyWith(
-        campaignIdSending: row['id']?.toString(),
-        campaignNameSending: row['name']?.toString(),
-        campaignStatusSending: row['status']?.toString(),
-        campaignSentCount: _safeParseInt(row['sent_count']) ?? 0,
-        campaignTotalCount: _safeParseInt(row['total_count']) ?? 0,
-      );
+      applyCampaignProgress(row);
 
       final status = row['status']?.toString();
       if ((status == 'running' || status == 'queued') && (state.deviceToken?.isNotEmpty ?? false)) {
@@ -794,6 +837,8 @@ class AppNotifier extends Notifier<AppState> {
       }
     } catch (e) {
       if (!silent) setLastStatus('Erreur campagne: $e');
+    } finally {
+      _refreshingCampaign = false;
     }
   }
 
@@ -1146,6 +1191,7 @@ class AppNotifier extends Notifier<AppState> {
       var thresholdBatchCount = pacing.batchPauseCount;
 
       while (batchesProcessed < maxBatches) {
+        await ref.read(deviceServiceProvider).flushMessageReports(token);
         final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
               deviceToken: token,
               limit: AppConfig.claimBatchSize,
@@ -1203,6 +1249,11 @@ class AppNotifier extends Notifier<AppState> {
         final simSlotsByCampaign = campaignSimSlots(payload);
 
         for (int i = 0; i < messages.length; i++) {
+          // Cadence turbo mesurée d'un envoi à l'autre : ce chrono couvre TOUT
+          // le coût du message (accusé natif d'envoi + remontée du statut) pour
+          // que ce temps déjà écoulé ne soit pas payé une seconde fois dans
+          // l'attente qui suit. Hors turbo il est simplement ignoré.
+          final messageStopwatch = Stopwatch()..start();
           // Rafraichit le verrou pour qu'il n'expire pas au milieu d'un long
           // lot (delai par SMS configurable jusqu'a plusieurs secondes).
           await BackgroundSyncService.setForegroundLock(true);
@@ -1222,12 +1273,21 @@ class AppNotifier extends Notifier<AppState> {
                 subscriptionIdOverride: routing.subscriptionId,
                 simSlotIndexOverride: routing.simSlotIndex,
               );
-          await ref.read(deviceServiceProvider).updateMessageStatus(
+          final report = await ref.read(deviceServiceProvider).updateMessageStatus(
                 deviceToken: token,
                 message: msg,
                 success: sendResult.success,
                 error: sendResult.error,
               );
+          final reportedCampaign = report?['campaign'];
+          if (report == null) {
+            state = state.copyWith(lastStatus:
+                'Résultat SMS enregistré sur le téléphone. En attente de synchronisation du compteur.');
+            return;
+          }
+          if (reportedCampaign is Map && token == state.deviceToken) {
+            applyCampaignProgress(reportedCampaign);
+          }
 
           if (sendResult.success) {
             totalOk++;
@@ -1254,7 +1314,10 @@ class AppNotifier extends Notifier<AppState> {
               nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
             }
             nextBatchPauseAt ??= AppSettings.pickBatchThreshold(pacing.batchPauseCount);
-            final useBatchPause = pacing.batchPauseEnabled &&
+            // Turbo : aucune pause par lot n'est jamais programmée, quel que
+            // soit le réglage anti-spam de l'utilisateur.
+            final useBatchPause = !pacing.turboEnabled &&
+                pacing.batchPauseEnabled &&
                 sentSinceBatchPause >= nextBatchPauseAt;
             if (useBatchPause) {
               sentSinceBatchPause = 0;
@@ -1262,12 +1325,25 @@ class AppNotifier extends Notifier<AppState> {
             }
 
             final previousBatchCount = pacing.batchPauseCount;
+            // Turbo : le reste à attendre ne dépasse jamais une seconde, un
+            // compte à rebours n'a donc rien à afficher et reconstruirait
+            // l'écran toutes les 500 ms pour rien. On pose un état honnête et
+            // fixe, une seule fois, puis le tick est ignoré (voir onTick).
+            if (pacing.turboEnabled && !useBatchPause) {
+              const turboStatus = '⚡ Envoi turbo en cours (1 SMS par seconde)';
+              if (state.lastStatus != turboStatus) {
+                state = state.copyWith(lastStatus: turboStatus);
+              }
+            }
             final waitResult = await AppSettings.waitWithLiveRefresh(
               initialSettings: pacing,
               useBatchPause: useBatchPause,
               consecutiveFailures: consecutiveSendFailures,
               refreshSettings: () => AppSettings.refreshFromSupabase(supabase),
               onTick: (remainingMs, isBatchPause) async {
+                // Turbo hors pause : aucun rafraîchissement, le statut fixe
+                // posé ci-dessus reste affiché.
+                if (pacing.turboEnabled && !isBatchPause) return;
                 final secondsLeft = ((remainingMs + 999) / 1000).floor();
                 state = state.copyWith(
                   lastStatus: isBatchPause
@@ -1275,6 +1351,9 @@ class AppNotifier extends Notifier<AppState> {
                       : '⏳ Prochain SMS dans ${secondsLeft}s',
                 );
               },
+              // Cadence turbo mesurée d'un envoi à l'autre : l'attente vise
+              // max(0, turboDelayMs - temps déjà passé sur ce message).
+              alreadyElapsedMs: messageStopwatch.elapsedMilliseconds,
             );
             pacing = waitResult.settings;
             if (previousBatchCount != pacing.batchPauseCount) {
@@ -3772,6 +3851,18 @@ class _CampaignsSection extends ConsumerStatefulWidget {
 }
 
 class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
+  @override
+  void didUpdateWidget(covariant _CampaignsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final live = widget.appState;
+    Map<String, dynamic> merge(Map<String, dynamic> campaign) {
+      if (campaign['id'] != live.campaignIdSending) return campaign;
+      return {...campaign, 'sent_count': live.campaignSentCount,
+        'total_count': live.campaignTotalCount, 'status': live.campaignStatusSending};
+    }
+    _campaigns = _campaigns.map(merge).toList();
+    if (_detailCampaign != null) _detailCampaign = merge(_detailCampaign!);
+  }
   List<Map<String, dynamic>> _campaigns = [];
   bool _loading = true;
   String? _error;
@@ -4089,6 +4180,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
       case 'running': return const Color(0xFF16A34A);
       case 'paused': return Colors.orange;
       case 'queued': return Colors.blue;
+      case 'done':
       case 'completed': return Colors.grey;
       case 'canceled': return Colors.red;
       default: return Colors.grey;
@@ -4100,6 +4192,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
       case 'running': return 'En cours';
       case 'paused': return 'En pause';
       case 'queued': return 'En attente';
+      case 'done':
       case 'completed': return 'Terminee';
       case 'canceled': return 'Annulee';
       default: return status ?? '-';
@@ -4205,7 +4298,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
             final status = c['status']?.toString() ?? '';
             final total = c['total_count'] ?? 0;
             final sent = c['sent_count'] ?? 0;
-            final progress = total > 0 ? sent / total : 0.0;
+            final progress = total > 0 ? (sent / total).clamp(0.0, 1.0) : 0.0;
 
             return GestureDetector(
               onTap: () => _openDetail(c['id'].toString()),
@@ -4630,11 +4723,11 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
     final status = c['status']?.toString() ?? '';
     final total = c['total_count'] ?? 0;
     final sent = c['sent_count'] ?? 0;
-    final progress = total > 0 ? sent / total : 0.0;
+    final progress = total > 0 ? (sent / total).clamp(0.0, 1.0) : 0.0;
 
     final queued = stats['queued'] ?? 0;
     final sending = stats['sending'] ?? 0;
-    final sentStat = stats['sent'] ?? 0;
+    final sentStat = sent;
     final failed = stats['failed'] ?? 0;
 
     return ListView(
@@ -5594,7 +5687,8 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
     final isPaused = status == 'paused';
     final isQueued = status == 'queued';
 
-    final statusLine = isPaused
+    final isFinished = status == 'done' || status == 'completed';
+    final statusLine = isFinished ? '✅ Campagne terminée' : isPaused
         ? '⏸️ En pause'
         : isQueued
             ? '⏳ En attente de démarrage'
@@ -5663,7 +5757,7 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          '$sent / $total SMS',
+                          '$sent / $total SMS envoyés',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 14,
@@ -5692,7 +5786,8 @@ class _CampaignProgressCardState extends State<_CampaignProgressCard> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Reste $remaining SMS à envoyer',
+                      isFinished ? 'Envoi terminé • $remaining SMS non envoyés'
+                          : '$remaining SMS non envoyés (en attente ou en échec)',
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.85),
                         fontSize: 11.5,
@@ -7527,6 +7622,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
           int batchPauseMinMs = AppSettings.defaultBatchPauseMinMs;
           int batchPauseMaxMs = AppSettings.defaultBatchPauseMaxMs;
           bool autoVaryEnabled = true;
+          bool turboEnabled = false;
 
           Future<void> load() async {
             final e = await BackgroundSyncService.isEnabled();
@@ -7538,6 +7634,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             final bpMin = await AppSettings.getBatchPauseMinMs();
             final bpMax = await AppSettings.getBatchPauseMaxMs();
             final av = await AppSettings.getAutoVaryEnabled();
+            final turbo = await AppSettings.getTurboEnabled();
             setState(() {
               enabled = e;
               paused = p;
@@ -7549,6 +7646,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
               batchPauseMinMs = bpMin;
               batchPauseMaxMs = bpMax;
               autoVaryEnabled = av;
+              turboEnabled = turbo;
             });
           }
 
@@ -7655,6 +7753,27 @@ Future<void> _showSettingsSheet(BuildContext context) async {
             setState(() => autoVaryEnabled = v);
           }
 
+          Future<void> pushTurbo(bool v) async {
+            try {
+              final container = ProviderScope.containerOf(ctx);
+              final supabase = container.read(supabaseClientProvider);
+              await AppSettings.pushTurboToSupabase(supabase, v);
+            } catch (_) {}
+          }
+
+          Future<void> saveTurbo(bool v) async {
+            await AppSettings.setTurboEnabled(v);
+            setState(() => turboEnabled = v);
+            await pushTurbo(v);
+          }
+
+          // Sous turbo, les réglages de cadence sont gelés : curseurs coupés
+          // et grisés. Sinon un simple frôlement pousserait un délai de 5 s
+          // dans la base et annulerait silencieusement le turbo du tableau
+          // de bord. Les valeurs restent stockées et reviennent à l'arrêt.
+          final bool pacingLocked = !delayLoaded || turboEnabled;
+          final Color? pacingTint = turboEnabled ? Colors.grey.shade400 : null;
+
           String fmtSecs(int ms) => '${(ms / 1000).round()}s';
 
           String fmtMs(int ms) {
@@ -7665,6 +7784,7 @@ Future<void> _showSettingsSheet(BuildContext context) async {
 
           String delayLabel() {
             if (!delayLoaded) return 'Chargement...';
+            if (turboEnabled) return '${fmtMs(AppSettings.turboDelayMs)} (turbo)';
             if (delayMaxMs > delayMs) {
               return '${fmtMs(delayMs)}–${fmtMs(delayMaxMs)}';
             }
@@ -7698,13 +7818,53 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                   ),
                   const SizedBox(height: 18),
 
+                  // ─── Turbo : envoi sans temporisation ─────────────────────
+                  Row(
+                    children: [
+                      Icon(Icons.bolt_rounded, size: 18, color: Colors.orange.shade700),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text('Turbo — envoi sans temporisation',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      ),
+                      Switch(
+                        value: turboEnabled,
+                        onChanged: !delayLoaded ? null : saveTurbo,
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'Environ 1 SMS par seconde, sans marge aléatoire et sans pause '
+                    'par lot : plus aucune régulation.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '⚠️ Une carte SIM grand public qui envoie en continu, c\'est '
+                    'exactement ce que l\'opérateur suspend. À n\'activer qu\'en '
+                    'connaissance de cause.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.orange.shade800),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Tes réglages de délai et de pause sont conservés : ils '
+                    'reviennent tels quels dès que le turbo est désactivé.',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 18),
+                  const Divider(),
+                  const SizedBox(height: 12),
+
                   // ─── Délai entre SMS ─────────────────────────────────────
                   Row(
                     children: [
-                      Icon(Icons.timer_outlined, size: 18, color: Colors.grey.shade700),
+                      Icon(Icons.timer_outlined, size: 18, color: pacingTint ?? Colors.grey.shade700),
                       const SizedBox(width: 8),
-                      const Text('Délai entre chaque SMS',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      Text('Délai entre chaque SMS',
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: pacingTint)),
                       const Spacer(),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -7722,7 +7882,8 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                   ),
                   const SizedBox(height: 6),
                   Text('Délai minimum : ${fmtMs(delayMs)}',
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+                      style: TextStyle(
+                          fontSize: 12.5, color: pacingTint ?? Colors.grey.shade700)),
                   Slider(
                     min: AppSettings.minDelayMs.toDouble(),
                     max: AppSettings.maxDelayMs.toDouble(),
@@ -7731,19 +7892,20 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                         .clamp(AppSettings.minDelayMs, AppSettings.maxDelayMs)
                         .toDouble(),
                     label: fmtMs(delayMs),
-                    onChanged: !delayLoaded
+                    onChanged: pacingLocked
                         ? null
                         : (v) {
                             setState(() => delayMs = (v / 500).round() * 500);
                           },
-                    onChangeEnd: !delayLoaded ? null : (v) => saveDelay((v / 500).round() * 500),
+                    onChangeEnd: pacingLocked ? null : (v) => saveDelay((v / 500).round() * 500),
                   ),
                   // ─── Délai maximum (ALÉATOIRE, facultatif) ────────────────
                   Text(
                     delayMaxMs > delayMs
                         ? 'Délai maximum (aléatoire) : ${fmtMs(delayMaxMs)}'
                         : 'Délai maximum (aléatoire) : auto',
-                    style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                    style: TextStyle(
+                        fontSize: 12.5, color: pacingTint ?? Colors.grey.shade700),
                   ),
                   Slider(
                     min: AppSettings.minDelayMs.toDouble(),
@@ -7753,21 +7915,26 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                         .clamp(AppSettings.minDelayMs, AppSettings.maxDelayMs)
                         .toDouble(),
                     label: delayMaxMs > delayMs ? fmtMs(delayMaxMs) : 'auto',
-                    onChanged: !delayLoaded
+                    onChanged: pacingLocked
                         ? null
                         : (v) {
                             setState(() => delayMaxMs = (v / 500).round() * 500);
                           },
-                    onChangeEnd: !delayLoaded ? null : (v) => saveDelayMax((v / 500).round() * 500),
+                    onChangeEnd: pacingLocked ? null : (v) => saveDelayMax((v / 500).round() * 500),
                   ),
                   Text(
-                    delayMaxMs > delayMs
-                        ? '✅ Mode aléatoire : chaque SMS attend un temps au hasard entre '
-                            '${fmtMs(delayMs)} et ${fmtMs(delayMaxMs)}. Réduit le risque de blocage opérateur.'
-                        : '✅ Aléatoire automatique : chaque SMS attend un temps au hasard entre '
-                            '${fmtMs(delayMs)} et ${fmtMs(delayMs + AppSettings.defaultRandomSpreadMs)}. '
-                            'Montez le maximum pour élargir la plage.',
-                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                    turboEnabled
+                        ? '⚡ Turbo actif : ces réglages sont ignorés (1 SMS par seconde, '
+                            'sans aléatoire). Ils sont gardés et repris dès que le turbo '
+                            'est désactivé.'
+                        : delayMaxMs > delayMs
+                            ? '✅ Mode aléatoire : chaque SMS attend un temps au hasard entre '
+                                '${fmtMs(delayMs)} et ${fmtMs(delayMaxMs)}. Réduit le risque de blocage opérateur.'
+                            : '✅ Aléatoire automatique : chaque SMS attend un temps au hasard entre '
+                                '${fmtMs(delayMs)} et ${fmtMs(delayMs + AppSettings.defaultRandomSpreadMs)}. '
+                                'Montez le maximum pour élargir la plage.',
+                    style: TextStyle(
+                        fontSize: 11.5, color: pacingTint ?? Colors.grey.shade600),
                   ),
                   const SizedBox(height: 18),
                   const Divider(),
@@ -7776,52 +7943,62 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                   // ─── Pause anti-spam PAR LOT ──────────────────────────────
                   Row(
                     children: [
-                      Icon(Icons.shield_outlined, size: 18, color: Colors.grey.shade700),
+                      Icon(Icons.shield_outlined,
+                          size: 18, color: pacingTint ?? Colors.grey.shade700),
                       const SizedBox(width: 8),
-                      const Text('Pause anti-spam par lot',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      Text('Pause anti-spam par lot',
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: pacingTint)),
                       const Spacer(),
                       Switch(
                         value: batchPauseEnabled,
-                        onChanged: !delayLoaded ? null : saveBatchPauseEnabled,
+                        onChanged: pacingLocked ? null : saveBatchPauseEnabled,
                       ),
                     ],
                   ),
                   Text(
-                    'Après un lot de SMS envoyés, l\'appli marque une pause plus longue '
-                    'et ALÉATOIRE avant de reprendre (en plus du délai ci-dessus). '
-                    'Réduit encore le risque de blocage par l\'opérateur.',
-                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                    turboEnabled
+                        ? '⚡ Turbo actif : aucune pause par lot n\'est appliquée. Le '
+                            'réglage est conservé pour le retour en mode normal.'
+                        : 'Après un lot de SMS envoyés, l\'appli marque une pause plus longue '
+                            'et ALÉATOIRE avant de reprendre (en plus du délai ci-dessus). '
+                            'Réduit encore le risque de blocage par l\'opérateur.',
+                    style: TextStyle(
+                        fontSize: 11.5, color: pacingTint ?? Colors.grey.shade600),
                   ),
                   if (batchPauseEnabled) ...[
                     const SizedBox(height: 10),
                     Text('SMS avant pause : $batchPauseCount',
-                        style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+                        style: TextStyle(
+                            fontSize: 12.5, color: pacingTint ?? Colors.grey.shade700)),
                     Slider(
                       min: 1,
                       max: 100,
                       divisions: 99,
                       value: batchPauseCount.clamp(1, 100).toDouble(),
                       label: '$batchPauseCount',
-                      onChanged: !delayLoaded
+                      onChanged: pacingLocked
                           ? null
                           : (v) => setState(() => batchPauseCount = v.round()),
                       onChangeEnd:
-                          !delayLoaded ? null : (v) => saveBatchPauseCount(v.round()),
+                          pacingLocked ? null : (v) => saveBatchPauseCount(v.round()),
                     ),
                     Text('Pause minimum : ${fmtSecs(batchPauseMinMs)}',
-                        style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+                        style: TextStyle(
+                            fontSize: 12.5, color: pacingTint ?? Colors.grey.shade700)),
                     Slider(
                       min: 0,
                       max: 300000,
                       divisions: 60,
                       value: batchPauseMinMs.clamp(0, 300000).toDouble(),
                       label: fmtSecs(batchPauseMinMs),
-                      onChanged: !delayLoaded
+                      onChanged: pacingLocked
                           ? null
                           : (v) =>
                               setState(() => batchPauseMinMs = (v / 5000).round() * 5000),
-                      onChangeEnd: !delayLoaded
+                      onChangeEnd: pacingLocked
                           ? null
                           : (v) => saveBatchPauseMin((v / 5000).round() * 5000),
                     ),
@@ -7829,7 +8006,8 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                       batchPauseMaxMs > batchPauseMinMs
                           ? 'Pause maximum (aléatoire) : ${fmtSecs(batchPauseMaxMs)}'
                           : 'Pause maximum (aléatoire) : fixe',
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                      style: TextStyle(
+                          fontSize: 12.5, color: pacingTint ?? Colors.grey.shade700),
                     ),
                     Slider(
                       min: 0,
@@ -7841,11 +8019,11 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                       label: batchPauseMaxMs > batchPauseMinMs
                           ? fmtSecs(batchPauseMaxMs)
                           : fmtSecs(batchPauseMinMs),
-                      onChanged: !delayLoaded
+                      onChanged: pacingLocked
                           ? null
                           : (v) =>
                               setState(() => batchPauseMaxMs = (v / 5000).round() * 5000),
-                      onChangeEnd: !delayLoaded
+                      onChangeEnd: pacingLocked
                           ? null
                           : (v) => saveBatchPauseMax((v / 5000).round() * 5000),
                     ),
@@ -7854,7 +8032,8 @@ Future<void> _showSettingsSheet(BuildContext context) async {
                       '±30 %), l\'envoi marque une pause aléatoire entre '
                       '${fmtSecs(batchPauseMinMs)} et '
                       '${fmtSecs(batchPauseMaxMs > batchPauseMinMs ? batchPauseMaxMs : batchPauseMinMs)}.',
-                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                      style: TextStyle(
+                          fontSize: 11.5, color: pacingTint ?? Colors.grey.shade600),
                     ),
                   ],
                   const SizedBox(height: 18),

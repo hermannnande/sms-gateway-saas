@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
@@ -16,6 +17,11 @@ const _gsm7 =
 bool _isGsm7(String s) => s.split('').every((c) => _gsm7.contains(c));
 
 void main() {
+  // Les tests de cadence passent par SharedPreferences : le binding et le
+  // magasin simulé sont indispensables, et sans effet sur les tests purs.
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   group('AutoVary.apply', () {
     test('désactivé => texte strictement inchangé', () {
       const body = 'Bonjour cher client, profitez de notre offre.';
@@ -262,6 +268,340 @@ void main() {
 
       expect(result.usedBatchPause, isFalse);
       expect(stopwatch.elapsedMilliseconds, lessThan(180));
+    });
+  });
+
+  group('AppSettings mode turbo', () {
+    // Fabrique d'instantanés NON const : deux appels renvoient bien deux
+    // objets distincts, ce qui est indispensable pour tester `operator ==`.
+    SmsPacingSettings instantane({
+      int minDelayMs = 40,
+      int maxDelayMs = 40,
+      bool batchPauseEnabled = true,
+      int batchPauseCount = 10,
+      int batchPauseMinMs = 30000,
+      int batchPauseMaxMs = 45000,
+      bool turboEnabled = false,
+    }) =>
+        SmsPacingSettings(
+          minDelayMs: minDelayMs,
+          maxDelayMs: maxDelayMs,
+          batchPauseEnabled: batchPauseEnabled,
+          batchPauseCount: batchPauseCount,
+          batchPauseMinMs: batchPauseMinMs,
+          batchPauseMaxMs: batchPauseMaxMs,
+          turboEnabled: turboEnabled,
+        );
+
+    test('par défaut le turbo est éteint et la cadence reste responsable',
+        () async {
+      expect(await AppSettings.getTurboEnabled(), isFalse);
+      final reglages = await AppSettings.getSmsPacingSettings();
+      expect(reglages.turboEnabled, isFalse);
+      expect(reglages.minDelayMs, greaterThanOrEqualTo(AppSettings.minDelayMs));
+    });
+
+    test('la clé locale du turbo est bien cfg_turbo_mode_enabled', () async {
+      SharedPreferences.setMockInitialValues({'cfg_turbo_mode_enabled': true});
+      expect(await AppSettings.getTurboEnabled(), isTrue);
+      expect((await AppSettings.getSmsPacingSettings()).turboEnabled, isTrue);
+    });
+
+    test(
+        'turbo actif : cadence plate de 1 s malgré des délais enregistrés '
+        'élevés', () async {
+      await AppSettings.setSmsDelayMs(45000);
+      await AppSettings.setSmsDelayMaxMs(60000);
+      await AppSettings.setBatchPauseEnabled(true);
+      await AppSettings.setTurboEnabled(true);
+
+      final reglages = await AppSettings.getSmsPacingSettings();
+      expect(reglages.turboEnabled, isTrue);
+      expect(reglages.minDelayMs, AppSettings.turboDelayMs);
+      expect(reglages.maxDelayMs, AppSettings.turboDelayMs);
+      // Plancher local de 5 s volontairement contourné...
+      expect(reglages.minDelayMs, lessThan(AppSettings.minDelayMs));
+      // ...et aucune bande aléatoire automatique ajoutée par-dessus.
+      expect(reglages.minDelayMs, reglages.maxDelayMs);
+      expect(
+        AppSettings.pickDelayMs(reglages.minDelayMs, reglages.maxDelayMs),
+        AppSettings.turboDelayMs,
+      );
+      // La pause par lot est neutralisée quoi qu'en dise le réglage stocké.
+      expect(reglages.batchPauseEnabled, isFalse);
+      expect(await AppSettings.getBatchPauseEnabled(), isTrue);
+    });
+
+    test("couper le turbo restitue la cadence enregistrée par l'utilisateur",
+        () async {
+      await AppSettings.setSmsDelayMs(45000);
+      await AppSettings.setSmsDelayMaxMs(60000);
+      await AppSettings.setBatchPauseEnabled(true);
+      await AppSettings.setBatchPauseCount(15);
+      await AppSettings.setTurboEnabled(true);
+      expect((await AppSettings.getSmsPacingSettings()).turboEnabled, isTrue);
+
+      await AppSettings.setTurboEnabled(false);
+      final reglages = await AppSettings.getSmsPacingSettings();
+      expect(reglages.turboEnabled, isFalse);
+      expect(reglages.minDelayMs, 45000);
+      expect(reglages.maxDelayMs, 60000);
+      expect(reglages.minDelayMs, greaterThanOrEqualTo(AppSettings.minDelayMs));
+      expect(reglages.batchPauseEnabled, isTrue);
+      expect(reglages.batchPauseCount, 15);
+    });
+
+    test(
+        'applyRemoteSettings enregistre turbo_mode_enabled sans écraser les '
+        'autres réglages', () async {
+      await AppSettings.applyRemoteSettings({
+        'message_delay_seconds': 12,
+        'message_delay_max_seconds': 20,
+        'batch_pause_enabled': true,
+        'batch_pause_count': 15,
+        'batch_pause_min_seconds': 60,
+        'batch_pause_max_seconds': 90,
+        'turbo_mode_enabled': true,
+      });
+
+      expect(await AppSettings.getTurboEnabled(), isTrue);
+      final turbo = await AppSettings.getSmsPacingSettings();
+      expect(turbo.turboEnabled, isTrue);
+      expect(turbo.minDelayMs, AppSettings.turboDelayMs);
+      expect(turbo.maxDelayMs, AppSettings.turboDelayMs);
+      expect(turbo.batchPauseEnabled, isFalse);
+
+      // Les valeurs ordinaires ont survécu à l'aller-retour.
+      expect(await AppSettings.getSmsDelayMs(), 12000);
+      expect(await AppSettings.getSmsDelayMaxMs(), 20000);
+      expect(await AppSettings.getBatchPauseEnabled(), isTrue);
+      expect(turbo.batchPauseCount, 15);
+      expect(turbo.batchPauseMinMs, 60000);
+      expect(turbo.batchPauseMaxMs, 90000);
+
+      // Et la ligne suivante qui coupe le turbo les restitue à l'identique.
+      await AppSettings.applyRemoteSettings({'turbo_mode_enabled': false});
+      final normal = await AppSettings.getSmsPacingSettings();
+      expect(normal.turboEnabled, isFalse);
+      expect(normal.minDelayMs, 12000);
+      expect(normal.maxDelayMs, 20000);
+      expect(normal.batchPauseEnabled, isTrue);
+      expect(normal.batchPauseCount, 15);
+      expect(normal.batchPauseMinMs, 60000);
+      expect(normal.batchPauseMaxMs, 90000);
+    });
+
+    test('une ligne sans turbo_mode_enabled laisse le turbo inchangé',
+        () async {
+      await AppSettings.setTurboEnabled(true);
+      await AppSettings.applyRemoteSettings({'message_delay_seconds': 9});
+      expect(await AppSettings.getTurboEnabled(), isTrue);
+      expect((await AppSettings.getSmsPacingSettings()).turboEnabled, isTrue);
+    });
+
+    test('deux instantanés ne différant que par le turbo ne sont pas égaux',
+        () {
+      final normal = instantane();
+      final turbo = instantane(turboEnabled: true);
+
+      // Sans ce champ dans operator==, activer le turbo au milieu d'une
+      // campagne serait ignoré par waitWithLiveRefresh, en silence.
+      expect(normal == turbo, isFalse);
+      expect(turbo == normal, isFalse);
+      expect(normal.hashCode == turbo.hashCode, isFalse);
+
+      // L'égalité reste vraie entre deux instantanés réellement identiques.
+      expect(turbo, instantane(turboEnabled: true));
+      expect(turbo.hashCode, instantane(turboEnabled: true).hashCode);
+      expect(normal, instantane());
+    });
+
+    test("le turbo n'ajoute pas le backoff d'échec consécutif", () async {
+      final turbo = instantane(
+        minDelayMs: AppSettings.turboDelayMs,
+        maxDelayMs: AppSettings.turboDelayMs,
+        batchPauseEnabled: false,
+        turboEnabled: true,
+      );
+      final restes = <int>[];
+      final stopwatch = Stopwatch()..start();
+
+      final result = await AppSettings.waitWithLiveRefresh(
+        initialSettings: turbo,
+        useBatchPause: true,
+        // Hors turbo, 3 échecs ajoutent 30 000 ms à l'attente.
+        consecutiveFailures: 3,
+        refreshSettings: () async => turbo,
+        // On coupe dès le premier battement : la cible visée est déjà connue,
+        // inutile de dormir la seconde entière.
+        shouldInterrupt: () async => restes.isNotEmpty,
+        onTick: (remainingMs, isBatchPause) async => restes.add(remainingMs),
+        refreshInterval: const Duration(milliseconds: 10),
+        tick: const Duration(milliseconds: 5),
+      );
+      stopwatch.stop();
+
+      expect(restes, isNotEmpty);
+      expect(restes.first, lessThanOrEqualTo(AppSettings.turboDelayMs));
+      expect(restes.first, greaterThan(AppSettings.turboDelayMs ~/ 2));
+      // Le turbo ne prend jamais la pause par lot, même si l'appelant en
+      // réclame une.
+      expect(result.usedBatchPause, isFalse);
+      expect(result.interrupted, isTrue);
+      expect(stopwatch.elapsedMilliseconds, lessThan(500));
+    });
+
+    test('activer le turbo pendant une pause par lot la coupe court', () async {
+      final enPause = instantane(batchPauseMinMs: 30000, batchPauseMaxMs: 30000);
+      final enTurbo = instantane(
+        minDelayMs: AppSettings.turboDelayMs,
+        maxDelayMs: AppSettings.turboDelayMs,
+        batchPauseEnabled: false,
+        batchPauseMinMs: 30000,
+        batchPauseMaxMs: 30000,
+        turboEnabled: true,
+      );
+      final restes = <int>[];
+      final modes = <bool>[];
+      final stopwatch = Stopwatch()..start();
+
+      final result = await AppSettings.waitWithLiveRefresh(
+        initialSettings: enPause,
+        useBatchPause: true,
+        consecutiveFailures: 0,
+        refreshSettings: () async => enTurbo,
+        shouldInterrupt: () async => modes.contains(false),
+        onTick: (remainingMs, isBatchPause) async {
+          restes.add(remainingMs);
+          modes.add(isBatchPause);
+        },
+        refreshInterval: const Duration(milliseconds: 10),
+        tick: const Duration(milliseconds: 5),
+      );
+      stopwatch.stop();
+
+      expect(modes.first, isTrue, reason: 'la pause par lot a bien démarré');
+      expect(modes.last, isFalse, reason: 'le turbo a coupé la pause en cours');
+      expect(restes.first, greaterThan(AppSettings.turboDelayMs));
+      expect(restes.last, lessThanOrEqualTo(AppSettings.turboDelayMs));
+      expect(result.settings, enTurbo);
+      expect(result.usedBatchPause, isFalse);
+      expect(stopwatch.elapsedMilliseconds, lessThan(500));
+    });
+
+    // ── Cadence à échéance (turbo uniquement) ──────────────────────────────
+    // [turboDelayMs] est une PÉRIODE d'un départ à l'autre, pas un supplément
+    // ajouté après le travail : le temps déjà consacré au message (accusé
+    // d'envoi natif puis compte rendu de statut) est déduit du budget.
+    group('cadence à échéance', () {
+      SmsPacingSettings turbo() => instantane(
+            minDelayMs: AppSettings.turboDelayMs,
+            maxDelayMs: AppSettings.turboDelayMs,
+            batchPauseEnabled: false,
+            turboEnabled: true,
+          );
+
+      test(
+          'turbo : le temps déjà consommé est déduit, seul le reliquat est '
+          'attendu', () async {
+        final reglages = turbo();
+        const dejaEcouleMs = AppSettings.turboDelayMs ~/ 2;
+        final stopwatch = Stopwatch()..start();
+
+        final result = await AppSettings.waitWithLiveRefresh(
+          initialSettings: reglages,
+          useBatchPause: false,
+          consecutiveFailures: 0,
+          refreshSettings: () async => reglages,
+          refreshInterval: const Duration(milliseconds: 1000),
+          tick: const Duration(milliseconds: 50),
+          alreadyElapsedMs: dejaEcouleMs,
+        );
+        stopwatch.stop();
+
+        expect(result.interrupted, isFalse);
+        // Le reliquat est bien attendu : on ne repart pas avant l'échéance.
+        expect(stopwatch.elapsedMilliseconds, greaterThanOrEqualTo(400));
+        // ...mais sans la soustraction on mesurerait une seconde pleine.
+        expect(stopwatch.elapsedMilliseconds, lessThan(850));
+      });
+
+      test('turbo : budget déjà épuisé => aucun délai supplémentaire',
+          () async {
+        final reglages = turbo();
+        final stopwatch = Stopwatch()..start();
+
+        final result = await AppSettings.waitWithLiveRefresh(
+          initialSettings: reglages,
+          useBatchPause: false,
+          consecutiveFailures: 0,
+          refreshSettings: () async => reglages,
+          refreshInterval: const Duration(milliseconds: 10),
+          tick: const Duration(milliseconds: 50),
+          // Cas le plus fréquent en production : l'accusé d'envoi natif dépasse
+          // à lui seul la seconde.
+          alreadyElapsedMs: AppSettings.turboDelayMs + 500,
+        );
+        stopwatch.stop();
+
+        expect(result.interrupted, isFalse);
+        expect(stopwatch.elapsedMilliseconds, lessThan(300));
+      });
+
+      test('hors turbo : alreadyElapsedMs est ignoré, le délai complet est '
+          'respecté', () async {
+        // GARDE-FOU ANTI-SPAM : si ce test tombe, tous les utilisateurs SANS
+        // turbo se mettent à envoyer plus vite que ce qu'ils ont configuré.
+        final normal = instantane(
+          minDelayMs: 120,
+          maxDelayMs: 120,
+          batchPauseEnabled: false,
+        );
+        final stopwatch = Stopwatch()..start();
+
+        final result = await AppSettings.waitWithLiveRefresh(
+          initialSettings: normal,
+          useBatchPause: false,
+          consecutiveFailures: 0,
+          refreshSettings: () async => normal,
+          refreshInterval: const Duration(milliseconds: 1000),
+          tick: const Duration(milliseconds: 20),
+          // Volontairement énorme : hors turbo il ne doit RIEN retrancher.
+          alreadyElapsedMs: 10000,
+        );
+        stopwatch.stop();
+
+        expect(result.interrupted, isFalse);
+        expect(result.settings, normal);
+        expect(stopwatch.elapsedMilliseconds, greaterThanOrEqualTo(100));
+        expect(stopwatch.elapsedMilliseconds, lessThan(700));
+      });
+
+      test('turbo : le tableau de bord est consulté même quand la cible vaut 0',
+          () async {
+        final reglages = turbo();
+        var appels = 0;
+        final stopwatch = Stopwatch()..start();
+
+        await AppSettings.waitWithLiveRefresh(
+          initialSettings: reglages,
+          useBatchPause: false,
+          consecutiveFailures: 0,
+          refreshSettings: () async {
+            appels++;
+            return reglages;
+          },
+          refreshInterval: Duration.zero,
+          tick: const Duration(milliseconds: 50),
+          alreadyElapsedMs: AppSettings.turboDelayMs * 2,
+        );
+        stopwatch.stop();
+
+        // Sans la consultation AVANT la boucle, la cible 0 empêcherait tout
+        // rafraîchissement : couper le turbo passerait inaperçu jusqu'à 30 SMS.
+        expect(appels, greaterThanOrEqualTo(1));
+        expect(stopwatch.elapsedMilliseconds, lessThan(300));
+      });
     });
   });
 }

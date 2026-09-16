@@ -18,6 +18,7 @@ class SmsPacingSettings {
     required this.batchPauseCount,
     required this.batchPauseMinMs,
     required this.batchPauseMaxMs,
+    this.turboEnabled = false,
   });
 
   final int minDelayMs;
@@ -26,6 +27,10 @@ class SmsPacingSettings {
   final int batchPauseCount;
   final int batchPauseMinMs;
   final int batchPauseMaxMs;
+
+  /// Mode turbo demandé depuis le tableau de bord : cadence plate d'un SMS par
+  /// seconde, sans aléatoire, sans pause par lot et sans backoff d'échec.
+  final bool turboEnabled;
 
   @override
   bool operator ==(Object other) =>
@@ -36,7 +41,11 @@ class SmsPacingSettings {
           batchPauseEnabled == other.batchPauseEnabled &&
           batchPauseCount == other.batchPauseCount &&
           batchPauseMinMs == other.batchPauseMinMs &&
-          batchPauseMaxMs == other.batchPauseMaxMs;
+          batchPauseMaxMs == other.batchPauseMaxMs &&
+          // Indispensable : `waitWithLiveRefresh` ne recalcule l'attente que si
+          // l'instantané a changé. Sans ce champ, activer le turbo au milieu
+          // d'une campagne serait totalement invisible.
+          turboEnabled == other.turboEnabled;
 
   @override
   int get hashCode => Object.hash(
@@ -46,6 +55,7 @@ class SmsPacingSettings {
         batchPauseCount,
         batchPauseMinMs,
         batchPauseMaxMs,
+        turboEnabled,
       );
 }
 
@@ -79,12 +89,21 @@ class AppSettings {
   static const _kBatchPauseCount = 'cfg_batch_pause_count';
   static const _kBatchPauseMinMs = 'cfg_batch_pause_min_ms';
   static const _kBatchPauseMaxMs = 'cfg_batch_pause_max_ms';
+  static const _kTurboEnabled = 'cfg_turbo_mode_enabled';
   static final _rng = Random();
 
   /// Fréquence de consultation du tableau de bord pendant une attente active.
   /// Une valeur enregistrée est donc normalement appliquée en moins de 2 s.
   static const Duration liveRefreshInterval = Duration(seconds: 2);
   static const Duration liveWaitTick = Duration(milliseconds: 500);
+
+  /// Temps écoulé depuis la DERNIÈRE consultation réelle du tableau de bord.
+  /// Il est `static` pour survivre d'une attente à la suivante : en turbo une
+  /// attente ne dure que 1 s, donc aucune d'elles ne peut à elle seule atteindre
+  /// l'intervalle de 2 s. En cumulant le temps d'un SMS au suivant, on conserve
+  /// exactement une consultation toutes les 2 s environ — sans augmenter la
+  /// fréquence d'interrogation — et couper le turbo est vu en ~2 s.
+  static final Stopwatch _sinceLastRefresh = Stopwatch()..start();
 
   /// Minimum responsible pacing between two SMS sends.
   static const int minDelayMs = 5000;
@@ -99,6 +118,10 @@ class AppSettings {
   /// Marge bornée ajoutée au délai minimum pour lisser la charge du gateway.
   /// Elle ne remplace pas le consentement, l'identification ni la gestion STOP.
   static const int defaultRandomSpreadMs = 2000;
+
+  /// Attente plate appliquée quand le mode turbo est activé depuis le tableau
+  /// de bord : un SMS par seconde, sans aléatoire ni pause de régulation.
+  static const int turboDelayMs = 1000;
 
   /// Clé du réglage « variation automatique du texte ».
   static const _kAutoVaryEnabled = 'cfg_auto_vary_enabled';
@@ -186,6 +209,20 @@ class AppSettings {
     await prefs.setBool(_kBatchPauseEnabled, enabled);
   }
 
+  /// Lit le mode turbo (désactivé par défaut).
+  static Future<bool> getTurboEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    return prefs.getBool(_kTurboEnabled) ?? false;
+  }
+
+  /// Enregistre le mode turbo. Les réglages de cadence de l'utilisateur ne sont
+  /// jamais modifiés : les désactiver les restitue à l'identique.
+  static Future<void> setTurboEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kTurboEnabled, enabled);
+  }
+
   static Future<int> getBatchPauseCount() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
@@ -270,18 +307,40 @@ class AppSettings {
     final maxDelay = rawMaxDelay == null || rawMaxDelay <= minDelay
         ? (minDelay + defaultRandomSpreadMs).clamp(minDelayMs, maxDelayMs)
         : rawMaxDelay.clamp(minDelayMs, maxDelayMs);
+    final batchCount =
+        (prefs.getInt(_kBatchPauseCount) ?? defaultBatchPauseCount)
+            .clamp(minBatchPauseCount, maxBatchPauseCount);
     final batchMin = (prefs.getInt(_kBatchPauseMinMs) ?? defaultBatchPauseMinMs)
         .clamp(minBatchPauseMs, maxBatchPauseMs);
     final batchMax = (prefs.getInt(_kBatchPauseMaxMs) ?? defaultBatchPauseMaxMs)
         .clamp(minBatchPauseMs, maxBatchPauseMs);
 
+    // ── Mode turbo ────────────────────────────────────────────────────────
+    // Choix explicite de l'utilisateur sur le tableau de bord : on renvoie une
+    // cadence plate de [turboDelayMs] sans passer par .clamp(minDelayMs, ...)
+    // — le plancher local de 5 s est volontairement contourné ici — ni par la
+    // bande aléatoire automatique, qui transformerait sinon ce 1 000 ms en une
+    // plage 1 000-3 000 ms. La pause par lot est neutralisée.
+    // Les valeurs de cadence ci-dessus restent CONSERVÉES telles quelles dans
+    // les préférences : couper le turbo restitue les réglages de l'utilisateur
+    // sans migration ni perte de données.
+    if (prefs.getBool(_kTurboEnabled) ?? false) {
+      return SmsPacingSettings(
+        minDelayMs: turboDelayMs,
+        maxDelayMs: turboDelayMs,
+        batchPauseEnabled: false,
+        batchPauseCount: batchCount,
+        batchPauseMinMs: batchMin,
+        batchPauseMaxMs: max(batchMin, batchMax),
+        turboEnabled: true,
+      );
+    }
+
     return SmsPacingSettings(
       minDelayMs: minDelay,
       maxDelayMs: maxDelay,
       batchPauseEnabled: prefs.getBool(_kBatchPauseEnabled) ?? true,
-      batchPauseCount:
-          (prefs.getInt(_kBatchPauseCount) ?? defaultBatchPauseCount)
-              .clamp(minBatchPauseCount, maxBatchPauseCount),
+      batchPauseCount: batchCount,
       batchPauseMinMs: batchMin,
       batchPauseMaxMs: max(batchMin, batchMax),
     );
@@ -321,6 +380,12 @@ class AppSettings {
     if (batchEnabled is bool) {
       await prefs.setBool(_kBatchPauseEnabled, batchEnabled);
     }
+    // Unique entonnoir pour les deux canaux de réglages (lecture Supabase
+    // directe et proxy mobile) : l'isolate d'arrière-plan en hérite donc aussi.
+    final turboEnabled = row['turbo_mode_enabled'];
+    if (turboEnabled is bool) {
+      await prefs.setBool(_kTurboEnabled, turboEnabled);
+    }
     if (batchCount != null && batchCount >= minBatchPauseCount) {
       await prefs.setInt(
         _kBatchPauseCount,
@@ -354,19 +419,107 @@ class AppSettings {
     Future<void> Function(int remainingMs, bool isBatchPause)? onTick,
     Duration refreshInterval = liveRefreshInterval,
     Duration tick = liveWaitTick,
+
+    /// Temps (ms) que l'appelant a DÉJÀ consacré à ce message : l'accusé
+    /// d'envoi natif puis le compte rendu de statut. Il est soustrait du budget
+    /// turbo, si bien que la cadence se mesure d'un départ à l'autre
+    /// (« send-to-send ») et non de la fin du travail au départ suivant : la
+    /// période visée devient max(1 s, temps de travail réel) au lieu de
+    /// « temps de travail + 1 s ».
+    ///
+    /// HORS TURBO ce paramètre est totalement IGNORÉ : la temporisation
+    /// aléatoire complète continue de s'appliquer APRÈS le travail, exactement
+    /// comme aujourd'hui, car le dispositif anti-spam en dépend.
+    int alreadyElapsedMs = 0,
   }) async {
     var settings = initialSettings;
-    var batchMode = useBatchPause && settings.batchPauseEnabled;
-    int pickTargetMs() => batchMode
-        ? pickBatchPauseMs(settings.batchPauseMinMs, settings.batchPauseMaxMs)
-        : pickDelayMs(settings.minDelayMs, settings.maxDelayMs) +
-            failureBackoffMs(consecutiveFailures);
+    // Le turbo n'entre JAMAIS en pause par lot, même si l'appelant en demande
+    // une : c'est un choix explicite du tableau de bord.
+    var batchMode =
+        useBatchPause && settings.batchPauseEnabled && !settings.turboEnabled;
+    int pickTargetMs() {
+      // Turbo : attente plate, sans jitter. Le backoff d'échec est neutralisé
+      // ICI, au point d'appel, et non dans `failureBackoffMs` dont les valeurs
+      // de retour sont figées par les tests.
+      // Cadence à échéance : [turboDelayMs] est une PÉRIODE, pas un supplément.
+      // On ne dort donc que le reliquat du budget d'une seconde ; quand l'envoi
+      // et le compte rendu l'ont déjà épuisé, la cible vaut 0 et le SMS suivant
+      // part immédiatement.
+      if (settings.turboEnabled) {
+        return max(0, turboDelayMs - alreadyElapsedMs);
+      }
+      return batchMode
+          ? pickBatchPauseMs(settings.batchPauseMinMs, settings.batchPauseMaxMs)
+          : pickDelayMs(settings.minDelayMs, settings.maxDelayMs) +
+              failureBackoffMs(consecutiveFailures);
+    }
 
     var targetMs = pickTargetMs();
     final stopwatch = Stopwatch()..start();
     var nextRefreshAtMs = refreshInterval.inMilliseconds;
 
-    while (stopwatch.elapsedMilliseconds < targetMs) {
+    /// Consulte le tableau de bord si l'échéance de rafraîchissement est
+    /// atteinte, réconcilie l'attente en cours et indique par `true` que
+    /// l'appelant doit sortir immédiatement (la nouvelle cible est déjà
+    /// dépassée). La logique est celle qui vivait dans la boucle : elle a
+    /// seulement été extraite pour pouvoir être appelée AUSSI avant d'y entrer.
+    Future<bool> maybeRefresh(int elapsedMs) async {
+      // En turbo la cible ne vaut au plus que [turboDelayMs], et souvent 0 :
+      // l'attente se terminerait toujours avant `refreshInterval` et le tableau
+      // de bord ne serait donc plus JAMAIS consulté (couper le turbo ne serait
+      // vu qu'au lot suivant). On s'appuie alors sur le chronomètre partagé
+      // entre attentes.
+      final dueForRefresh = settings.turboEnabled
+          ? _sinceLastRefresh.elapsedMilliseconds >=
+              refreshInterval.inMilliseconds
+          : elapsedMs >= nextRefreshAtMs;
+      if (!dueForRefresh) return false;
+
+      final refreshed = await refreshSettings();
+      _sinceLastRefresh
+        ..reset()
+        ..start();
+      nextRefreshAtMs =
+          stopwatch.elapsedMilliseconds + refreshInterval.inMilliseconds;
+      if (refreshed != settings) {
+        final previous = settings;
+        final wasBatchMode = batchMode;
+        settings = refreshed;
+        if (batchMode &&
+            (!settings.batchPauseEnabled || settings.turboEnabled)) {
+          batchMode = false;
+        }
+        final relevantDurationChanged = batchMode
+            ? previous.batchPauseMinMs != settings.batchPauseMinMs ||
+                previous.batchPauseMaxMs != settings.batchPauseMaxMs
+            : previous.minDelayMs != settings.minDelayMs ||
+                previous.maxDelayMs != settings.maxDelayMs;
+        // Un simple basculement du turbo doit recalculer la cible même si les
+        // durées affichées n'ont pas bougé, sinon l'attente en cours irait
+        // jusqu'à son terme.
+        if (wasBatchMode != batchMode ||
+            relevantDurationChanged ||
+            previous.turboEnabled != settings.turboEnabled) {
+          targetMs = pickTargetMs();
+        }
+        if (stopwatch.elapsedMilliseconds >= targetMs) return true;
+      }
+      return false;
+    }
+
+    // Une consultation AVANT la boucle. En turbo la cible vaut fréquemment 0
+    // (l'envoi et le compte rendu ont déjà consommé toute la seconde) : le
+    // corps de la boucle, qui héberge le rafraîchissement, ne s'exécuterait
+    // alors jamais et l'angle mort que `_sinceLastRefresh` avait fermé se
+    // rouvrirait — couper le turbo ne serait plus vu qu'au lot suivant, jusqu'à
+    // 30 SMS plus tard.
+    // HORS TURBO cet appel ne peut pas déclencher de consultation anticipée :
+    // l'échéance vaut `elapsedMs >= nextRefreshAtMs`, or le chronomètre vient
+    // de démarrer (0 ms) et `nextRefreshAtMs` vaut l'intervalle complet. Les
+    // attentes ordinaires se rafraîchissent donc aux mêmes instants qu'avant.
+    final stopBeforeLoop = await maybeRefresh(stopwatch.elapsedMilliseconds);
+
+    while (!stopBeforeLoop && stopwatch.elapsedMilliseconds < targetMs) {
       if (shouldInterrupt != null && await shouldInterrupt()) {
         stopwatch.stop();
         return LivePacingWaitResult(
@@ -376,29 +529,7 @@ class AppSettings {
         );
       }
 
-      final elapsedMs = stopwatch.elapsedMilliseconds;
-      if (elapsedMs >= nextRefreshAtMs) {
-        final refreshed = await refreshSettings();
-        nextRefreshAtMs =
-            stopwatch.elapsedMilliseconds + refreshInterval.inMilliseconds;
-        if (refreshed != settings) {
-          final previous = settings;
-          final wasBatchMode = batchMode;
-          settings = refreshed;
-          if (batchMode && !settings.batchPauseEnabled) {
-            batchMode = false;
-          }
-          final relevantDurationChanged = batchMode
-              ? previous.batchPauseMinMs != settings.batchPauseMinMs ||
-                  previous.batchPauseMaxMs != settings.batchPauseMaxMs
-              : previous.minDelayMs != settings.minDelayMs ||
-                  previous.maxDelayMs != settings.maxDelayMs;
-          if (wasBatchMode != batchMode || relevantDurationChanged) {
-            targetMs = pickTargetMs();
-          }
-          if (stopwatch.elapsedMilliseconds >= targetMs) break;
-        }
-      }
+      if (await maybeRefresh(stopwatch.elapsedMilliseconds)) break;
 
       final remainingMs = targetMs - stopwatch.elapsedMilliseconds;
       if (remainingMs <= 0) break;
@@ -433,7 +564,8 @@ class AppSettings {
           .from('user_settings')
           .select('message_delay_seconds, message_delay_max_seconds, '
               'batch_pause_enabled, batch_pause_count, '
-              'batch_pause_min_seconds, batch_pause_max_seconds')
+              'batch_pause_min_seconds, batch_pause_max_seconds, '
+              'turbo_mode_enabled')
           .eq('user_id', user.id)
           .maybeSingle();
       if (row == null) return null;
@@ -459,6 +591,9 @@ class AppSettings {
     try {
       final user = client.auth.currentUser;
       if (user == null) return;
+      // Turbo actif : le délai local est borné à 5 s, le renvoyer écraserait le
+      // choix fait sur le tableau de bord.
+      if (await getTurboEnabled()) return;
       final seconds = (ms / 1000).round().clamp(0, 120);
       final maxMs = await getSmsDelayMaxMs();
       final maxSeconds = (maxMs / 1000).round().clamp(0, 120);
@@ -481,6 +616,9 @@ class AppSettings {
     try {
       final user = client.auth.currentUser;
       if (user == null) return;
+      // Turbo actif : la pause par lot est neutralisée, la réécrire remettrait
+      // `batch_pause_enabled` à true et annulerait le turbo.
+      if (await getTurboEnabled()) return;
       final enabled = await getBatchPauseEnabled();
       final count = await getBatchPauseCount();
       final minMs = await getBatchPauseMinMs();
@@ -492,6 +630,24 @@ class AppSettings {
           'batch_pause_count': count,
           'batch_pause_min_seconds': (minMs / 1000).round().clamp(0, 1800),
           'batch_pause_max_seconds': (maxMs / 1000).round().clamp(0, 1800),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        onConflict: 'user_id',
+      );
+    } catch (_) {}
+  }
+
+  /// Publie l'état du mode turbo vers le tableau de bord.
+  /// Non bloquant : ignore toute erreur (réseau / RLS).
+  static Future<void> pushTurboToSupabase(
+      SupabaseClient client, bool enabled) async {
+    try {
+      final user = client.auth.currentUser;
+      if (user == null) return;
+      await client.from('user_settings').upsert(
+        {
+          'user_id': user.id,
+          'turbo_mode_enabled': enabled,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         },
         onConflict: 'user_id',

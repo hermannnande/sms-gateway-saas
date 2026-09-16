@@ -32,8 +32,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'device_token requis', messages: [], count: 0 }, { status: 400 })
     }
 
-    // Tracking (non-bloquant)
-    try {
+    // Tracking : démarré sans await pour s'exécuter en parallèle de l'appel amont.
+    // Sa latence se cache ainsi dans celle du fetch au lieu de s'y ajouter.
+    // Les erreurs sont avalées : le tracking ne doit jamais faire échouer la requête.
+    const trackingPromise = (async () => {
       const service = createServiceClient()
       const tokenHash = sha256Hex(device_token)
       const { data: device } = await service
@@ -49,7 +51,7 @@ export async function POST(req: Request) {
         device_id: device?.id ?? null,
         meta: { token_hash: tokenHash, limit, sim_subscription_id },
       })
-    } catch (_) {}
+    })().catch(() => {})
 
     const { url, anonKey } = getSupabaseEnv()
     const upstream = await fetch(`${url}/functions/v1/claim_messages`, {
@@ -63,6 +65,13 @@ export async function POST(req: Request) {
     })
 
     const text = await upstream.text()
+
+    // On attend le tracking avant de répondre : sur Vercel une promesse flottante
+    // peut être tuée dès le retour de la réponse, ce qui perdrait silencieusement
+    // la ligne analytics. À ce stade elle est déjà terminée dans la quasi-totalité
+    // des cas, donc l'attente est gratuite.
+    await trackingPromise
+
     const headers = { 'Cache-Control': 'no-store' }
     try {
       const json = text ? JSON.parse(text) : {}

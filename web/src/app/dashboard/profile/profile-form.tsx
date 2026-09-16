@@ -15,6 +15,7 @@ import {
   CheckSquare,
   Radio,
   Zap,
+  AlertTriangle,
   QrCode,
 } from 'lucide-react'
 import QRCode from 'qrcode'
@@ -26,6 +27,7 @@ type UserSettings = {
   language?: string
   message_delay_seconds?: number
   message_delay_max_seconds?: number | null
+  turbo_mode_enabled?: boolean
   batch_pause_enabled?: boolean
   batch_pause_count?: number
   batch_pause_min_seconds?: number
@@ -62,6 +64,9 @@ export function ProfileForm({
   // Message settings
   const [messageDelay, setMessageDelay] = useState(Math.max(5, userSettings?.message_delay_seconds ?? 5))
   const [messageDelayMax, setMessageDelayMax] = useState(Math.max(5, userSettings?.message_delay_max_seconds ?? 7))
+
+  // Mode Turbo : supprime toute temporisation (1 SMS par seconde, sans marge ni pause de lot)
+  const [turboEnabled, setTurboEnabled] = useState(userSettings?.turbo_mode_enabled ?? false)
 
   // Pause de régulation PAR LOT (par défaut 30-45s toutes les 10 SMS)
   const [batchPauseEnabled, setBatchPauseEnabled] = useState(userSettings?.batch_pause_enabled ?? true)
@@ -137,6 +142,7 @@ export function ProfileForm({
           message_delay_max_seconds: messageDelayMax > messageDelay
             ? messageDelayMax
             : Math.min(messageDelay + 2, 120),
+          turbo_mode_enabled: turboEnabled,
           batch_pause_enabled: batchPauseEnabled,
           batch_pause_count: batchPauseCount,
           batch_pause_min_seconds: batchPauseMin,
@@ -242,8 +248,19 @@ export function ProfileForm({
               <span className="text-muted-foreground">Langue: <span className="font-medium text-foreground">{language === 'fr' ? 'Français' : language}</span></span>
             </div>
             <div className="flex items-center gap-3 text-sm">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <span className="text-muted-foreground">Délai SMS: <span className="font-medium text-foreground">{messageDelay}s</span></span>
+              {turboEnabled ? (
+                <Zap className="h-4 w-4 text-amber-600" />
+              ) : (
+                <Clock className="h-4 w-4 text-muted-foreground" />
+              )}
+              <span className="text-muted-foreground">
+                Délai SMS:{' '}
+                {turboEnabled ? (
+                  <span className="font-medium text-amber-600">Turbo — 1 s</span>
+                ) : (
+                  <span className="font-medium text-foreground">{messageDelay}s</span>
+                )}
+              </span>
             </div>
           </div>
         </div>
@@ -415,6 +432,56 @@ export function ProfileForm({
               <h3 className="font-semibold text-lg">Paramètres des messages</h3>
             </div>
             <div className="p-6 space-y-5">
+              {/* Mode Turbo : supprime toute temporisation entre les SMS */}
+              <div
+                className={`rounded-xl border-2 p-4 transition ${
+                  turboEnabled
+                    ? 'border-amber-500 bg-amber-50 dark:border-amber-500 dark:bg-amber-950/30'
+                    : 'border-amber-300/70 bg-amber-50/40 dark:border-amber-900/60 dark:bg-amber-950/10'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    id="turboEnabled"
+                    checked={turboEnabled}
+                    onChange={(e) => setTurboEnabled(e.target.checked)}
+                    className="mt-1 w-5 h-5 rounded accent-amber-600"
+                  />
+                  <div className="flex-1">
+                    <label
+                      htmlFor="turboEnabled"
+                      className="text-sm font-bold cursor-pointer flex items-center gap-2 text-amber-900 dark:text-amber-100"
+                    >
+                      <Zap className="h-4 w-4" />
+                      Turbo — envoi sans temporisation
+                    </label>
+                    <p className="text-xs mt-1 text-amber-900/90 dark:text-amber-100/90">
+                      Chaque SMS part environ <b>une fois par seconde</b>, sans marge aléatoire et sans
+                      pause de régulation par lot. C’est la cadence maximale du gateway : il n’existe rien
+                      de plus rapide côté application.
+                    </p>
+                    <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-100">
+                      <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                      <span>
+                        <b>Risque réel de suspension de la ligne.</b> Envoyer en rafale continue depuis une
+                        SIM grand public est exactement ce qui pousse les opérateurs (Orange, MTN) à
+                        suspendre le numéro. Ce mode retire les protections mises en place pour l’éviter.
+                        Le consentement des destinataires et la gestion du <b>STOP</b> restent obligatoires.
+                      </span>
+                    </div>
+                    <p className="text-xs mt-3 text-amber-900/80 dark:text-amber-100/80">
+                      Vos réglages de délai et de pause ci-dessous sont <b>conservés</b> : ils reviennent
+                      tels quels dès que vous désactivez le Turbo.
+                    </p>
+                    <p className="text-xs mt-1 text-amber-900/80 dark:text-amber-100/80">
+                      Le mode s’applique après un clic sur <b>Enregistrer tous les paramètres</b> et atteint
+                      les appareils connectés en quelques secondes, même en pleine campagne.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-100">
                 <p className="font-medium">Synchronisation en direct avec l’application Android</p>
                 <p className="mt-1 text-xs opacity-90">
@@ -424,7 +491,17 @@ export function ProfileForm({
                 </p>
               </div>
 
-              <div className="space-y-4 bg-muted/20 border border-border rounded-lg p-4">
+              <div
+                aria-disabled={turboEnabled}
+                className={`space-y-4 bg-muted/20 border border-border rounded-lg p-4 ${
+                  turboEnabled ? 'opacity-50 pointer-events-none' : ''
+                }`}
+              >
+                {turboEnabled && (
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                    Turbo actif : ces valeurs sont ignorées, mais conservées pour le retour au mode normal.
+                  </p>
+                )}
                 <div>
                   <label className="block text-sm font-medium mb-2">
                     Délai minimum entre les messages (5-120 secondes)
@@ -435,6 +512,7 @@ export function ProfileForm({
                       min="5"
                       max="120"
                       value={messageDelay}
+                      disabled={turboEnabled}
                       onChange={(e) => {
                         const v = parseInt(e.target.value)
                         setMessageDelay(v)
@@ -458,6 +536,7 @@ export function ProfileForm({
                       min="0"
                       max="120"
                       value={messageDelayMax}
+                      disabled={turboEnabled}
                       onChange={(e) => setMessageDelayMax(parseInt(e.target.value))}
                       className="flex-1"
                     />
@@ -476,12 +555,23 @@ export function ProfileForm({
               </div>
 
               {/* Pause anti-spam PAR LOT */}
-              <div className="space-y-4 bg-muted/20 border border-border rounded-lg p-4">
+              <div
+                aria-disabled={turboEnabled}
+                className={`space-y-4 bg-muted/20 border border-border rounded-lg p-4 ${
+                  turboEnabled ? 'opacity-50 pointer-events-none' : ''
+                }`}
+              >
+                {turboEnabled && (
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                    Turbo actif : aucune pause de lot n’est appliquée. Ce réglage est conservé.
+                  </p>
+                )}
                 <div className="flex items-start gap-3">
                   <input
                     type="checkbox"
                     id="batchPauseEnabled"
                     checked={batchPauseEnabled}
+                    disabled={turboEnabled}
                     onChange={(e) => setBatchPauseEnabled(e.target.checked)}
                     className="mt-1 w-4 h-4 rounded accent-primary"
                   />
@@ -508,6 +598,7 @@ export function ProfileForm({
                           min="1"
                           max="100"
                           value={batchPauseCount}
+                          disabled={turboEnabled}
                           onChange={(e) => setBatchPauseCount(parseInt(e.target.value))}
                           className="flex-1"
                         />
@@ -525,6 +616,7 @@ export function ProfileForm({
                           min="30"
                           max="300"
                           value={batchPauseMin}
+                          disabled={turboEnabled}
                           onChange={(e) => {
                             const v = parseInt(e.target.value)
                             setBatchPauseMin(v)
@@ -546,6 +638,7 @@ export function ProfileForm({
                           min="30"
                           max="300"
                           value={batchPauseMax}
+                          disabled={turboEnabled}
                           onChange={(e) => setBatchPauseMax(parseInt(e.target.value))}
                           className="flex-1"
                         />

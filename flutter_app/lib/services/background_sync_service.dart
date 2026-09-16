@@ -13,6 +13,7 @@ import 'package:smsgateway_flutter/models/message.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
+import 'package:smsgateway_flutter/services/pending_message_reports.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
@@ -36,6 +37,7 @@ class BackgroundSyncService {
 
   static Future<String?> getActiveCampaignId() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     final v = prefs.getString(_activeCampaignIdKey);
     return (v == null || v.trim().isEmpty) ? null : v.trim();
   }
@@ -335,25 +337,26 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     );
   }
 
-  Future<void> _updateStatus(String deviceToken, Message msg, bool success, String? error) async {
+  Future<Map<String, dynamic>?> _updateStatus(String deviceToken, Message msg, bool success, String? error) async {
     const maxAttempts = 3;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await _postJson(
-          _proxyUri('/api/mobile/update-message-status'),
-          {
+        return await PendingMessageReports.submit(
+          deviceToken: deviceToken,
+          body: {
             'device_token': deviceToken,
             'message_id': msg.id,
             'status': success ? 'sent' : 'failed',
             'error': error,
           },
+          post: (body) => _postJson(_proxyUri('/api/mobile/update-message-status'), body),
         );
-        return;
       } catch (_) {
-        if (attempt >= maxAttempts) return;
+        if (attempt >= maxAttempts) return null;
         await Future.delayed(Duration(milliseconds: 350 * attempt));
       }
     }
+    return null;
   }
 
   String _progressBar(int done, int total) {
@@ -496,6 +499,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       }
 
       // Appareil jumelé → envoi auto actif (sauf si l'utilisateur a désactivé le service).
+      await PendingMessageReports.flush(
+        deviceToken: token,
+        post: (body) => _postJson(_proxyUri('/api/mobile/update-message-status'), body),
+        onReport: (report) {
+          if (report['campaign'] is Map) FlutterForegroundTask.sendDataToMain({
+            'type': 'campaign_progress', 'device_token': token,
+            'campaign': report['campaign'],
+          });
+        },
+      );
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.reload();
@@ -579,12 +592,6 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
         batchesProcessed++;
 
-        await FlutterForegroundTask.updateService(
-          notificationTitle: 'SMSenvoie',
-          notificationText: '\ud83d\udd04 ${messages.length} msg r\u00e9cup\u00e9r\u00e9s, envoi imminent...',
-          notificationButtons: _activeButtons(),
-        );
-
         final sims = await _getSimCards();
         // Slot SIM par campagne (fallback si le message n'a pas de consigne SIM)
         final simSlotsByCampaign = campaignSimSlots(payload);
@@ -604,6 +611,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       final batchTotal = messages.length;
       var attempted = 0;
       var failed = 0;
+      var sentInBatch = 0;
       String? lastErr;
       // Source de vérité : /dashboard/profile. Ce premier chargement est
       // complété par un rafraîchissement toutes les 2 secondes pendant les
@@ -617,97 +625,104 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       // Variation automatique du texte (anti-signature opérateur).
       final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
 
-      final campaignIds = messages.map((m) => m.campaignId).whereType<String>().toSet();
-      final knownCampaignIds = campaignIds.where(campaigns.containsKey).toList();
-      final isMultiCampaign = knownCampaignIds.length > 1;
-      final activeCampaignId = knownCampaignIds.length == 1 ? knownCampaignIds.first : null;
-
-      if (activeCampaignId != null) {
-        await BackgroundSyncService.setActiveCampaignId(activeCampaignId);
-        _activeCampaignId = activeCampaignId;
-      } else if (knownCampaignIds.isNotEmpty) {
-        await BackgroundSyncService.setActiveCampaignId(knownCampaignIds.first);
-        _activeCampaignId = knownCampaignIds.first;
-      }
-
-      final campaignLabel = () {
-        if (activeCampaignId != null) {
-          final name = campaigns[activeCampaignId]?['name']?.toString().trim();
-          return (name == null || name.isEmpty) ? 'Campagne' : name;
-        }
-        if (isMultiCampaign) return 'Multi-campagnes';
-        return 'Campagne';
-      }();
-
-      int baseSentSum = 0;
+      // Show the same campaign as the app, including when one claim contains
+      // messages from several campaigns. Never mix their denominators.
+      String? displayedCampaignId;
+      String campaignLabel = 'Campagne';
       int totalSum = 0;
-      if (knownCampaignIds.isNotEmpty) {
-        for (final id in knownCampaignIds) {
-          final c = campaigns[id];
-          baseSentSum += _asInt(c?['sent_count'], fallback: 0);
-          totalSum += _asInt(c?['total_count'], fallback: 0);
+      bool hasCampaignTotals = false;
+      int sentNow() => displayedCampaignId == null ? 0
+          : _asInt(campaigns[displayedCampaignId]?['sent_count']);
+      void acceptReport(Message msg, Map<String, dynamic>? report, bool sent) {
+        final cid = msg.campaignId;
+        final snapshot = report?['campaign'];
+        if (snapshot is Map && cid != null) {
+          campaigns[cid] = Map<String, dynamic>.from(snapshot);
+          totalSum = _asInt(campaigns[displayedCampaignId]?['total_count']);
+          hasCampaignTotals = totalSum > 0;
+        } else if (sent && cid != null && campaigns.containsKey(cid)) {
+          // Compatibility with servers not yet returning a campaign snapshot.
+          campaigns[cid]!['sent_count'] = _asInt(campaigns[cid]!['sent_count']) + 1;
         }
-      }
-      final hasCampaignTotals = knownCampaignIds.isNotEmpty && totalSum > 0;
-      final sentDeltaByCampaign = <String, int>{};
-
-      int sentNow() {
-        if (!hasCampaignTotals) return 0;
-        int deltaSum = 0;
-        for (final v in sentDeltaByCampaign.values) {
-          deltaSum += v;
+        if (cid != null && campaigns.containsKey(cid)) {
+          FlutterForegroundTask.sendDataToMain({
+            'type': 'campaign_progress',
+            'device_token': token,
+            'campaign': campaigns[cid],
+          });
         }
-        return baseSentSum + deltaSum;
       }
 
       for (final msg in messages) {
+        // Cadence turbo mesurée d'envoi à envoi : ce chronomètre couvre tout le
+        // coût du message (envoi natif, rapport de statut, notifications) pour
+        // que la seconde déjà consommée ne soit pas payée une deuxième fois
+        // dans l'attente qui suit. Un Stopwatch n'a rien à libérer : le `break`
+        // de la pause et le `return` du rapport en échec ne fuient pas.
+        final messageStopwatch = Stopwatch()..start();
         if (await _isPaused()) break;
-
-        attempted++;
-
-        if (hasCampaignTotals) {
-          final s = sentNow();
-          final remain = max(totalSum - s, 0);
-          await FlutterForegroundTask.updateService(
-            notificationTitle: 'SMSenvoie',
-            notificationText: '\ud83d\udce4 Envoi... \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 reste $remain',
-            notificationButtons: _activeButtons(),
-          );
-        } else {
-          final remain = batchTotal - attempted;
-          await FlutterForegroundTask.updateService(
-            notificationTitle: 'Envoi SMS en cours',
-            notificationText: '\ud83d\udce4 Envoi... \u2022 ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal \u2022 reste $remain',
-            notificationButtons: _activeButtons(),
-          );
+        displayedCampaignId = msg.campaignId;
+        final currentCampaign = campaigns[displayedCampaignId];
+        campaignLabel = currentCampaign?['name']?.toString() ?? 'Campagne';
+        totalSum = _asInt(currentCampaign?['total_count']);
+        hasCampaignTotals = totalSum > 0;
+        if (displayedCampaignId != _activeCampaignId) {
+          _activeCampaignId = displayedCampaignId;
+          await BackgroundSyncService.setActiveCampaignId(displayedCampaignId);
         }
 
+        // Compromis turbo : la notification AVANT l'envoi est supprimée.
+        // Chaque updateService est un aller-retour natif attendu qui grignote
+        // le budget d'une seconde, et Android limite de toute façon la
+        // fréquence des notifications à ce rythme. Celle qui suit le rapport
+        // de statut est conservée : le compteur avance donc toujours après
+        // chaque SMS, pour moitié moins de notifications postées.
+        if (!pacing.turboEnabled) {
+          if (hasCampaignTotals) {
+            final s = sentNow();
+            final remain = max(totalSum - s, 0);
+            await FlutterForegroundTask.updateService(
+              notificationTitle: 'SMSenvoie',
+              notificationText: '\ud83d\udce4 $campaignLabel \u2022 ${_progressBar(s, totalSum)} $s/$totalSum \u2022 reste $remain',
+              notificationButtons: _activeButtons(),
+            );
+          } else {
+            final remain = batchTotal - sentInBatch;
+            await FlutterForegroundTask.updateService(
+              notificationTitle: 'Envoi SMS en cours',
+              notificationText: '\ud83d\udce4 Lot en cours \u2022 ${_progressBar(sentInBatch, batchTotal)} $sentInBatch/$batchTotal envoyés \u2022 reste $remain',
+              notificationButtons: _activeButtons(),
+            );
+          }
+        }
+
+        bool sentSuccessfully = false;
+        String? sendError;
         try {
           final routing = resolveSimRouting(
             msg,
             sims,
             campaignSlotFallback: slotFallbackFor(msg),
           );
-          await _channel.invokeMethod('sendSms', {
+          final nativeResult = await _channel.invokeMethod('sendSms', {
             'to': msg.to,
             'body': AutoVary.apply(msg.content, enabled: autoVaryEnabled, rng: _rng),
             'subscriptionId': routing.subscriptionId,
             'simSlotIndex': routing.simSlotIndex,
           });
-          await _updateStatus(token, msg, true, null);
-          consecutiveSendFailures = 0;
-
-          final cid = msg.campaignId;
-          if (cid != null && campaigns.containsKey(cid)) {
-            sentDeltaByCampaign[cid] = (sentDeltaByCampaign[cid] ?? 0) + 1;
+          if (nativeResult != true) {
+            throw PlatformException(code: 'SMS_SEND_FAILED', message: 'Envoi non confirmé');
           }
+          sentSuccessfully = true;
+          sentInBatch++;
+          consecutiveSendFailures = 0;
         } on PlatformException catch (e) {
           // Le code natif renvoie un code stable (SMS_PERMISSION, SMS_TIMEOUT,
           // SMS_SEND_FAILED, etc.) et un message lisible. On formatte pour que
           // l'erreur stockee en BD soit utile au debug.
           final msg2 = (e.message ?? '').trim();
           final formatted = msg2.isEmpty ? e.code : '[${e.code}] $msg2';
-          await _updateStatus(token, msg, false, formatted);
+          sendError = formatted;
           failed++;
           lastErr = formatted;
           consecutiveSendFailures++;
@@ -715,11 +730,24 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             networkRejectionCount++;
           }
         } catch (e) {
-          await _updateStatus(token, msg, false, e.toString());
+          sendError = e.toString();
           failed++;
           lastErr = e.toString();
           consecutiveSendFailures++;
         }
+
+        // Reporting errors must never turn a confirmed send into a failure.
+        final report = await _updateStatus(token, msg, sentSuccessfully, sendError);
+        if (report == null) {
+          await FlutterForegroundTask.updateService(
+            notificationTitle: 'SMSenvoie',
+            notificationText: 'Résultat SMS sauvegardé • synchronisation du compteur en attente',
+            notificationButtons: _activeButtons(),
+          );
+          return; // Next tick retries the saved report before any new claim.
+        }
+        acceptReport(msg, report, sentSuccessfully);
+        attempted++;
 
         if (hasCampaignTotals) {
           final s = sentNow();
@@ -732,12 +760,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             notificationButtons: _activeButtons(),
           );
         } else {
-          final remain = batchTotal - attempted;
+          final remain = batchTotal - sentInBatch;
           await FlutterForegroundTask.updateService(
             notificationTitle: 'Envoi SMS en cours',
             notificationText: failed > 0
-                ? '\u26a0\ufe0f ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal \u2022 err $failed \u2022 reste $remain'
-                : '\u2705 ${_progressBar(attempted, batchTotal)} $attempted/$batchTotal \u2022 reste $remain',
+                ? '\u26a0\ufe0f Lot ${_progressBar(sentInBatch, batchTotal)} $sentInBatch/$batchTotal envoyés \u2022 err $failed \u2022 reste $remain'
+                : '\u2705 Lot ${_progressBar(sentInBatch, batchTotal)} $sentInBatch/$batchTotal envoyés \u2022 reste $remain',
             notificationButtons: _activeButtons(),
           );
         }
@@ -763,6 +791,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
         nextBatchPauseAt ??= AppSettings.pickBatchThreshold(pacing.batchPauseCount);
         final useBatchPause = !isLastInBatch &&
+            // Le mode turbo supprime entierement la pause par lot : cadence
+            // plate d'1 s entre chaque SMS, aucune pause longue intercalee.
+            !pacing.turboEnabled &&
             pacing.batchPauseEnabled &&
             sentSinceBatchPause >= nextBatchPauseAt;
         if (useBatchPause) {
@@ -778,11 +809,15 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             refreshSettings: () => _refreshPacingFromDashboard(token),
             shouldInterrupt: _isPaused,
             onTick: (remainMs, isBatchPause) async {
+              // En turbo le reste est d'une seconde au maximum : un compte a
+              // rebours bloque sur "1s" n'apporte rien et coute un aller-retour
+              // natif supplementaire pris sur le budget du message.
+              if (pacing.turboEnabled && !isBatchPause) return;
               if (isBatchPause) {
               final secsLeft = ((remainMs + 999) / 1000).floor();
               await FlutterForegroundTask.updateService(
                 notificationTitle: 'SMSenvoie',
-                notificationText: '⏸️ Pause de régulation • reprise dans ${secsLeft}s',
+                notificationText: '⏸️ $campaignLabel • ${hasCampaignTotals ? sentNow() : sentInBatch}/${hasCampaignTotals ? totalSum : batchTotal} envoyés • reprise dans ${secsLeft}s',
                 notificationButtons: _activeButtons(),
               );
                 return;
@@ -790,10 +825,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
               if (remainMs >= 1000) {
               final s = hasCampaignTotals ? sentNow() : 0;
               final total = hasCampaignTotals ? totalSum : batchTotal;
-              final progressed = hasCampaignTotals ? s : attempted;
+              final progressed = hasCampaignTotals ? s : sentInBatch;
               final remainText = hasCampaignTotals
                   ? max(totalSum - s, 0).toString()
-                  : (batchTotal - attempted).toString();
+                  : (batchTotal - sentInBatch).toString();
               final secsLeft = ((remainMs + 999) / 1000).floor();
               await FlutterForegroundTask.updateService(
                 notificationTitle: 'SMSenvoie',
@@ -804,6 +839,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
               );
               }
             },
+            alreadyElapsedMs: messageStopwatch.elapsedMilliseconds,
           );
           pacing = waitResult.settings;
           if (previousBatchCount != pacing.batchPauseCount) {

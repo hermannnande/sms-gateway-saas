@@ -8,6 +8,7 @@ import 'package:logger/logger.dart';
 import 'package:http/http.dart' as http;
 import 'package:smsgateway_flutter/config.dart';
 import 'package:smsgateway_flutter/models/message.dart';
+import 'package:smsgateway_flutter/services/pending_message_reports.dart';
 import 'package:supabase/supabase.dart';
 
 class DeviceService {
@@ -168,26 +169,31 @@ class DeviceService {
     });
   }
 
-  Future<void> updateMessageStatus({
+  Future<Map<String, dynamic>?> updateMessageStatus({
     required String deviceToken,
     required Message message,
     required bool success,
     String? error,
   }) async {
     try {
-      await _postProxy('/api/mobile/update-message-status', {
+      return await PendingMessageReports.submit(deviceToken: deviceToken, body: {
         'device_token': deviceToken,
         'message_id': message.id,
         'status': success ? 'sent' : 'failed',
         'error': error,
-      });
-      return;
+      }, post: (body) => _postProxy('/api/mobile/update-message-status', body));
     } catch (e) {
       _logger.w('Proxy update-message-status failed: $e');
-      // Non bloquant: on ne veut pas interrompre l'envoi local si juste le reporting échoue
-      return;
+      // Le résultat reste persisté; l'appelant attend sa synchronisation
+      // avant de réclamer d'autres messages.
+      return null;
     }
   }
+
+  Future<void> flushMessageReports(String token) => PendingMessageReports.flush(
+    deviceToken: token,
+    post: (body) => _postProxy('/api/mobile/update-message-status', body),
+  );
 
   Future<Map<String, dynamic>> sendHeartbeatVerbose({
     required String deviceToken,
@@ -364,4 +370,3 @@ class DeviceService {
     });
   }
 }
-

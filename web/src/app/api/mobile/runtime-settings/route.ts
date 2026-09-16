@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   batch_pause_count: 10,
   batch_pause_min_seconds: 30,
   batch_pause_max_seconds: 45,
+  turbo_mode_enabled: false,
 }
 
 const NO_STORE_HEADERS = {
@@ -71,7 +72,7 @@ export async function POST(req: Request) {
     const { data: settings, error: settingsError } = await service
       .from('user_settings')
       .select(
-        'message_delay_seconds, message_delay_max_seconds, batch_pause_enabled, batch_pause_count, batch_pause_min_seconds, batch_pause_max_seconds, updated_at',
+        'message_delay_seconds, message_delay_max_seconds, batch_pause_enabled, batch_pause_count, batch_pause_min_seconds, batch_pause_max_seconds, turbo_mode_enabled, updated_at',
       )
       .eq('user_id', ownerUserId)
       .maybeSingle()

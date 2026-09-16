@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:logger/logger.dart';
 import 'package:smsgateway_flutter/models/message.dart';
@@ -51,5 +52,26 @@ void main() {
     expect(result.success, isFalse);
     expect(result.code, 'SMS_NETWORK_REJECTED');
     expect(result.error, contains('code Android 112'));
+  });
+
+  test('ne confirme pas un SMS avant le résultat Android', () async {
+    final nativeResult = Completer<bool>();
+    messenger.setMockMethodCallHandler(channel, (_) => nativeResult.future);
+    var finished = false;
+    final sending = SmsSender(Logger()).send(
+      Message(id: 'pending', to: '+2250000000000', content: 'Test'),
+    ).then((result) { finished = true; return result; });
+    await Future<void>.delayed(Duration.zero);
+    expect(finished, isFalse);
+    nativeResult.complete(true);
+    expect((await sending).success, isTrue);
+  });
+
+  test('un retour natif faux ne devient pas un SMS envoyé', () async {
+    messenger.setMockMethodCallHandler(channel, (_) async => false);
+    final result = await SmsSender(Logger()).send(
+      Message(id: 'false', to: '+2250000000000', content: 'Test'),
+    );
+    expect(result.success, isFalse);
   });
 }
