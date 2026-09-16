@@ -1,0 +1,49 @@
+name: Déployer les Edge Functions Supabase
+
+# Déclenchement MANUEL uniquement (onglet Actions -> Run workflow).
+# Volontaire : un déploiement d'edge function touche la production et ne doit
+# pas partir tout seul à chaque push sur main.
+#
+# Pourquoi ce workflow existe : la machine de développement a Smart App Control
+# activé, qui refuse d'exécuter supabase.exe. Le désactiver est irréversible
+# (Windows ne permet pas de le réactiver), donc le CLI tourne ici à la place.
+#
+# Secret requis, à créer dans Settings -> Secrets and variables -> Actions :
+#   SUPABASE_ACCESS_TOKEN  jeton personnel généré sur
+#                          https://supabase.com/dashboard/account/tokens
+
+on:
+  workflow_dispatch:
+    inputs:
+      function:
+        description: "Fonction à déployer (laisser vide pour toutes les déployer)"
+        required: false
+        default: update_message_status
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Déployer la ou les fonctions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          # Passé par l'environnement et jamais interpolé dans le script :
+          # une entrée workflow_dispatch est contrôlable par l'utilisateur et
+          # l'injecter directement ouvrirait une injection de commande.
+          FUNCTION_NAME: ${{ inputs.function }}
+          PROJECT_REF: gamumybcoxxanhjakpde
+        run: |
+          set -euo pipefail
+          if [ -n "$FUNCTION_NAME" ]; then
+            supabase functions deploy "$FUNCTION_NAME" \
+              --project-ref "$PROJECT_REF" --no-verify-jwt
+          else
+            supabase functions deploy \
+              --project-ref "$PROJECT_REF" --no-verify-jwt
+          fi
