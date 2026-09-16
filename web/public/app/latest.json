@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.25+72",
+  "latestVersion": "1.3.27+74",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• RÉGLAGES EN DIRECT : les délais et pauses enregistrés sur le profil sont appliqués automatiquement pendant une campagne active.\n• Une attente déjà en cours est recalculée environ toutes les 2 secondes.\n• Les valeurs restent ajustables depuis smsenvoie.com/dashboard/profile.\n• La rotation facultative et la personnalisation {nom} restent disponibles."
+  "notes": "• NOUVEAU — Mode Turbo : sur smsenvoie.com/dashboard/profile, un interrupteur supprime toute temporisation entre les SMS (environ 1 par seconde, sans marge aléatoire ni pause de régulation par lot).\n• À n'activer qu'en connaissance de cause : envoyer en rafale continue depuis une SIM grand public est ce qui pousse les opérateurs à suspendre la ligne. Le consentement des destinataires et la gestion du STOP restent obligatoires.\n• Vos réglages de délai et de pause sont conservés : ils reviennent tels quels dès que le Turbo est désactivé.\n• Le réglage s'applique en direct, même pendant une campagne déjà lancée.\n• Compteur de campagne fiabilisé : la progression est transmise après chaque SMS, et un résultat non synchronisé est conservé puis rejoué au lieu d'être perdu."
 }
