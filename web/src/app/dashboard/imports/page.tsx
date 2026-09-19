@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { formatFileSize } from '@/lib/campaign-imports'
@@ -5,7 +6,10 @@ import { ImportsList } from './imports-list'
 
 export const dynamic = 'force-dynamic'
 
-export default async function ImportsPage() {
+export default async function ImportsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const query = await searchParams
+  const pageNumber = Math.max(1, Math.min(100000, Number.parseInt(query.page ?? '1', 10) || 1))
+  const pageSize = 50
   const supabase = await createClient()
 
   const {
@@ -22,14 +26,14 @@ export default async function ImportsPage() {
     .eq('user_id', user.id)
     .single()
 
-  const { data: files, error: filesError } = orgMember
+  const { data: files, error: filesError, count } = orgMember
     ? await supabase
         .from('campaign_import_files')
-        .select('*, campaigns(name, status)')
+        .select('*, campaigns(name, status)', { count: 'exact' })
         .eq('org_id', orgMember.org_id)
         .order('created_at', { ascending: false })
-        .limit(500)
-    : { data: [], error: null }
+        .range((pageNumber - 1) * pageSize, pageNumber * pageSize - 1)
+    : { data: [], error: null, count: 0 }
 
   const rows = files ?? []
   const totalBytes = rows.reduce((sum, f) => sum + (f.size_bytes || 0), 0)
@@ -54,7 +58,7 @@ export default async function ImportsPage() {
             </p>
             <span className="text-2xl opacity-60">📂</span>
           </div>
-          <p className="text-3xl font-semibold">{rows.length}</p>
+          <p className="text-3xl font-semibold">{count ?? rows.length}</p>
           <p className="text-xs text-muted-foreground mt-1">Conservés</p>
         </div>
 
@@ -66,7 +70,7 @@ export default async function ImportsPage() {
             <span className="text-2xl opacity-60">👥</span>
           </div>
           <p className="text-3xl font-semibold">{totalContacts.toLocaleString('fr-FR')}</p>
-          <p className="text-xs text-muted-foreground mt-1">Numéros valides importés</p>
+          <p className="text-xs text-muted-foreground mt-1">Numéros valides sur cette page</p>
         </div>
 
         <div className="bg-card rounded-lg p-5 border border-border shadow-sm">
@@ -77,7 +81,7 @@ export default async function ImportsPage() {
             <span className="text-2xl opacity-60">💾</span>
           </div>
           <p className="text-3xl font-semibold">{formatFileSize(totalBytes)}</p>
-          <p className="text-xs text-muted-foreground mt-1">Total stocké</p>
+          <p className="text-xs text-muted-foreground mt-1">Fichiers sur cette page</p>
         </div>
       </div>
 
@@ -85,17 +89,16 @@ export default async function ImportsPage() {
         <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-4 text-sm">
           <p className="font-semibold">Erreur de chargement des fichiers importés</p>
           <p className="mt-1">{filesError.message}</p>
-          <p className="mt-2 text-xs">
-            Si l&apos;erreur mentionne une table absente, la migration{' '}
-            <code className="bg-red-100 px-1 rounded">
-              20260919140000_campaign_import_files.sql
-            </code>{' '}
-            n&apos;a pas encore été appliquée.
-          </p>
+
         </div>
       )}
 
-      <ImportsList files={rows} />
+      <ImportsList key={pageNumber} files={rows} />
+      <nav className="flex items-center justify-between text-sm" aria-label="Pages des fichiers importés">
+        {pageNumber > 1 ? <Link href={`/dashboard/imports?page=${pageNumber - 1}`}>← Précédent</Link> : <span />}
+        <span>Page {pageNumber} · {count ?? 0} fichiers</span>
+        {pageNumber * pageSize < (count ?? 0) ? <Link href={`/dashboard/imports?page=${pageNumber + 1}`}>Suivant →</Link> : <span />}
+      </nav>
     </div>
   )
 }

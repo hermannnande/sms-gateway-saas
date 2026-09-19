@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { parseCSV, parseTXT, parseExcel, normalizePhoneCI } from '@/lib/phone'
+import { archiveCampaignImportFile, MAX_IMPORT_FILE_BYTES } from '@/lib/campaign-imports'
 import { Upload, FileText, Table, X, CheckCircle, AlertTriangle, FileSpreadsheet } from 'lucide-react'
 
 type ParsedContact = { phone: string; name?: string }
@@ -37,6 +38,7 @@ export function ImportContactsModal({ onClose }: { onClose: () => void }) {
   const router = useRouter()
 
   const processFile = useCallback(async (selectedFile: File) => {
+    if (selectedFile.size > MAX_IMPORT_FILE_BYTES) { setError('Fichier trop volumineux (25 Mo maximum).'); return }
     const type = getFileType(selectedFile)
     if (!type) {
       setError('Format non supporté. Utilisez CSV, TXT, XLS ou XLSX.')
@@ -126,6 +128,12 @@ export function ImportContactsModal({ onClose }: { onClose: () => void }) {
       if (contactsToInsert.length === 0) {
         throw new Error('Aucun numéro valide trouvé dans le fichier')
       }
+
+      await archiveCampaignImportFile(supabase, {
+        file, orgId: orgMember.org_id, campaignId: null,
+        campaignName: 'Import du carnet de contacts', uploadedBy: userData.user.id,
+        contactCount: contactsToInsert.length, invalidCount: skipped,
+      })
 
       // Batch insert (Supabase limit ~1000 per request)
       const batchSize = 500

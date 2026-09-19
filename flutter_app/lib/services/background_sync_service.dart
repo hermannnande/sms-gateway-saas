@@ -19,6 +19,8 @@ import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
 class BackgroundSyncService {
   static const int serviceId = 701;
+  static bool _initialized = false;
+  static Future<void>? _starting;
   static const String _pausedKey = 'bg_sync_paused';
   static const String _enabledKey = 'bg_sync_enabled';
   static const String _fgLockKey = 'bg_sync_fg_lock';
@@ -43,6 +45,8 @@ class BackgroundSyncService {
   }
 
   static Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
     FlutterForegroundTask.initCommunicationPort();
 
       FlutterForegroundTask.init(
@@ -65,6 +69,8 @@ class BackgroundSyncService {
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
         allowWifiLock: true,
+        allowAutoRestart: true,
+        stopWithTask: false,
       ),
     );
   }
@@ -78,6 +84,7 @@ class BackgroundSyncService {
 
   static Future<bool> isEnabled() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     final explicit = prefs.getBool(_enabledKey);
     if (explicit != null) return explicit;
     final token = prefs.getString(TokenStorage.legacyKey)?.trim();
@@ -130,7 +137,10 @@ class BackgroundSyncService {
     if (!(prefs.getBool(_fgLockKey) ?? false)) return false;
 
     final lockedAt = prefs.getInt(_fgLockAtKey);
-    if (lockedAt == null) return true;
+    if (lockedAt == null) {
+      await setForegroundLock(false);
+      return false;
+    }
 
     final age = DateTime.now().millisecondsSinceEpoch - lockedAt;
     if (age > _fgLockMaxAge.inMilliseconds) {
@@ -156,8 +166,7 @@ class BackgroundSyncService {
     final owner = prefs.getString(TokenStorage.ownerKey)?.trim();
     if (token == null || token.isEmpty || owner == null || owner.isEmpty) return;
 
-    await setEnabled(true);
-    await setPaused(false);
+    if (!await isEnabled()) return;
     // NOTE: ne PAS effacer le verrou foreground ici. Cette methode est appelee
     // toutes les 10 s par l'UI; effacer le verrou pendant une sync manuelle
     // provoquait des envois concurrents foreground + background.
@@ -177,36 +186,17 @@ class BackgroundSyncService {
   }
 
   static Future<void> start() async {
-    try {
-      final s = await Permission.notification.status;
-      if (s.isPermanentlyDenied) {
-        await openAppSettings();
-        return;
-      }
-      if (!s.isGranted) {
-        await Permission.notification.request();
-      }
-    } catch (_) {}
+    await (_starting ??= _start().whenComplete(() => _starting = null));
+  }
 
-    final permission = await FlutterForegroundTask.checkNotificationPermission();
-    if (permission != NotificationPermission.granted) {
-      await FlutterForegroundTask.requestNotificationPermission();
-    }
-
-    try {
-      final b = await Permission.ignoreBatteryOptimizations.status;
-      if (b.isPermanentlyDenied) {
-        await openAppSettings();
-      }
-      if (!b.isGranted) {
-        await Permission.ignoreBatteryOptimizations.request();
-      }
-    } catch (_) {}
-
+  static Future<void> _start() async {
+    await init();
+    if (!await isEnabled()) return;
     if (await FlutterForegroundTask.isRunningService) return;
 
-    await FlutterForegroundTask.startService(
+    final result = await FlutterForegroundTask.startService(
       serviceId: serviceId,
+      serviceTypes: const [ForegroundServiceTypes.remoteMessaging],
       notificationTitle: 'SMSenvoie',
       notificationText: '\u2705 Actif (en attente)',
       notificationButtons: const [
@@ -215,6 +205,7 @@ class BackgroundSyncService {
       ],
       callback: startCallback,
     );
+    if (result is ServiceRequestFailure) throw result.error;
   }
 
   static Future<void> stop() async {
@@ -231,6 +222,39 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   int _tickCount = 0;
   bool _updateAvailable = false;
   Timer? _watchdog;
+  Timer? _heartbeatTimer;
+  bool _heartbeatBusy = false;
+  bool _destroyed = false;
+  int _networkFailures = 0;
+  DateTime? _retryAfter;
+  int _controlRevision = 0;
+  int _sendingRevision = 0;
+  String? _serverCampaignId;
+  String? _serverCampaignStatus;
+
+  Future<bool> _canSend(String token) async => !_destroyed &&
+      _sendingRevision == _controlRevision &&
+      await BackgroundSyncService.isEnabled() &&
+      !await _isPaused() && await _loadDeviceToken() == token;
+
+  Future<bool> _canSendMessage(String token) async => await _canSend(token) &&
+      (_activeCampaignId == null || _serverCampaignId != _activeCampaignId ||
+       _serverCampaignStatus == 'running' || _serverCampaignStatus == 'queued');
+
+  Future<void> _heartbeat() async {
+    if (_heartbeatBusy || _destroyed) return;
+    _heartbeatBusy = true;
+    try {
+      final token = await _loadDeviceToken();
+      if (token == null || !await BackgroundSyncService.isEnabled()) return;
+      final prefs = await SharedPreferences.getInstance();
+      await _postJson(_proxyUri('/api/mobile/heartbeat'), {
+        'device_token': token, 'app_version': prefs.getString('app_current_version'),
+      });
+    } catch (_) {
+      // A network error is not a revocation of the device token.
+    } finally { _heartbeatBusy = false; }
+  }
 
   Uri _proxyUri(String path) => Uri.parse('${AppConfig.webApiBaseUrl}$path');
 
@@ -266,11 +290,16 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             body: jsonEncode({
               'device_token': deviceToken,
               'owner_user_id': ownerUserId,
+              'campaign_id': _activeCampaignId,
             }),
           )
           .timeout(const Duration(seconds: 4));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = jsonDecode(response.body.isEmpty ? '{}' : response.body);
+        if (decoded is Map && decoded['campaign'] is Map) {
+          _serverCampaignId = decoded['campaign']['id']?.toString();
+          _serverCampaignStatus = decoded['campaign']['status']?.toString();
+        }
         if (decoded is Map && decoded['settings'] is Map) {
           await AppSettings.applyRemoteSettings(
             Map<String, dynamic>.from(decoded['settings'] as Map),
@@ -421,6 +450,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       notificationText: '\u2705 Actif \u2022 ${_hhmmss()} \u2022 En attente...',
       notificationButtons: _activeButtons(),
     );
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 1), (_) => unawaited(_heartbeat()));
+    unawaited(_heartbeat());
     _watchdog?.cancel();
     _watchdog = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!_busy) {
@@ -461,8 +492,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   }
 
   Future<void> _tick() async {
-    if (_busy) return;
+    if (_busy || _destroyed) return;
+    if (_retryAfter != null && DateTime.now().isBefore(_retryAfter!)) return;
     _busy = true;
+    _sendingRevision = _controlRevision;
     _tickCount++;
 
     // Check for app updates every ~100 ticks (~5 min)
@@ -471,6 +504,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     }
 
     try {
+      if (!await BackgroundSyncService.isEnabled()) {
+        await FlutterForegroundTask.stopService();
+        return;
+      }
       // Sync manuelle en cours dans l'UI ? On lui laisse la main pour eviter
       // deux boucles d'envoi simultanees. Le verrou expire automatiquement
       // apres 2 min si l'app est tuee en pleine sync (jamais bloque a vie).
@@ -555,9 +592,11 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var thresholdBatchCount = pacing.batchPauseCount;
 
       while (batchesProcessed < maxBatchesPerCycle) {
-        if (await _isPaused()) break;
+        if (!await _canSend(token)) break;
 
         final payload = await _claimPayload(token);
+        _networkFailures = 0;
+        _retryAfter = null;
         final rawList = (payload['messages'] as List?) ?? const [];
         final messages =
             rawList.whereType<Map>().map((e) => Message.fromJson(Map<String, dynamic>.from(e))).toList();
@@ -660,7 +699,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         // dans l'attente qui suit. Un Stopwatch n'a rien à libérer : le `break`
         // de la pause et le `return` du rapport en échec ne fuient pas.
         final messageStopwatch = Stopwatch()..start();
-        if (await _isPaused()) break;
+        if (!await _canSend(token)) break;
         displayedCampaignId = msg.campaignId;
         final currentCampaign = campaigns[displayedCampaignId];
         campaignLabel = currentCampaign?['name']?.toString() ?? 'Campagne';
@@ -669,7 +708,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         if (displayedCampaignId != _activeCampaignId) {
           _activeCampaignId = displayedCampaignId;
           await BackgroundSyncService.setActiveCampaignId(displayedCampaignId);
+          pacing = await _refreshPacingFromDashboard(token);
         }
+        if (!await _canSendMessage(token)) break;
 
         // Compromis turbo : la notification AVANT l'envoi est supprimée.
         // Chaque updateService est un aller-retour natif attendu qui grignote
@@ -790,7 +831,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
         }
         nextBatchPauseAt ??= AppSettings.pickBatchThreshold(pacing.batchPauseCount);
-        final useBatchPause = !isLastInBatch &&
+        final useBatchPause =
             // Le mode turbo supprime entierement la pause par lot : cadence
             // plate d'1 s entre chaque SMS, aucune pause longue intercalee.
             !pacing.turboEnabled &&
@@ -800,14 +841,14 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           sentSinceBatchPause = 0;
           nextBatchPauseAt = AppSettings.pickBatchThreshold(pacing.batchPauseCount);
         }
-        if (!isLastInBatch) {
+        if (sentSuccessfully || !isLastInBatch) {
           final previousBatchCount = pacing.batchPauseCount;
           final waitResult = await AppSettings.waitWithLiveRefresh(
             initialSettings: pacing,
             useBatchPause: useBatchPause,
             consecutiveFailures: consecutiveSendFailures,
             refreshSettings: () => _refreshPacingFromDashboard(token),
-            shouldInterrupt: _isPaused,
+            shouldInterrupt: () async => !await _canSendMessage(token),
             onTick: (remainMs, isBatchPause) async {
               // En turbo le reste est d'une seconde au maximum : un compte a
               // rebours bloque sur "1s" n'apporte rien et coute un aller-retour
@@ -935,9 +976,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         } catch (_) {}
       }
     } catch (e) {
+      _networkFailures++;
+      final delay = min(60, 2 * (1 << min(_networkFailures, 5)));
+      _retryAfter = DateTime.now().add(Duration(seconds: delay));
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMSenvoie',
-        notificationText: 'Erreur sync: ${e.toString()}',
+        notificationText: 'Synchronisation indisponible • nouvelle tentative dans ${delay}s',
         notificationButtons: _activeButtons(),
       );
     } finally {
@@ -952,11 +996,14 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    _destroyed = true;
+    _heartbeatTimer?.cancel();
     _watchdog?.cancel();
     _http.close();
   }
 
   Future<void> _handleButton(String id) async {
+    _controlRevision++;
     final token = await _loadDeviceToken();
     final campaignId = _activeCampaignId ?? await BackgroundSyncService.getActiveCampaignId();
 
@@ -1002,6 +1049,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
     }
 
     if (id == 'stop') {
+      await BackgroundSyncService.setPaused(true);
       // Cancel the active campaign but keep the service running for future campaigns
       if (campaignId != null && token != null) {
         try {
@@ -1009,7 +1057,9 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             _proxyUri('/api/mobile/campaign-control'),
             {'action': 'cancel', 'campaign_id': campaignId, 'device_token': token},
           );
-        } catch (_) {}
+        } catch (_) {
+          return; // Keep paused if the server could not confirm cancellation.
+        }
       }
       _activeCampaignId = null;
       await BackgroundSyncService.setActiveCampaignId(null);

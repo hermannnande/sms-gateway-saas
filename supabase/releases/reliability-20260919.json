@@ -1,0 +1,9 @@
+{
+  "projectRef": "gamumybcoxxanhjakpde",
+  "migrations": [
+    "20260913000000_atomic_message_status.sql",
+    "20260916000000_user_settings_turbo_mode.sql",
+    "20260919140000_campaign_import_files.sql",
+    "20260919180000_import_files_integrity.sql"
+  ]
+}

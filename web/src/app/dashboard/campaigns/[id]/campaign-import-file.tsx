@@ -9,11 +9,17 @@ import {
   type CampaignImportFile,
 } from '@/lib/campaign-imports'
 
-export function CampaignImportFileCard({ file }: { file: CampaignImportFile | null }) {
+export function CampaignImportFileCard({ file, campaignId }: { file: CampaignImportFile | null; campaignId: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  if (!file) return null
+  if (!file) return (
+    <div className="bg-card border border-border rounded-xl p-5 shadow-sm mt-6 space-y-3">
+      <p className="font-semibold">Données de cet envoi</p>
+      <p className="text-sm text-muted-foreground">Le fichier original n’a pas été archivé. Vous pouvez télécharger les destinataires, messages et statuts conservés pour cette campagne.</p>
+      <a className="inline-block px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm" href={`/api/campaigns/${campaignId}/export`}>Télécharger les données CSV</a>
+    </div>
+  )
 
   const handleDownload = async () => {
     setError(null)
@@ -48,6 +54,7 @@ export function CampaignImportFileCard({ file }: { file: CampaignImportFile | nu
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <a href={`/api/campaigns/${campaignId}/export`} className="px-3 py-1.5 border border-border rounded-lg text-xs">Exporter les résultats CSV</a>
           <button
             onClick={handleDownload}
             disabled={busy}

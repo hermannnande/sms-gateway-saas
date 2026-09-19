@@ -207,6 +207,10 @@ export async function POST(req: Request) {
       const contacts: string[] = body?.contacts || []
       const simSlot = body?.sim_slot_index ?? null
       const priority = typeof body?.priority === 'number' ? body.priority : 0
+      const importFileIds: string[] = Array.isArray(body?.import_file_ids) ? [...new Set<string>(body.import_file_ids)] : []
+      if (importFileIds.length > 100 || importFileIds.some((id) => typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id))) {
+        return NextResponse.json({ ok: false, error: 'Fichiers importés invalides' }, { status: 400 })
+      }
 
       if (!name) {
         return NextResponse.json({ ok: false, error: 'Nom de campagne requis' }, { status: 400 })
@@ -278,7 +282,7 @@ export async function POST(req: Request) {
           device_id: device.id,
           sim_slot_index: simSlot,
           priority,
-          status: 'running',
+          status: 'draft',
           created_by: orgMember?.user_id || null,
           total_count: filteredContacts.length,
           sent_count: 0,
@@ -288,6 +292,16 @@ export async function POST(req: Request) {
 
       if (campError) {
         return NextResponse.json({ ok: false, error: campError.message }, { status: 500 })
+      }
+
+      if (importFileIds.length) {
+        const { data: linkedFiles, error: linkError } = await service.from('campaign_import_files')
+          .update({ campaign_id: campaign.id, campaign_name: name })
+          .eq('org_id', device.org_id).is('campaign_id', null).in('id', importFileIds).select('id')
+        if (linkError || linkedFiles?.length !== importFileIds.length) {
+          await service.from('campaigns').delete().eq('id', campaign.id).eq('status', 'draft')
+          return NextResponse.json({ ok: false, error: 'Impossible de rattacher les fichiers importés.' }, { status: 400 })
+        }
       }
 
       const variantRotation = createSmartVariantRotation(
@@ -308,16 +322,20 @@ export async function POST(req: Request) {
         const batch = messages.slice(i, i + batchSize)
         const { error: msgError } = await service.from('messages').insert(batch)
         if (msgError) {
+          await service.from('campaigns').delete().eq('id', campaign.id).eq('status', 'draft')
           return NextResponse.json({ ok: false, error: `Erreur insertion messages: ${msgError.message}` }, { status: 500 })
         }
       }
 
+      const { error: startError } = await service.from('campaigns')
+        .update({ status: 'running', updated_at: new Date().toISOString() }).eq('id', campaign.id).eq('status', 'draft')
+      if (startError) return NextResponse.json({ ok: false, error: startError.message }, { status: 500 })
       return NextResponse.json({
         ok: true,
         campaign: {
           id: campaign.id,
           name: campaign.name,
-          status: campaign.status,
+          status: 'running',
           total_count: filteredContacts.length,
         },
       })

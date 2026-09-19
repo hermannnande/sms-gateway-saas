@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:ui';
 import 'dart:convert';
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart' as xl;
@@ -26,9 +25,8 @@ import 'package:smsgateway_flutter/services/device_service.dart';
 import 'package:smsgateway_flutter/services/app_update_service.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/auth_session_storage.dart';
+import 'package:smsgateway_flutter/services/campaign_import_archive.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
-import 'package:smsgateway_flutter/utils/sim_resolver.dart';
-import 'package:smsgateway_flutter/utils/auto_vary.dart';
 import 'package:smsgateway_flutter/services/background_sync_service.dart';
 import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:supabase/supabase.dart';
@@ -253,6 +251,9 @@ enum AppSection {
 final sectionProvider = StateProvider<AppSection>((_) => AppSection.dashboard);
 
 class AppNotifier extends Notifier<AppState> {
+  StreamSubscription<AuthState>? _authSubscription;
+  Timer? _sessionRetry;
+  bool _initializing = false;
   int _campaignProgressRevision = 0;
   bool _refreshingCampaign = false;
   CampaignProgress? _lastCampaignProgress;
@@ -261,6 +262,7 @@ class AppNotifier extends Notifier<AppState> {
   AppState build() {
     FlutterForegroundTask.addTaskDataCallback(_onTaskData);
     ref.onDispose(() => FlutterForegroundTask.removeTaskDataCallback(_onTaskData));
+    ref.onDispose(() { _authSubscription?.cancel(); _sessionRetry?.cancel(); });
     return AppState.initial();
   }
 
@@ -301,47 +303,35 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> init() async {
-    // Restaurer la session Supabase en premier (le token appareil dépend du compte).
+    if (_initializing) return;
+    _initializing = true;
+    try {
     final supabase = ref.read(supabaseClientProvider);
-
-    // Persister automatiquement chaque refresh token ROTÉ par Supabase.
-    // Sans ça, le refresh token stocké devient invalide après une seule
-    // utilisation (rotation côté serveur) et l'utilisateur est déconnecté
-    // au prochain démarrage de l'app ou du téléphone.
-    supabase.auth.onAuthStateChange.listen((data) {
-      final rt = data.session?.refreshToken;
-      if (rt != null && rt.isNotEmpty) {
-        ref.read(authSessionStorageProvider).saveRefreshToken(rt);
+    final storage = ref.read(authSessionStorageProvider);
+    _authSubscription ??= supabase.auth.onAuthStateChange.listen((data) {
+      final session = data.session;
+      if (session != null) unawaited(storage.saveSession(session).catchError((Object _) {}));
+      if (data.event == AuthChangeEvent.signedOut) {
+        // The SDK also emits signedOut after HTTP 429 and malformed responses.
+        // Revalidate the saved refresh token before treating this as logout.
+        _sessionRetry?.cancel();
+        _sessionRetry = Timer(const Duration(seconds: 20),
+            () => unawaited(_recoverSessionAfterFailure()));
+      }
+    }, onError: (Object error) {
+      // Auth emits network errors on this stream too. They are not a logout.
+      if (AuthSessionStorage.isInvalidSession(error)) {
+        unawaited(_expireSession());
       }
     });
-
-    var session = supabase.auth.currentSession;
-    var hasSession = session != null;
-
-    if (!hasSession) {
-      final refreshToken =
-          await ref.read(authSessionStorageProvider).loadRefreshToken();
-      if (refreshToken != null) {
-        try {
-          final res = await supabase.auth.refreshSession(refreshToken);
-          session = res.session;
-          hasSession = session != null;
-          if (hasSession) {
-            // Sauvegarder IMMÉDIATEMENT le nouveau refresh token (rotation)
-            final newRt = res.session?.refreshToken;
-            if (newRt != null && newRt.isNotEmpty) {
-              await ref
-                  .read(authSessionStorageProvider)
-                  .saveRefreshToken(newRt);
-            }
-          } else {
-            await ref.read(authSessionStorageProvider).clear();
-          }
-        } catch (e) {
-          await ref.read(authSessionStorageProvider).clear();
-          setLastStatus('Session expirée. Merci de vous reconnecter.');
-        }
-      }
+    final hasSession = await storage.restore(supabase);
+    final awaitingNetwork = !hasSession && await storage.loadRefreshToken() != null;
+    if (awaitingNetwork) {
+      _sessionRetry?.cancel();
+      _sessionRetry = Timer(const Duration(seconds: 20), () => unawaited(init()));
+      setLastStatus('Connexion réseau indisponible. Reconnexion automatique en cours.');
+    } else {
+      _sessionRetry?.cancel();
     }
 
     String? token;
@@ -368,8 +358,10 @@ class AppNotifier extends Notifier<AppState> {
           }
         } catch (_) {}
       }
+    } else if (awaitingNetwork) {
+      await BackgroundSyncService.ensureAutoSync();
     } else {
-      // Sans session: ne jamais envoyer en arrière-plan avec un token orphelin.
+      // No saved session (or a confirmed revocation): stop this device.
       try {
         await BackgroundSyncService.stop();
         await BackgroundSyncService.setEnabled(false);
@@ -406,6 +398,38 @@ class AppNotifier extends Notifier<AppState> {
         }
       }
     }
+    } finally { _initializing = false; }
+  }
+
+  Future<void> _expireSession() async {
+    _sessionRetry?.cancel();
+    await ref.read(authSessionStorageProvider).clear();
+    await _clearDeviceTokenAndStopSync();
+    state = state.copyWith(authenticated: false,
+        lastStatus: 'Session révoquée ou expirée. Reconnectez-vous.');
+  }
+
+  Future<void> _recoverSessionAfterFailure() async {
+    final storage = ref.read(authSessionStorageProvider);
+    final token = await storage.loadRefreshToken();
+    if (token == null) return; // Explicit logout always clears persisted auth.
+    final client = ref.read(supabaseClientProvider);
+    if (client.auth.currentSession != null) return;
+    try {
+      final result = await client.auth.refreshSession(token);
+      if (result.session != null) {
+        await storage.saveSession(result.session!);
+        await init();
+      }
+    } catch (error) {
+      if (AuthSessionStorage.isInvalidSession(error)) {
+        await _expireSession();
+      } else {
+        _sessionRetry?.cancel();
+        _sessionRetry = Timer(const Duration(seconds: 20),
+            () => unawaited(_recoverSessionAfterFailure()));
+      }
+    }
   }
 
   /// Vérifie que le token appareil local appartient à l'org du compte connecté.
@@ -429,7 +453,7 @@ class AppNotifier extends Notifier<AppState> {
         appVersion: state.appVersion,
       );
       final deviceOrgId = payload['org_id']?.toString();
-      if (deviceOrgId == null || deviceOrgId != expectedOrgId) {
+      if (deviceOrgId != null && deviceOrgId != expectedOrgId) {
         if (clearIfMismatch) {
           await _clearDeviceTokenAndStopSync(userId: user.id);
         }
@@ -437,9 +461,7 @@ class AppNotifier extends Notifier<AppState> {
       }
       return true;
     } catch (_) {
-      if (clearIfMismatch) {
-        await _clearDeviceTokenAndStopSync(userId: user.id);
-      }
+      // A failed heartbeat is not evidence of a different account.
       return false;
     }
   }
@@ -484,15 +506,6 @@ class AppNotifier extends Notifier<AppState> {
 
     await refreshActiveCampaign(silent: true);
 
-    final status = state.campaignStatusSending;
-    if (status != 'running' && status != 'queued') return;
-
-    final total = state.campaignTotalCount ?? 0;
-    final sent = state.campaignSentCount ?? 0;
-    if (total <= 0 || sent >= total) return;
-    if (state.syncing) return;
-
-    await syncOnce(silentIfEmpty: true);
   }
 
   Future<void> _loadAppVersion() async {
@@ -764,7 +777,7 @@ class AppNotifier extends Notifier<AppState> {
                 if (newRt != null && newRt.isNotEmpty) {
                   await ref
                       .read(authSessionStorageProvider)
-                      .saveRefreshToken(newRt);
+                      .saveSession(res.session!);
                 }
               }
             }
@@ -1021,7 +1034,8 @@ class AppNotifier extends Notifier<AppState> {
 
     await _clearDeviceTokenAndStopSync(userId: userId);
 
-    await supabase.auth.signOut();
+    _sessionRetry?.cancel();
+    await supabase.auth.signOut(scope: SignOutScope.local);
     await ref.read(authSessionStorageProvider).clear();
     state = state.copyWith(
       authenticated: false,
@@ -1046,6 +1060,7 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> _postLoginSetup() async {
+    _sessionRetry?.cancel();
     await checkPermissions();
 
     try {
@@ -1084,7 +1099,7 @@ class AppNotifier extends Notifier<AppState> {
     }
     final refresh = res.session?.refreshToken;
     if (refresh != null && refresh.isNotEmpty) {
-      await ref.read(authSessionStorageProvider).saveRefreshToken(refresh);
+      await ref.read(authSessionStorageProvider).saveSession(res.session!);
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
@@ -1107,7 +1122,7 @@ class AppNotifier extends Notifier<AppState> {
     }
     final refresh = res.session?.refreshToken;
     if (refresh != null && refresh.isNotEmpty) {
-      await ref.read(authSessionStorageProvider).saveRefreshToken(refresh);
+      await ref.read(authSessionStorageProvider).saveSession(res.session!);
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
@@ -1129,7 +1144,7 @@ class AppNotifier extends Notifier<AppState> {
     }
     final refresh = res.session?.refreshToken;
     if (refresh != null && refresh.isNotEmpty) {
-      await ref.read(authSessionStorageProvider).saveRefreshToken(refresh);
+      await ref.read(authSessionStorageProvider).saveSession(res.session!);
     }
     state = state.copyWith(authenticated: true);
     await refreshAccountInfo();
@@ -1142,255 +1157,22 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   Future<void> syncOnce({bool silentIfEmpty = false}) async {
-    final token = state.deviceToken;
-    if (token == null || token.isEmpty) {
-      state = state.copyWith(lastStatus: 'Aucun token enregistré');
-      return;
-    }
-    if (state.syncing) return;
-
-    final supabase = ref.read(supabaseClientProvider);
-
-    state = state.copyWith(syncing: true, lastStatus: 'Synchronisation...');
-
+    if (state.syncing || state.deviceToken == null) return;
+    state = state.copyWith(syncing: true);
     try {
-      // Verrou: previent l'envoi concurrent par le service d'arriere-plan
-      // pendant cette sync manuelle (expire seul apres 2 min si app tuee).
-      await BackgroundSyncService.setForegroundLock(true);
-
-      final permsOk = await ref.read(smsSenderProvider).ensurePermissions();
-      if (!permsOk) {
-        state = state.copyWith(
-          permissionsOk: false,
-          lastStatus: 'Permissions SMS/Phone necessaires',
-        );
+      if (!await ref.read(smsSenderProvider).ensurePermissions()) {
+        state = state.copyWith(permissionsOk: false,
+            lastStatus: 'Autorisez les permissions SMS et Téléphone.');
         return;
       }
-
-      if (state.availableSims.isEmpty) {
-        await refreshSimCards();
-      }
-
-      var batchesProcessed = 0;
-      const maxBatches = 100;
-      var totalOk = 0;
-      var totalFail = 0;
-      final allResults = <String>[];
-      List<Message> lastBatchMessages = const [];
-      // Pause anti-spam PAR LOT : compteur de SMS envoyés depuis la dernière
-      // pause, persistant à travers les lots réclamés (le seuil peut être
-      // plus petit que AppConfig.claimBatchSize). Le seuil est LUI-MÊME
-      // aléatoire (±30 % autour du réglage, re-tiré après chaque pause) :
-      // une pause exactement toutes les N SMS serait une périodicité
-      // détectable de plus.
-      var sentSinceBatchPause = 0;
-      int? nextBatchPauseAt;
-      var consecutiveSendFailures = 0;
-      var networkRejectionCount = 0;
-      var pacing = await AppSettings.getSmsPacingSettings();
-      var thresholdBatchCount = pacing.batchPauseCount;
-
-      while (batchesProcessed < maxBatches) {
-        await ref.read(deviceServiceProvider).flushMessageReports(token);
-        final payload = await ref.read(deviceServiceProvider).claimMessagesVerbose(
-              deviceToken: token,
-              limit: AppConfig.claimBatchSize,
-              simSubscriptionId: null,
-            );
-
-        final usedThisMonth = _safeParseInt(payload['sms_used_this_month']);
-        final remaining = _safeParseInt(payload['quota_remaining']);
-        state = state.copyWith(
-          smsUsedThisMonth: usedThisMonth ?? state.smsUsedThisMonth,
-          quotaRemaining: remaining ?? state.quotaRemaining,
-        );
-
-        final rawList = (payload['messages'] as List?) ?? const [];
-        final messages = rawList
-            .whereType<Map>()
-            .map((e) => Message.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-
-        if (messages.isEmpty) {
-          if (batchesProcessed == 0 && !silentIfEmpty) {
-            final quotaReached = payload['quota_reached'] == true || remaining == 0;
-            final plan = payload['plan'];
-            final planQuota = plan is Map ? _safeParseInt(plan['sms_quota_month']) : null;
-
-            if (quotaReached && planQuota != null && planQuota > 0) {
-              state = state.copyWith(
-                lastStatus:
-                    '🚫 Quota atteint (${planQuota} SMS/mois). Reste: 0.\nLes SMS restants sont en attente. Passe à un abonnement ou attends le renouvellement.',
-                lastMessages: const [],
-              );
-            } else {
-              state = state.copyWith(
-                lastStatus: 'Aucun message à envoyer',
-                lastMessages: const [],
-              );
-            }
-          }
-          break;
-        }
-
-        batchesProcessed++;
-        lastBatchMessages = messages;
-        // Recharge le profil web avant le lot. L'attente ci-dessous continuera
-        // à le consulter toutes les 2 secondes pendant la campagne active.
-        final refreshedPacing = await AppSettings.refreshFromSupabase(supabase);
-        if (thresholdBatchCount != refreshedPacing.batchPauseCount) {
-          thresholdBatchCount = refreshedPacing.batchPauseCount;
-          nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
-        }
-        pacing = refreshedPacing;
-        // Variation automatique du texte (anti-signature opérateur).
-        final autoVaryEnabled = await AppSettings.getAutoVaryEnabled();
-
-        final simSlotsByCampaign = campaignSimSlots(payload);
-
-        for (int i = 0; i < messages.length; i++) {
-          // Cadence turbo mesurée d'un envoi à l'autre : ce chrono couvre TOUT
-          // le coût du message (accusé natif d'envoi + remontée du statut) pour
-          // que ce temps déjà écoulé ne soit pas payé une seconde fois dans
-          // l'attente qui suit. Hors turbo il est simplement ignoré.
-          final messageStopwatch = Stopwatch()..start();
-          // Rafraichit le verrou pour qu'il n'expire pas au milieu d'un long
-          // lot (delai par SMS configurable jusqu'a plusieurs secondes).
-          await BackgroundSyncService.setForegroundLock(true);
-          final msg = messages[i];
-          final routing = resolveSimRouting(
-            msg,
-            state.availableSims,
-            campaignSlotFallback:
-                msg.campaignId == null ? null : simSlotsByCampaign[msg.campaignId],
-          );
-
-          // Applique la variation automatique au CORPS uniquement (l'id et le
-          // routage SIM restent ceux du message d'origine).
-          final variedBody = AutoVary.apply(msg.content, enabled: autoVaryEnabled);
-          final sendResult = await ref.read(smsSenderProvider).send(
-                variedBody == msg.content ? msg : msg.copyWith(content: variedBody),
-                subscriptionIdOverride: routing.subscriptionId,
-                simSlotIndexOverride: routing.simSlotIndex,
-              );
-          final report = await ref.read(deviceServiceProvider).updateMessageStatus(
-                deviceToken: token,
-                message: msg,
-                success: sendResult.success,
-                error: sendResult.error,
-              );
-          final reportedCampaign = report?['campaign'];
-          if (report == null) {
-            state = state.copyWith(lastStatus:
-                'Résultat SMS enregistré sur le téléphone. En attente de synchronisation du compteur.');
-            return;
-          }
-          if (reportedCampaign is Map && token == state.deviceToken) {
-            applyCampaignProgress(reportedCampaign);
-          }
-
-          if (sendResult.success) {
-            totalOk++;
-            consecutiveSendFailures = 0;
-            allResults.add('✅ sent → ${msg.to}');
-          } else {
-            totalFail++;
-            consecutiveSendFailures++;
-            if (sendResult.code == 'SMS_NETWORK_REJECTED') {
-              networkRejectionCount++;
-            }
-            final err = (sendResult.error ?? 'Erreur inconnue').replaceAll('\n', ' ');
-            allResults.add('❌ failed → ${msg.to} (${err.length > 80 ? err.substring(0, 80) + '…' : err})');
-          }
-
-          // Compte TOUS les SMS envoyés : les lots réclamés s'enchaînent, le
-          // dernier d'un lot est souvent suivi immédiatement du lot suivant.
-          sentSinceBatchPause++;
-          if (i < messages.length - 1) {
-            // Seuil re-tiré au hasard après chaque pause (±30 % autour du
-            // réglage) pour casser aussi la périodicité de la pause elle-même.
-            if (thresholdBatchCount != pacing.batchPauseCount) {
-              thresholdBatchCount = pacing.batchPauseCount;
-              nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
-            }
-            nextBatchPauseAt ??= AppSettings.pickBatchThreshold(pacing.batchPauseCount);
-            // Turbo : aucune pause par lot n'est jamais programmée, quel que
-            // soit le réglage anti-spam de l'utilisateur.
-            final useBatchPause = !pacing.turboEnabled &&
-                pacing.batchPauseEnabled &&
-                sentSinceBatchPause >= nextBatchPauseAt;
-            if (useBatchPause) {
-              sentSinceBatchPause = 0;
-              nextBatchPauseAt = AppSettings.pickBatchThreshold(pacing.batchPauseCount);
-            }
-
-            final previousBatchCount = pacing.batchPauseCount;
-            // Turbo : le reste à attendre ne dépasse jamais une seconde, un
-            // compte à rebours n'a donc rien à afficher et reconstruirait
-            // l'écran toutes les 500 ms pour rien. On pose un état honnête et
-            // fixe, une seule fois, puis le tick est ignoré (voir onTick).
-            if (pacing.turboEnabled && !useBatchPause) {
-              const turboStatus = '⚡ Envoi turbo en cours (1 SMS par seconde)';
-              if (state.lastStatus != turboStatus) {
-                state = state.copyWith(lastStatus: turboStatus);
-              }
-            }
-            final waitResult = await AppSettings.waitWithLiveRefresh(
-              initialSettings: pacing,
-              useBatchPause: useBatchPause,
-              consecutiveFailures: consecutiveSendFailures,
-              refreshSettings: () => AppSettings.refreshFromSupabase(supabase),
-              onTick: (remainingMs, isBatchPause) async {
-                // Turbo hors pause : aucun rafraîchissement, le statut fixe
-                // posé ci-dessus reste affiché.
-                if (pacing.turboEnabled && !isBatchPause) return;
-                final secondsLeft = ((remainingMs + 999) / 1000).floor();
-                state = state.copyWith(
-                  lastStatus: isBatchPause
-                      ? '⏸️ Pause de régulation • reprise dans ${secondsLeft}s'
-                      : '⏳ Prochain SMS dans ${secondsLeft}s',
-                );
-              },
-              // Cadence turbo mesurée d'un envoi à l'autre : l'attente vise
-              // max(0, turboDelayMs - temps déjà passé sur ce message).
-              alreadyElapsedMs: messageStopwatch.elapsedMilliseconds,
-            );
-            pacing = waitResult.settings;
-            if (previousBatchCount != pacing.batchPauseCount) {
-              thresholdBatchCount = pacing.batchPauseCount;
-              nextBatchPauseAt = AppSettings.pickBatchThreshold(thresholdBatchCount);
-            }
-          }
-        }
-
-        if (messages.length < AppConfig.claimBatchSize) break;
-      }
-
-      if (batchesProcessed > 0) {
-        final rejectionSummary = networkRejectionCount > 0
-            ? ' • $networkRejectionCount rejets opérateur'
-            : '';
-        state = state.copyWith(
-          lastMessages: lastBatchMessages,
-          lastStatus:
-              'Résultat: $totalOk OK • $totalFail échecs$rejectionSummary${batchesProcessed > 1 ? ' ($batchesProcessed lots)' : ''}\n\n${allResults.take(20).join('\n')}',
-        );
-        await refreshDeviceStatus(silent: true);
-        await refreshActiveCampaign(silent: true);
-      }
-
-      try {
-        await BackgroundSyncService.setForegroundLock(false);
-        await BackgroundSyncService.setPaused(false);
-        await BackgroundSyncService.ensureAutoSync();
-      } catch (_) {}
-    } catch (e, st) {
-      ref.read(loggerProvider).e('syncOnce error', error: e, stackTrace: st);
-      state = state.copyWith(lastStatus: 'Erreur sync: $e');
+      // There is exactly one sender, whether the screen is open or locked.
+      await BackgroundSyncService.setEnabled(true);
+      await BackgroundSyncService.setPaused(false);
+      await BackgroundSyncService.ensureAutoSync();
+      if (!silentIfEmpty) setLastStatus('Envoi automatique actif en arrière-plan.');
+    } catch (error) {
+      setLastStatus('Démarrage impossible : $error');
     } finally {
-      try {
-        await BackgroundSyncService.setForegroundLock(false);
-      } catch (_) {}
       state = state.copyWith(syncing: false);
     }
   }
@@ -1526,6 +1308,9 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(ref.read(appProvider.notifier).autoContinueCampaignSend());
+    }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
@@ -3888,6 +3673,9 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   List<Map<String, dynamic>> _templates = [];
   bool _importingFile = false;
   int _importedCount = 0;
+  final List<PlatformFile> _sourceFiles = [];
+  final Map<String, String> _sourceArchiveIds = {};
+  final Map<String, int> _sourceCounts = {};
 
   // Detail view
   Map<String, dynamic>? _detailCampaign;
@@ -4022,6 +3810,8 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
           _contactsCtrl.text = numbers.join('\n');
         }
         _importedCount = numbers.length;
+        _sourceFiles.add(file);
+        _sourceCounts[path] = numbers.length;
       }
 
       setState(() => _importingFile = false);
@@ -4106,6 +3896,18 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
 
     setState(() => _creating = true);
     try {
+      final archiveIds = <String>[];
+      for (final file in _sourceFiles) {
+        final path = file.path!;
+        final orgId = widget.appState.orgId;
+        if (orgId == null) throw Exception('Organisation indisponible. Réessayez après reconnexion.');
+        final archiveId = _sourceArchiveIds[path] ?? await CampaignImportArchive.upload(
+          ref.read(supabaseClientProvider), file: File(path), fileName: file.name,
+          orgId: orgId, campaignName: name, contactCount: _sourceCounts[path] ?? 0,
+        );
+        _sourceArchiveIds[path] = archiveId;
+        archiveIds.add(archiveId);
+      }
       await ref.read(deviceServiceProvider).createCampaign(
         deviceToken: token,
         name: name,
@@ -4114,6 +3916,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
         extraMessages: extraMessages,
         simSlotIndex: _simSlot,
         priority: _priority,
+        importFileIds: archiveIds.toSet().toList(),
       );
       _nameCtrl.clear();
       _messageCtrl.clear();
@@ -4122,6 +3925,9 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
       }
       _extraMessageCtrls.clear();
       _contactsCtrl.clear();
+      _sourceFiles.clear();
+      _sourceArchiveIds.clear();
+      _sourceCounts.clear();
       setState(() { _showCreate = false; _creating = false; _priority = 0; _simSlot = null; });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Campagne lancee avec succes !'), backgroundColor: Color(0xFF16A34A)),
@@ -4638,7 +4444,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
                     ),
                     const Spacer(),
                     GestureDetector(
-                      onTap: () => setState(() { _contactsCtrl.clear(); _importedCount = 0; }),
+                      onTap: () => setState(() { _contactsCtrl.clear(); _importedCount = 0; _sourceFiles.clear(); _sourceArchiveIds.clear(); _sourceCounts.clear(); }),
                       child: Text('Effacer', style: TextStyle(fontSize: 11, color: Colors.red.shade400, fontWeight: FontWeight.w500)),
                     ),
                   ],

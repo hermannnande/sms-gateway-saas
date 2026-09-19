@@ -57,9 +57,9 @@ class DeviceService {
     String path,
     Map<String, dynamic> body, {
     Map<String, String>? headers,
+    int maxAttempts = 3,
   }) async {
     final uri = _proxyUri(path);
-    const maxAttempts = 3;
     const baseTimeout = Duration(seconds: 12);
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -347,6 +347,7 @@ class DeviceService {
     List<String> extraMessages = const [],
     int? simSlotIndex,
     int priority = 0,
+    List<String> importFileIds = const [],
   }) async {
     return await _postProxy('/api/mobile/campaigns', {
       'device_token': deviceToken,
@@ -358,7 +359,8 @@ class DeviceService {
       'contacts': contacts,
       'sim_slot_index': simSlotIndex,
       'priority': priority,
-    });
+      'import_file_ids': importFileIds,
+    }, maxAttempts: 1); // A lost response must not create another campaign.
   }
 
   Future<Map<String, dynamic>> listTemplates({

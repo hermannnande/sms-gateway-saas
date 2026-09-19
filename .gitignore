@@ -54,3 +54,4 @@ key.properties
 CREDENTIALS_IMPORTANT.txt
 
 .vercel
+.verification/

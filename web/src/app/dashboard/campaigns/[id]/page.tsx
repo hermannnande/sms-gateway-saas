@@ -3,7 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { CampaignDetails } from './campaign-details'
 import { CampaignImportFileCard } from './campaign-import-file'
 
-export default async function CampaignPage({ params }: { params: { id: string } }) {
+export default async function CampaignPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
   const supabase = await createClient()
 
   const {
@@ -18,7 +19,7 @@ export default async function CampaignPage({ params }: { params: { id: string } 
   const { data: campaign } = await supabase
     .from('campaigns')
     .select('*, templates(name, body), campaign_jobs(status, created_at), devices(name)')
-    .eq('id', params.id)
+    .eq('id', id)
     .single()
 
   if (!campaign) {
@@ -36,7 +37,7 @@ export default async function CampaignPage({ params }: { params: { id: string } 
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  let smsQuotaMonth: number | null = activeSub?.plans?.sms_quota_month ?? 100
+  let smsQuotaMonth: number | null = (activeSub?.plans as unknown as { sms_quota_month?: number } | null)?.sms_quota_month ?? 100
   if (smsQuotaMonth === 0) smsQuotaMonth = null
   const { count: usedCount } = await supabase
     .from('messages')
@@ -51,20 +52,19 @@ export default async function CampaignPage({ params }: { params: { id: string } 
   const { data: messages } = await supabase
     .from('messages')
     .select('status')
-    .eq('campaign_id', params.id)
+    .eq('campaign_id', id)
 
   // Fichier de contacts archivé lors de la création. L'erreur éventuelle est
   // ignorée : tant que la migration campaign_import_files n'est pas appliquée,
   // la page doit continuer à s'afficher normalement.
-  const { data: importFile } = await supabase
+  const { data: importFiles } = await supabase
     .from('campaign_import_files')
     .select(
       'id, campaign_id, campaign_name, file_name, storage_path, mime_type, size_bytes, contact_count, invalid_count, created_at',
     )
-    .eq('campaign_id', params.id)
+    .eq('campaign_id', id)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+    .limit(100)
 
   const stats = {
     total: messages?.length || 0,
@@ -91,7 +91,9 @@ export default async function CampaignPage({ params }: { params: { id: string } 
           stats={stats}
           quotaInfo={{ quota: smsQuotaMonth, used: smsUsedThisMonth, remaining: smsRemaining }}
         />
-        <CampaignImportFileCard file={importFile ?? null} />
+        {importFiles?.length ? importFiles.map((file) => (
+          <CampaignImportFileCard key={file.id} file={file} campaignId={id} />
+        )) : <CampaignImportFileCard file={null} campaignId={id} />}
       </main>
     </div>
   )

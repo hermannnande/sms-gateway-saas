@@ -79,10 +79,19 @@ export async function POST(req: Request) {
 
     if (settingsError) throw settingsError
 
+    let campaign: { id: string; status: string } | null = null
+    if (typeof body?.campaign_id === 'string' && /^[0-9a-f-]{36}$/i.test(body.campaign_id)) {
+      const result = await service.from('campaigns').select('id, status')
+        .eq('id', body.campaign_id).eq('org_id', device.org_id).maybeSingle()
+      if (result.error) throw result.error
+      campaign = result.data ?? { id: body.campaign_id, status: 'canceled' }
+    }
+
     return NextResponse.json(
       {
         ok: true,
         settings: settings ?? DEFAULT_SETTINGS,
+        campaign,
         fetched_at: new Date().toISOString(),
       },
       { headers: NO_STORE_HEADERS },

@@ -74,6 +74,43 @@ async function freshDb() {
 
 const sql = await readFile(MIGRATION, 'utf8')
 
+test('archives: isolation réelle des lectures et refus des références à une autre organisation', async () => {
+  const db = await freshDb()
+  await db.exec(sql)
+  const integrity = await readFile(new URL('../migrations/20260919180000_import_files_integrity.sql', import.meta.url), 'utf8')
+  await db.exec(integrity)
+  await db.exec(integrity)
+  const orgA = '10000000-0000-0000-0000-000000000001'
+  const orgB = '10000000-0000-0000-0000-000000000002'
+  const userA = '20000000-0000-0000-0000-000000000001'
+  const campA = '30000000-0000-0000-0000-000000000001'
+  const campB = '30000000-0000-0000-0000-000000000002'
+  await db.exec(`
+    insert into organizations(id) values ('${orgA}'), ('${orgB}');
+    insert into auth.users(id) values ('${userA}');
+    insert into org_members(user_id,org_id) values ('${userA}','${orgA}');
+    insert into campaigns(id,org_id) values ('${campA}','${orgA}'), ('${campB}','${orgB}');
+    insert into campaign_import_files(org_id,file_name,storage_path) values ('${orgB}','secret.csv','${orgB}/secret.csv');
+    insert into storage.objects(bucket_id,name) values ('campaign-imports','${orgB}/secret.csv');
+    grant usage on schema public, auth, storage to authenticated;
+    grant select, insert, update, delete on all tables in schema public, storage to authenticated;
+    select set_config('test.user_id','${userA}',false);
+    set role authenticated;
+  `)
+  const insert = (org, campaign, path) => db.query(`
+    insert into campaign_import_files(org_id,campaign_id,uploaded_by,file_name,storage_path,size_bytes)
+    values($1,$2,$3,'test.csv',$4,100)`, [org,campaign,userA,path])
+  await insert(orgA, campA, `${orgA}/valid.csv`)
+  await assert.rejects(insert(orgA, campB, `${orgA}/foreign-campaign.csv`), /row-level security/)
+  await assert.rejects(insert(orgA, campA, `${orgB}/forged-path.csv`), /row-level security/)
+  await assert.rejects(insert(orgB, campB, `${orgB}/foreign.csv`), /row-level security/)
+  const rows = await db.query('select file_name from campaign_import_files')
+  assert.deepEqual(rows.rows, [{file_name:'test.csv'}])
+  assert.equal((await db.query('select name from storage.objects')).rows.length, 0)
+  await assert.rejects(db.query(`insert into storage.objects(bucket_id,name) values('campaign-imports',$1)`, [`${orgB}/forged.csv`]), /row-level security/)
+  await db.close()
+})
+
 test('la migration s applique sans erreur', async () => {
   const db = await freshDb()
   await db.exec(sql)

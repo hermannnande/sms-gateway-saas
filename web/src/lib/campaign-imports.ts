@@ -84,6 +84,10 @@ export async function archiveCampaignImportFile(
 ): Promise<void> {
   const { file, orgId, campaignId, campaignName, uploadedBy } = params
 
+  if (!isAcceptedImportFile(file.name) || file.size === 0) {
+    throw new Error('Choisissez un fichier CSV, TXT, XLS ou XLSX non vide.')
+  }
+
   if (file.size > MAX_IMPORT_FILE_BYTES) {
     throw new Error(
       `Fichier trop volumineux pour l'archivage (${formatFileSize(file.size)}, maximum ${formatFileSize(MAX_IMPORT_FILE_BYTES)}).`,
@@ -147,7 +151,8 @@ export async function downloadCampaignImportFile(
   document.body.appendChild(link)
   link.click()
   link.remove()
-  URL.revokeObjectURL(url)
+  // Let the browser start reading the blob before releasing it (mobile Safari).
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 /** Supprime le binaire puis la ligne. L'ordre évite de perdre la trace d'un objet. */

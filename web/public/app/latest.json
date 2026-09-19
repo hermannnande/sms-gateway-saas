@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.27+74",
+  "latestVersion": "1.3.28+75",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• NOUVEAU — Mode Turbo : sur smsenvoie.com/dashboard/profile, un interrupteur supprime toute temporisation entre les SMS (environ 1 par seconde, sans marge aléatoire ni pause de régulation par lot).\n• À n'activer qu'en connaissance de cause : envoyer en rafale continue depuis une SIM grand public est ce qui pousse les opérateurs à suspendre la ligne. Le consentement des destinataires et la gestion du STOP restent obligatoires.\n• Vos réglages de délai et de pause sont conservés : ils reviennent tels quels dès que le Turbo est désactivé.\n• Le réglage s'applique en direct, même pendant une campagne déjà lancée.\n• Compteur de campagne fiabilisé : la progression est transmise après chaque SMS, et un résultat non synchronisé est conservé puis rejoué au lieu d'être perdu."
+  "notes": "• Arrière-plan renforcé : service unique pour les envois, reprise automatique et compatibilité Android 15.\n• Connexion conservée hors ligne : les erreurs réseau ne suppriment plus la session ni l’appairage.\n• Les pauses et annulations sont respectées, y compris depuis le tableau de bord.\n• Les fichiers importés depuis le web et Android sont conservés et téléchargeables depuis Fichiers importés.\n• Export CSV des destinataires et résultats des anciennes campagnes."
 }

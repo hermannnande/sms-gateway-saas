@@ -42,7 +42,7 @@ export function ImportsList({ files }: { files: ImportRow[] }) {
   }, [files, searchQuery])
 
   const toggleSelectAll = () => {
-    if (selected.length === filtered.length) {
+    if (filtered.every((f) => selected.includes(f.id))) {
       setSelected([])
     } else {
       setSelected(filtered.map((f) => f.id))
@@ -119,7 +119,7 @@ export function ImportsList({ files }: { files: ImportRow[] }) {
       <div className="bg-card rounded-lg p-4 border border-border shadow-sm">
         <input
           type="text"
-          placeholder="🔍 Rechercher par nom de fichier ou de campagne..."
+          placeholder="🔍 Filtrer cette page par fichier ou campagne..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="w-full px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
@@ -145,7 +145,7 @@ export function ImportsList({ files }: { files: ImportRow[] }) {
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
-            checked={selected.length === filtered.length && filtered.length > 0}
+            checked={filtered.every((f) => selected.includes(f.id)) && filtered.length > 0}
             onChange={toggleSelectAll}
             className="w-4 h-4 rounded border-border"
           />
@@ -215,7 +215,7 @@ export function ImportsList({ files }: { files: ImportRow[] }) {
                       )}
                       {campaignDeleted ? (
                         <span className="italic">
-                          🚀 {campaignName ? `${campaignName} (campagne supprimée)` : 'Campagne supprimée'}
+                          🚀 {campaignName ? `${campaignName} (campagne supprimée)` : 'Sans campagne associée'}
                         </span>
                       ) : (
                         <Link

@@ -278,7 +278,9 @@ export function NewCampaignForm({
     messageRotationReady
 
   async function handleSubmit(e: React.FormEvent) {
+    let draftCampaignId: string | null = null
     e.preventDefault()
+    if (createdCampaignId || loading) return
     setLoading(true)
     setError(null)
     setCreatedCampaignId(null)
@@ -400,7 +402,7 @@ export function NewCampaignForm({
           device_id: resolvedDeviceId,
           sim_slot_index: simSlotIndex,
           priority,
-          status: 'running',
+          status: 'draft',
           created_by: userData.user.id,
           total_count: contactsToProcess.length,
           sent_count: 0,
@@ -409,6 +411,24 @@ export function NewCampaignForm({
         .single()
 
       if (campaignError) throw campaignError
+      draftCampaignId = campaign.id
+      setCreatedCampaignId(campaign.id)
+
+      if (contactInputMode === 'file' && importedFile) {
+
+          await archiveCampaignImportFile(supabase, {
+            file: importedFile,
+            orgId: orgMember.org_id,
+            campaignId: campaign.id,
+            campaignName: name.trim() || null,
+            uploadedBy: userData.user.id,
+            // Ce qu'il y a dans le fichier, pas ce qui a été mis en file :
+            // les numéros écartés par la liste noire y figurent bien.
+            contactCount: fileContacts.length,
+            invalidCount: fileInvalidPhones.length,
+          })
+      }
+
 
       const messages = contactsToProcess.map((contact, index) => {
         const variant = variantRotation[index]
@@ -433,34 +453,20 @@ export function NewCampaignForm({
         if (messagesError) throw messagesError
       }
 
-      // Archivage du fichier d'origine. La campagne et ses messages existent
-      // déjà : un échec ici ne doit rien annuler, mais il ne doit pas non plus
-      // passer inaperçu — on affiche l'avertissement au lieu de rediriger.
-      if (contactInputMode === 'file' && importedFile) {
-        try {
-          await archiveCampaignImportFile(supabase, {
-            file: importedFile,
-            orgId: orgMember.org_id,
-            campaignId: campaign.id,
-            campaignName: name.trim() || null,
-            uploadedBy: userData.user.id,
-            // Ce qu'il y a dans le fichier, pas ce qui a été mis en file :
-            // les numéros écartés par la liste noire y figurent bien.
-            contactCount: fileContacts.length,
-            invalidCount: fileInvalidPhones.length,
-          })
-        } catch (archiveErr: any) {
-          setCreatedCampaignId(campaign.id)
-          setError(
-            `Campagne créée et messages mis en file d'attente, mais le fichier importé n'a pas pu être archivé : ${archiveErr.message}`,
-          )
-          setLoading(false)
-          return
-        }
-      }
+      const { error: startError } = await supabase.from('campaigns')
+        .update({ status: 'running', updated_at: new Date().toISOString() })
+        .eq('id', campaign.id).eq('status', 'draft')
+      if (startError) throw startError
 
       router.push(`/dashboard/campaigns/${campaign.id}`)
     } catch (err: any) {
+      if (draftCampaignId) {
+        // Only a draft can be removed; a lost response after activation must
+        // never delete a campaign that may already be sending.
+        const { data: removed, error: cleanupError } = await createClient().from('campaigns')
+          .delete().eq('id', draftCampaignId).eq('status', 'draft').select('id')
+        if (!cleanupError && removed?.length) setCreatedCampaignId(null)
+      }
       setError(err.message)
       setLoading(false)
     }
@@ -975,7 +981,7 @@ export function NewCampaignForm({
         <div className="flex gap-3 pt-2">
           <button
             type="submit"
-            disabled={loading || !canSubmit}
+            disabled={loading || !canSubmit || !!createdCampaignId}
             className="flex-1 bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md flex items-center justify-center gap-2"
           >
             {loading ? (
