@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { CampaignDetails } from './campaign-details'
+import { CampaignImportFileCard } from './campaign-import-file'
 
 export default async function CampaignPage({ params }: { params: { id: string } }) {
   const supabase = await createClient()
@@ -52,6 +53,19 @@ export default async function CampaignPage({ params }: { params: { id: string } 
     .select('status')
     .eq('campaign_id', params.id)
 
+  // Fichier de contacts archivé lors de la création. L'erreur éventuelle est
+  // ignorée : tant que la migration campaign_import_files n'est pas appliquée,
+  // la page doit continuer à s'afficher normalement.
+  const { data: importFile } = await supabase
+    .from('campaign_import_files')
+    .select(
+      'id, campaign_id, campaign_name, file_name, storage_path, mime_type, size_bytes, contact_count, invalid_count, created_at',
+    )
+    .eq('campaign_id', params.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
   const stats = {
     total: messages?.length || 0,
     queued: messages?.filter((m) => m.status === 'queued').length || 0,
@@ -77,6 +91,7 @@ export default async function CampaignPage({ params }: { params: { id: string } 
           stats={stats}
           quotaInfo={{ quota: smsQuotaMonth, used: smsUsedThisMonth, remaining: smsRemaining }}
         />
+        <CampaignImportFileCard file={importFile ?? null} />
       </main>
     </div>
   )

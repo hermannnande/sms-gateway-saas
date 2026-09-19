@@ -11,6 +11,7 @@ const navigation = [
   { name: 'Messages', href: '/dashboard/messages', icon: '📥' },
   { name: 'Boîte de réception', href: '/dashboard/inbox', icon: '📬' },
   { name: 'Contacts', href: '/dashboard/contacts', icon: '👥' },
+  { name: 'Fichiers importés', href: '/dashboard/imports', icon: '📂' },
   { name: 'Templates', href: '/dashboard/templates', icon: '📝' },
   { name: 'Appareils', href: '/dashboard/devices', icon: '📱' },
   { name: 'Liste noire', href: '/dashboard/optouts', icon: '🚫' },

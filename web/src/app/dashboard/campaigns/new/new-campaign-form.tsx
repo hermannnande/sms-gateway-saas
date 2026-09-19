@@ -17,6 +17,11 @@ import {
   personalizeContactMessage,
   type ImportedContact,
 } from '@/lib/contact-personalization'
+import {
+  MAX_IMPORT_FILE_BYTES,
+  archiveCampaignImportFile,
+  formatFileSize,
+} from '@/lib/campaign-imports'
 
 /**
  * Try to parse a phone number in multiple ways to maximize acceptance
@@ -102,8 +107,14 @@ export function NewCampaignForm({
     { phone_e164: string; name?: string }[]
   >([])
   const [fileInvalidPhones, setFileInvalidPhones] = useState<string[]>([])
+  // Fichier d'origine conservé pour être archivé après la création de la
+  // campagne, afin de pouvoir le retélécharger plus tard.
+  const [importedFile, setImportedFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Renseigné quand la campagne est créée mais que l'archivage a échoué : on
+  // évite alors la redirection pour ne pas masquer l'avertissement.
+  const [createdCampaignId, setCreatedCampaignId] = useState<string | null>(null)
   const [skippedBlacklist, setSkippedBlacklist] = useState<string[]>([])
   const router = useRouter()
 
@@ -156,6 +167,14 @@ export function NewCampaignForm({
     setError(null)
     setFileContacts([])
     setFileInvalidPhones([])
+    setImportedFile(null)
+
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      setError(
+        `Fichier trop volumineux (${formatFileSize(file.size)}). Maximum ${formatFileSize(MAX_IMPORT_FILE_BYTES)}.`,
+      )
+      return
+    }
 
     try {
       const ext = file.name.split('.').pop()?.toLowerCase()
@@ -186,6 +205,7 @@ export function NewCampaignForm({
           setError(`Aucun contact valide trouvé dans le fichier. ${result.invalidPhones.length} numéro(s) invalide(s) détecté(s).`)
         }
         setFileContacts(result.parsedContacts)
+        setImportedFile(file)
       }
 
       if (isText) {
@@ -261,6 +281,7 @@ export function NewCampaignForm({
     e.preventDefault()
     setLoading(true)
     setError(null)
+    setCreatedCampaignId(null)
     setSkippedBlacklist([])
 
     try {
@@ -412,6 +433,32 @@ export function NewCampaignForm({
         if (messagesError) throw messagesError
       }
 
+      // Archivage du fichier d'origine. La campagne et ses messages existent
+      // déjà : un échec ici ne doit rien annuler, mais il ne doit pas non plus
+      // passer inaperçu — on affiche l'avertissement au lieu de rediriger.
+      if (contactInputMode === 'file' && importedFile) {
+        try {
+          await archiveCampaignImportFile(supabase, {
+            file: importedFile,
+            orgId: orgMember.org_id,
+            campaignId: campaign.id,
+            campaignName: name.trim() || null,
+            uploadedBy: userData.user.id,
+            // Ce qu'il y a dans le fichier, pas ce qui a été mis en file :
+            // les numéros écartés par la liste noire y figurent bien.
+            contactCount: fileContacts.length,
+            invalidCount: fileInvalidPhones.length,
+          })
+        } catch (archiveErr: any) {
+          setCreatedCampaignId(campaign.id)
+          setError(
+            `Campagne créée et messages mis en file d'attente, mais le fichier importé n'a pas pu être archivé : ${archiveErr.message}`,
+          )
+          setLoading(false)
+          return
+        }
+      }
+
       router.push(`/dashboard/campaigns/${campaign.id}`)
     } catch (err: any) {
       setError(err.message)
@@ -428,7 +475,18 @@ export function NewCampaignForm({
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-800 text-sm p-4 rounded-xl flex items-start gap-3">
             <span className="text-lg">⚠️</span>
-            <span>{error}</span>
+            <div className="space-y-2">
+              <p>{error}</p>
+              {createdCampaignId && (
+                <button
+                  type="button"
+                  onClick={() => router.push(`/dashboard/campaigns/${createdCampaignId}`)}
+                  className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700 transition"
+                >
+                  Ouvrir la campagne
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -564,6 +622,11 @@ export function NewCampaignForm({
                 <p>• Formats : CSV, TXT, XLS, XLSX</p>
                 <p>• Téléphone : <code className="bg-blue-100 px-1 rounded">Téléphone +225</code>, <code className="bg-blue-100 px-1 rounded">phone</code> ou <code className="bg-blue-100 px-1 rounded">numéro</code></p>
                 <p>• Personnalisation : <code className="bg-blue-100 px-1 rounded">Nom client</code>, <code className="bg-blue-100 px-1 rounded">nom</code> ou <code className="bg-blue-100 px-1 rounded">name</code></p>
+                <p>• Taille maximale : {formatFileSize(MAX_IMPORT_FILE_BYTES)}</p>
+                <p className="mt-1">
+                  • Le fichier est conservé et restera téléchargeable depuis{' '}
+                  <span className="font-semibold">Fichiers importés</span>.
+                </p>
               </div>
               {fileContacts.length > 0 && (
                 <div className="bg-green-50 border border-green-200 text-green-800 p-3 rounded-lg">
