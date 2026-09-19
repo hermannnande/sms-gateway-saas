@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -17,10 +18,20 @@ import 'package:smsgateway_flutter/services/pending_message_reports.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
+// Android launches the callback by its library and function name. Keep the
+// entry point at library level so it is resolvable in release/AOT builds.
+@pragma('vm:entry-point')
+void smsBackgroundTaskEntryPoint() {
+  FlutterForegroundTask.setTaskHandler(_SmsGatewayTaskHandler());
+}
+
 class BackgroundSyncService {
   static const int serviceId = 701;
   static bool _initialized = false;
   static Future<void>? _starting;
+  static int _probeSequence = 0;
+  @visibleForTesting
+  static Duration workerResponseTimeout = const Duration(seconds: 8);
   static const String _pausedKey = 'bg_sync_paused';
   static const String _enabledKey = 'bg_sync_enabled';
   static const String _fgLockKey = 'bg_sync_fg_lock';
@@ -77,7 +88,7 @@ class BackgroundSyncService {
 
   @pragma('vm:entry-point')
   static void startCallback() {
-    FlutterForegroundTask.setTaskHandler(_SmsGatewayTaskHandler());
+    smsBackgroundTaskEntryPoint();
   }
 
   static Future<bool> isRunning() => FlutterForegroundTask.isRunningService;
@@ -179,11 +190,8 @@ class BackgroundSyncService {
     } catch (_) {}
   }
 
-  /// Start the foreground service only if it is not already running.
-  static Future<void> ensureRunning() async {
-    if (await FlutterForegroundTask.isRunningService) return;
-    await start();
-  }
+  /// Android's service flag does not prove that its Dart sender is alive.
+  static Future<void> ensureRunning() => start();
 
   static Future<void> start() async {
     await (_starting ??= _start().whenComplete(() => _starting = null));
@@ -192,20 +200,66 @@ class BackgroundSyncService {
   static Future<void> _start() async {
     await init();
     if (!await isEnabled()) return;
-    if (await FlutterForegroundTask.isRunningService) return;
+    if (!await FlutterForegroundTask.isRunningService) {
+      final result = await FlutterForegroundTask.startService(
+        serviceId: serviceId,
+        serviceTypes: const [ForegroundServiceTypes.remoteMessaging],
+        notificationTitle: 'SMSenvoie',
+        notificationText: 'Démarrage du moteur d’envoi…',
+        notificationButtons: const [
+          NotificationButton(id: 'pause', text: 'Pause'),
+          NotificationButton(id: 'stop', text: 'Annuler campagne'),
+        ],
+        callback: smsBackgroundTaskEntryPoint,
+      );
+      if (result is ServiceRequestFailure) throw result.error;
+    }
 
-    final result = await FlutterForegroundTask.startService(
-      serviceId: serviceId,
-      serviceTypes: const [ForegroundServiceTypes.remoteMessaging],
-      notificationTitle: 'SMSenvoie',
-      notificationText: '\u2705 Actif (en attente)',
-      notificationButtons: const [
-        NotificationButton(id: 'pause', text: 'Pause'),
-        NotificationButton(id: 'stop', text: 'Annuler campagne'),
-      ],
-      callback: startCallback,
+    if (await _workerResponds()) return;
+    // A previous APK may have persisted an obsolete callback while Android
+    // still reports an active service. Updating the callback replaces that
+    // task. A responsive worker is never replaced, including during an SMS.
+    if (!await isEnabled()) return;
+    final repair = await FlutterForegroundTask.updateService(
+      callback: smsBackgroundTaskEntryPoint,
     );
-    if (result is ServiceRequestFailure) throw result.error;
+    if (repair is ServiceRequestFailure) throw repair.error;
+    if (!await _workerResponds()) {
+      throw StateError(
+        'Le service Android est actif mais le moteur d’envoi ne répond pas. '
+        'Fermez puis rouvrez l’application et réessayez.',
+      );
+    }
+  }
+
+  static Future<bool> _workerResponds() async {
+    final probeId = '${DateTime.now().microsecondsSinceEpoch}-${++_probeSequence}';
+    final response = Completer<bool>();
+    void onData(Object data) {
+      if (data is Map && data['type'] == 'sender_pong' &&
+          data['probe_id'] == probeId && !response.isCompleted) {
+        response.complete(true);
+      }
+    }
+
+    void sendProbe() {
+      FlutterForegroundTask.sendDataToTask({
+        'type': 'sender_ping', 'probe_id': probeId,
+      });
+    }
+
+    FlutterForegroundTask.addTaskDataCallback(onData);
+    Timer? timer;
+    try {
+      sendProbe();
+      // The native service can be ready before the Dart callback is registered.
+      timer = Timer.periodic(const Duration(milliseconds: 500), (_) => sendProbe());
+      return await response.future.timeout(workerResponseTimeout,
+          onTimeout: () => false);
+    } finally {
+      timer?.cancel();
+      FlutterForegroundTask.removeTaskDataCallback(onData);
+    }
   }
 
   static Future<void> stop() async {
@@ -468,6 +522,14 @@ class _SmsGatewayTaskHandler extends TaskHandler {
 
   @override
   void onReceiveData(Object data) {
+    if (!_destroyed && data is Map && data['type'] == 'sender_ping') {
+      // Respond independently of _busy, network requests and SMS pacing. A
+      // busy but healthy sender must never be mistaken for a dead engine.
+      FlutterForegroundTask.sendDataToMain({
+        'type': 'sender_pong', 'probe_id': data['probe_id'],
+      });
+      return;
+    }
     if (data == 'kick') {
       unawaited(_tick());
     }

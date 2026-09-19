@@ -2978,7 +2978,7 @@ class _HomePageState extends ConsumerState<HomePage>
     
     if (deviceToken != null && deviceToken.isNotEmpty) {
       try {
-        final payload = await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
+        await ref.read(deviceServiceProvider).sendHeartbeatVerbose(
               deviceToken: deviceToken,
               // Sans ça, devices.app_version reste NULL côté serveur et on ne
               // peut pas savoir quelle version tourne sur les téléphones.
@@ -2986,10 +2986,8 @@ class _HomePageState extends ConsumerState<HomePage>
             );
         await ref.read(appProvider.notifier).refreshDeviceStatus(silent: true);
         await ref.read(appProvider.notifier).ensureAutoSyncRunning();
-        // Message discret (évite de spammer l'utilisateur)
-        ref.read(appProvider.notifier).setLastStatus(
-              'Appareil en ligne${payload['device_name'] != null ? ' • ${payload['device_name']}' : ''}',
-            );
+        // A successful heartbeat does not prove the sender is working. Keep
+        // its startup/synchronization error visible until sending recovers.
       } catch (e) {
         ref.read(appProvider.notifier).setLastStatus('Heartbeat ÉCHEC: $e');
         final now = DateTime.now();
@@ -5203,6 +5201,10 @@ class _DashboardSectionState extends State<_DashboardSection> {
       children: [
         if (hasCampaign) _CampaignProgressCard(appState: appState, notifier: notifier),
         if (hasCampaign) const SizedBox(height: 16),
+        if (appState.lastStatus != null) ...[
+          _StatusCard(message: appState.lastStatus!),
+          const SizedBox(height: 16),
+        ],
 
         // Stats overview row
         Row(

@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.29+76",
+  "latestVersion": "1.3.30+77",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Reprise corrigée de l’appairage du service d’envoi après restauration du compte.\n• Le bouton Forcer l’envoi restaure les informations du téléphone et signale les échecs de démarrage.\n• Les erreurs de synchronisation et les permissions manquantes sont désormais visibles dans l’application.\n• Téléchargement des fichiers importés et améliorations de l’arrière-plan conservés."
+  "notes": "• Correction du moteur d’envoi Android qui pouvait rester inactif avec un compteur à zéro.\n• Vérification du démarrage réel et réparation d’un ancien service bloqué après mise à jour.\n• Correction d’un crash au redémarrage du téléphone.\n• Les erreurs d’envoi sont visibles directement sur le tableau de bord."
 }

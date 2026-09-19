@@ -61,16 +61,9 @@
             </intent-filter>
         </activity>
 
-        <!-- Redémarre le service d'envoi SMS au démarrage du téléphone -->
-        <receiver
-            android:name="com.pravera.flutter_foreground_task.service.BootReceiver"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
+        <!-- The plugin contributes RebootReceiver for boot/package replacement.
+             Do not declare the removed BootReceiver class: Android crashes
+             the app process when it tries to instantiate that receiver. -->
 
         <!-- Intercepte les SMS entrants et les envoie au serveur (boîte de réception web) -->
         <receiver

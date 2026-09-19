@@ -1,5 +1,10 @@
 # Correctif APK 1.3.29+76 — campagne à zéro
 
+**Suivi :** cette version n'a pas résolu le blocage observé. La cause runtime
+reproduite et le correctif 1.3.30 sont documentés dans
+SAUVEGARDE_20260919_MOTEUR_ANDROID.md. Les corrections d'appairage restent utiles,
+mais ne doivent pas être présentées comme la cause confirmée de cet incident.
+
 ## Diagnostic observé
 
 Le 19 septembre 2026 vers 19:50–19:55 UTC, la campagne « zcs » était running,
