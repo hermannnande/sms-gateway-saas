@@ -13,8 +13,14 @@ class TokenStorage {
 
   Future<String?> loadForUser(String userId) async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     final scoped = prefs.getString(scopedKey(userId))?.trim();
-    if (scoped != null && scoped.isNotEmpty) return scoped;
+    if (scoped != null && scoped.isNotEmpty) {
+      // Session restoration can keep the account-scoped pairing after the
+      // active background keys were cleared. Restore both consumers together.
+      await saveForUser(scoped, userId);
+      return scoped;
+    }
 
     // Migration one-shot: ancien token global appartenant à cet utilisateur.
     final owner = prefs.getString(ownerKey)?.trim();

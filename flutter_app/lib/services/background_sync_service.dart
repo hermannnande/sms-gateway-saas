@@ -558,6 +558,10 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         final smsOk = await Permission.sms.isGranted;
         final phoneOk = await Permission.phone.isGranted;
         if (!smsOk || !phoneOk) {
+          FlutterForegroundTask.sendDataToMain({
+            'type': 'sender_issue', 'device_token': token,
+            'message': 'Envoi bloqué : autorisez SMS et Téléphone dans les paramètres Android.',
+          });
           await FlutterForegroundTask.updateService(
             notificationTitle: 'SMSenvoie',
             notificationText: '\u26a0\ufe0f Permissions manquantes. Ouvre l\'app et autorise SMS/T\u00e9l\u00e9phone.',
@@ -979,6 +983,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       _networkFailures++;
       final delay = min(60, 2 * (1 << min(_networkFailures, 5)));
       _retryAfter = DateTime.now().add(Duration(seconds: delay));
+      try {
+        FlutterForegroundTask.sendDataToMain({
+          'type': 'sender_issue', 'device_token': await _loadDeviceToken(),
+          'message': 'Envoi bloqué : $e. Nouvelle tentative dans ${delay}s.',
+        });
+      } catch (_) {}
       await FlutterForegroundTask.updateService(
         notificationTitle: 'SMSenvoie',
         notificationText: 'Synchronisation indisponible • nouvelle tentative dans ${delay}s',

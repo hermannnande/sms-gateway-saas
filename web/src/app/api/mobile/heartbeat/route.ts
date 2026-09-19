@@ -56,7 +56,10 @@ export async function POST(req: Request) {
         apikey: anonKey,
         Authorization: `Bearer ${anonKey}`,
       },
-      body: JSON.stringify({ device_token }),
+      body: JSON.stringify({
+        device_token,
+        app_version: typeof body?.app_version === 'string' ? body.app_version.slice(0, 64) : null,
+      }),
     })
 
     const text = await upstream.text()

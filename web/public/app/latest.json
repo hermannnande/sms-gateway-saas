@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.28+75",
+  "latestVersion": "1.3.29+76",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Arrière-plan renforcé : service unique pour les envois, reprise automatique et compatibilité Android 15.\n• Connexion conservée hors ligne : les erreurs réseau ne suppriment plus la session ni l’appairage.\n• Les pauses et annulations sont respectées, y compris depuis le tableau de bord.\n• Les fichiers importés depuis le web et Android sont conservés et téléchargeables depuis Fichiers importés.\n• Export CSV des destinataires et résultats des anciennes campagnes."
+  "notes": "• Reprise corrigée de l’appairage du service d’envoi après restauration du compte.\n• Le bouton Forcer l’envoi restaure les informations du téléphone et signale les échecs de démarrage.\n• Les erreurs de synchronisation et les permissions manquantes sont désormais visibles dans l’application.\n• Téléchargement des fichiers importés et améliorations de l’arrière-plan conservés."
 }

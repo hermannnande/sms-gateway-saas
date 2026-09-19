@@ -267,8 +267,12 @@ class AppNotifier extends Notifier<AppState> {
   }
 
   void _onTaskData(Object data) {
-    if (data is! Map || data['type'] != 'campaign_progress' ||
-        data['device_token'] != state.deviceToken) return;
+    if (data is! Map || data['device_token'] != state.deviceToken) return;
+    if (data['type'] == 'sender_issue') {
+      setLastStatus(data['message']?.toString());
+      return;
+    }
+    if (data['type'] != 'campaign_progress') return;
     final row = data['campaign'];
     if (row is Map) applyCampaignProgress(row);
   }
@@ -492,7 +496,9 @@ class AppNotifier extends Notifier<AppState> {
     if (token == null || token.isEmpty) return;
     try {
       await BackgroundSyncService.ensureAutoSync();
-    } catch (_) {}
+    } catch (error) {
+      setLastStatus('Démarrage de l’envoi impossible : $error');
+    }
   }
 
   /// Reprend l'envoi sans clic utilisateur (service arrière-plan + filet de sécurité).
@@ -895,16 +901,8 @@ class AppNotifier extends Notifier<AppState> {
 
   /// Force immediate sync: clears all stuck states and triggers send.
   Future<void> forceSyncNow() async {
-    try {
-      await BackgroundSyncService.setPaused(false);
-      await BackgroundSyncService.setForegroundLock(false);
-      await BackgroundSyncService.setEnabled(true);
-    } catch (_) {}
-    try {
-      await BackgroundSyncService.init();
-      await BackgroundSyncService.ensureRunning();
-    } catch (_) {}
-    await syncOnce();
+    await BackgroundSyncService.setForegroundLock(false);
+    await syncOnce(rethrowOnError: true);
   }
 
   /// Reset failed messages to queued so they get retried.
@@ -1156,22 +1154,35 @@ class AppNotifier extends Notifier<AppState> {
     await _postLoginSetup();
   }
 
-  Future<void> syncOnce({bool silentIfEmpty = false}) async {
-    if (state.syncing || state.deviceToken == null) return;
+  Future<void> syncOnce({bool silentIfEmpty = false, bool rethrowOnError = false}) async {
+    if (state.syncing) return;
+    if (state.deviceToken == null) {
+      if (rethrowOnError) throw StateError('Jumelez le téléphone avant de lancer l’envoi.');
+      return;
+    }
     state = state.copyWith(syncing: true);
     try {
       if (!await ref.read(smsSenderProvider).ensurePermissions()) {
         state = state.copyWith(permissionsOk: false,
             lastStatus: 'Autorisez les permissions SMS et Téléphone.');
+        if (rethrowOnError) throw StateError('Autorisez les permissions SMS et Téléphone.');
         return;
+      }
+      final userId = ref.read(supabaseClientProvider).auth.currentUser?.id;
+      if (userId != null) {
+        await ref.read(tokenStorageProvider).saveForUser(state.deviceToken!, userId);
       }
       // There is exactly one sender, whether the screen is open or locked.
       await BackgroundSyncService.setEnabled(true);
       await BackgroundSyncService.setPaused(false);
       await BackgroundSyncService.ensureAutoSync();
+      if (!await BackgroundSyncService.isRunning()) {
+        throw StateError('Le service d’envoi n’a pas démarré. Vérifiez le jumelage et les autorisations Android.');
+      }
       if (!silentIfEmpty) setLastStatus('Envoi automatique actif en arrière-plan.');
     } catch (error) {
       setLastStatus('Démarrage impossible : $error');
+      if (rethrowOnError) rethrow;
     } finally {
       state = state.copyWith(syncing: false);
     }
