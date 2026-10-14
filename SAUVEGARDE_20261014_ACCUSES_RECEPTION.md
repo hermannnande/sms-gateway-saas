@@ -85,7 +85,14 @@ Blocage résolu : l’accès Supabase conservé par le CLI dans le gestionnaire
 d’identifiants Windows est valide. La migration a été appliquée directement
 avec cet accès, sans exposer le jeton, puis les colonnes et le RPC de statistiques
 ont été vérifiés en production. Le secret GitHub invalide n’a pas été modifié.
-Le commit applicatif `be11ab6` est prêt à être publié après cette vérification.
+Le commit applicatif `be11ab6` a été publié avec la sauvegarde `3c3222d`.
+Vercel confirme le succès de `3c3222d` ; les contrôles publics sur smsenvoie.com
+confirment la version 1.3.31+78, la redirection de téléchargement, le rejet HTTP
+400 d’un rapport sans données et le téléchargement de l’APK attendue.
+APK publique : 30 485 236 octets ; SHA-256
+`290e5a272005e9409311835bdf14c94b2d71a0f5bc672ab4f7d44344ed87540d`.
+Aucun SMS réel n’a été envoyé pendant ces vérifications. Le test opérateur
+nécessite l’installation de la nouvelle APK sur le téléphone émetteur.
 
 1. Appliquer uniquement `supabase/migrations/20261014000000_sms_delivery_receipts.sql`.
    Le manifeste `supabase/releases/delivery-receipts-20261014.json` et le workflow
