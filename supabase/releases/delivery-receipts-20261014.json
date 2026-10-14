@@ -1,0 +1,4 @@
+{
+  "projectRef": "gamumybcoxxanhjakpde",
+  "migrations": ["20261014000000_sms_delivery_receipts.sql"]
+}
