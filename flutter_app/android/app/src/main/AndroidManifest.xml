@@ -65,6 +65,8 @@
              Do not declare the removed BootReceiver class: Android crashes
              the app process when it tries to instantiate that receiver. -->
 
+        <receiver android:name="com.smsgateway.app.SmsDeliveryReceiver" android:exported="false" />
+
         <!-- Intercepte les SMS entrants et les envoie au serveur (boîte de réception web) -->
         <receiver
             android:name="com.smsgateway.app.IncomingSmsReceiver"

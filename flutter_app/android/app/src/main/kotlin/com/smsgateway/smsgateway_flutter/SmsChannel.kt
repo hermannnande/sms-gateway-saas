@@ -48,6 +48,13 @@ object SmsChannel {
                 "sendSms" -> handleSendSms(appContext, call, result)
                 "getSimCards" -> handleGetSimCards(appContext, result)
                 "getAndroidId" -> handleGetAndroidId(appContext, result)
+                "getDeliveryReports" -> result.success(DeliveryStore.get(appContext).pending(call.argument<String>("device_token") ?: ""))
+                "ackDeliveryReports" -> {
+                    val token = call.argument<String>("device_token") ?: ""
+                    DeliveryStore.get(appContext).acknowledge(token, call.argument<List<Map<*, *>>>("acknowledged") ?: emptyList(), false)
+                    DeliveryStore.get(appContext).acknowledge(token, call.argument<List<Map<*, *>>>("rejected") ?: emptyList(), true)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -130,6 +137,8 @@ object SmsChannel {
                 to = to,
                 body = body,
                 simSlotIndex = simSlotIndex,
+                messageId = call.argument<String>("messageId"),
+                deviceToken = call.argument<String>("deviceToken"),
                 result = result,
             )
         } catch (e: SecurityException) {
@@ -160,9 +169,13 @@ object SmsChannel {
         to: String,
         body: String,
         simSlotIndex: Int?,
+        messageId: String?,
+        deviceToken: String?,
         result: MethodChannel.Result,
     ) {
         val parts = resolved.manager.divideMessage(body).ifEmpty { arrayListOf(body) }
+        val delivery = if (!messageId.isNullOrBlank() && !deviceToken.isNullOrBlank())
+            DeliveryStore.get(context).create(context, messageId, deviceToken, parts.size) else null
         val action = "${context.packageName}.SMS_SENT.${System.currentTimeMillis()}.${sendSequence.incrementAndGet()}"
         val handler = Handler(Looper.getMainLooper())
         val completedParts = mutableSetOf<Int>()
@@ -190,6 +203,7 @@ object SmsChannel {
             // La copie systeme n'est creee qu'apres confirmation reseau. Un SMS
             // rejete ne sera donc plus affiche a tort comme envoye.
             saveToSentBox(context, to, body, resolved.subscriptionId)
+            delivery?.let { DeliveryStore.get(context).sent(it.first) }
             result.success(true)
         }
 
@@ -203,6 +217,7 @@ object SmsChannel {
             if (completed) return
             completed = true
             cleanup()
+            if (code != "SMS_TIMEOUT") delivery?.let { DeliveryStore.get(context).sendFailed(it.first) }
             Log.e(
                 TAG,
                 "SMS rejected (code=$code, android=$androidResultCode, network=$networkErrorCode, " +
@@ -279,11 +294,12 @@ object SmsChannel {
             }
 
             handler.postDelayed(timeout, SEND_TIMEOUT_MS)
-            resolved.manager.sendMultipartTextMessage(to, null, parts, sentIntents, null)
+            resolved.manager.sendMultipartTextMessage(to, null, parts, sentIntents, delivery?.second)
         } catch (e: Exception) {
             if (completed) return
             completed = true
             cleanup()
+            delivery?.let { DeliveryStore.get(context).sendFailed(it.first) }
             throw e
         }
     }

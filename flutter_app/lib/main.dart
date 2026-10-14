@@ -3690,12 +3690,33 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
   Map<String, dynamic>? _detailCampaign;
   Map<String, dynamic>? _detailStats;
   bool _loadingDetail = false;
+  Timer? _receiptRefreshTimer;
+  bool _refreshingReceipts = false;
+
+  Future<void> _refreshReceiptDetail() async {
+    final id = _detailCampaign?['id']?.toString();
+    final token = widget.appState.deviceToken;
+    if (_refreshingReceipts || _loadingDetail || id == null || token == null ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    _refreshingReceipts = true;
+    try {
+      final res = await ref.read(deviceServiceProvider).campaignDetail(deviceToken: token, campaignId: id);
+      if (!mounted || _detailCampaign?['id'] != id || widget.appState.deviceToken != token) return;
+      setState(() {
+        _detailCampaign = Map<String, dynamic>.from(res['campaign'] as Map);
+        _detailStats = Map<String, dynamic>.from((res['message_stats'] as Map?) ?? {});
+      });
+    } catch (_) {
+      // Keep the last confirmed numbers; manual refresh exposes network errors.
+    } finally { _refreshingReceipts = false; }
+  }
 
   @override
   void initState() {
     super.initState();
     _loadCampaigns();
     _scrollCtrl.addListener(_onScroll);
+    _receiptRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshReceiptDetail());
   }
 
   @override
@@ -3707,6 +3728,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
     }
     _contactsCtrl.dispose();
     _scrollCtrl.dispose();
+    _receiptRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -4164,7 +4186,7 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        Text('$sent / $total SMS', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                        Expanded(child: Text('$sent / $total envoyés • ${c['delivered_count'] ?? 0} livrés', style: TextStyle(fontSize: 12, color: Colors.grey.shade600))),
                         const Spacer(),
                         if ((c['priority'] ?? 0) > 0)
                           Container(
@@ -4544,6 +4566,8 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
     final sending = stats['sending'] ?? 0;
     final sentStat = sent;
     final failed = stats['failed'] ?? 0;
+    final delivered = stats['delivered'] ?? c['delivered_count'] ?? 0;
+    final receptionRate = sent > 0 ? '${(delivered / sent * 100).round()} %' : '—';
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -4634,6 +4658,22 @@ class _CampaignsSectionState extends ConsumerState<_CampaignsSection> {
             const SizedBox(width: 8),
             _statCard('Echoues', '$failed', Colors.red),
           ],
+        ),
+        const SizedBox(height: 16),
+
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.grey.shade200)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Accusés de réception', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 8),
+            Text('$delivered / $sent SMS livrés • $receptionRate reçus', style: const TextStyle(fontSize: 18, color: green, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('${stats['delivery_pending'] ?? 0} accusés en attente • ${stats['delivery_failed'] ?? 0} non livrés confirmés'),
+            Text('${stats['delivery_unknown'] ?? 0} SMS envoyés sans suivi'),
+            const SizedBox(height: 8),
+            const Text('Les accusés dépendent de l’opérateur et peuvent arriver plus tard. Sans accusé, la réception reste inconnue. Livré ne signifie pas lu.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ]),
         ),
         const SizedBox(height: 16),
 

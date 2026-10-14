@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { campaignStats, deliveryLabel, type CampaignStats } from '@/lib/campaign-stats'
 
 type Campaign = {
   id: string
@@ -18,14 +19,7 @@ type Campaign = {
   templates: { name: string; body: string } | null
 }
 
-type Stats = {
-  total: number
-  queued: number
-  sending: number
-  sent: number
-  failed: number
-  skipped_optout: number
-}
+type Stats = CampaignStats
 
 type MessageRow = {
   id: string
@@ -36,6 +30,8 @@ type MessageRow = {
   sim_subscription_id: string | null
   created_at: string
   sent_at: string | null
+  delivery_status: string | null
+  delivered_at: string | null
 }
 
 export function CampaignDetails({
@@ -50,55 +46,39 @@ export function CampaignDetails({
   const [campaign, setCampaign] = useState(initialCampaign)
   const [stats, setStats] = useState(initialStats)
   const [refreshing, setRefreshing] = useState(false)
+  const [statsError, setStatsError] = useState('')
   const [actionLoading, setActionLoading] = useState<Action | null>(null)
   const [messages, setMessages] = useState<MessageRow[]>([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [msgStatus, setMsgStatus] = useState<'all' | string>('all')
   const [msgQuery, setMsgQuery] = useState('')
+  const [deliveryFilter, setDeliveryFilter] = useState('all')
 
   async function refreshStats() {
     setRefreshing(true)
     const supabase = createClient()
 
-    const { data: messages } = await supabase
-      .from('messages')
-      .select('status')
-      .eq('campaign_id', campaign.id)
+    try {
+      const [newStats] = await campaignStats(supabase, [campaign.id])
+      if (!newStats) throw new Error('Campagne inaccessible')
+      setStats(newStats)
+      setStatsError('')
 
-    const newStats = {
-      total: messages?.length || 0,
-      queued: messages?.filter((m) => m.status === 'queued').length || 0,
-      sending: messages?.filter((m) => m.status === 'sending').length || 0,
-      sent: messages?.filter((m) => m.status === 'sent').length || 0,
-      failed: messages?.filter((m) => m.status === 'failed').length || 0,
-      skipped_optout: messages?.filter((m) => m.status === 'skipped_optout').length || 0,
-    }
+      // Refresh campaign status without losing the joined template/device.
+      const { data: updatedCampaign } = await supabase
+        .from('campaigns')
+        .select('*')
+        .eq('id', campaign.id)
+        .single()
 
-    setStats(newStats)
+      if (updatedCampaign) {
+        setCampaign(previous => ({ ...previous, ...updatedCampaign }))
+      }
 
-    // Refresh campaign status
-    const { data: updatedCampaign } = await supabase
-      .from('campaigns')
-      .select('*')
-      .eq('id', campaign.id)
-      .single()
-
-    if (updatedCampaign) {
-      setCampaign(updatedCampaign as any)
-    }
-
-    setRefreshing(false)
+    } catch (error) {
+      setStatsError(error instanceof Error ? error.message : 'Statistiques indisponibles')
+    } finally { setRefreshing(false) }
   }
-
-  // Auto-refresh toutes les 3 secondes si la campagne est en cours
-  useEffect(() => {
-    if (campaign.status === 'running') {
-      const interval = setInterval(() => {
-        refreshStats()
-      }, 3000) // Refresh toutes les 3 secondes
-      return () => clearInterval(interval)
-    }
-  }, [campaign.status])
 
   async function fetchMessages() {
     setMessagesLoading(true)
@@ -106,7 +86,7 @@ export function CampaignDetails({
       const supabase = createClient()
       let q = supabase
         .from('messages')
-        .select('id,to_phone_e164,status,try_count,last_error,sim_subscription_id,created_at,sent_at')
+        .select('id,to_phone_e164,status,try_count,last_error,sim_subscription_id,created_at,sent_at,delivery_status,delivered_at')
         .eq('campaign_id', campaign.id)
         .order('created_at', { ascending: false })
         .limit(50)
@@ -114,35 +94,37 @@ export function CampaignDetails({
       if (msgStatus !== 'all') {
         q = q.eq('status', msgStatus)
       }
+      if (deliveryFilter !== 'all') {
+        q = q.eq('status', 'sent')
+        q = deliveryFilter === 'unknown' ? q.is('delivery_status', null) : q.eq('delivery_status', deliveryFilter)
+      }
       const mq = msgQuery.trim()
       if (mq) {
         q = q.ilike('to_phone_e164', `%${mq}%`)
       }
 
-      const { data } = await q
+      const { data, error } = await q
+      if (error) throw error
       setMessages((data ?? []) as any)
+    } catch {
+      setStatsError('Impossible de rafraîchir les messages. Les dernières données sont conservées.')
     } finally {
       setMessagesLoading(false)
     }
   }
 
-  // Auto-refresh every 5 seconds if campaign is running
+  // Delivery receipts can arrive long after a campaign has finished.
   useEffect(() => {
-    if (campaign.status === 'running' || campaign.status === 'queued') {
-      const interval = setInterval(refreshStats, 5000)
-      return () => clearInterval(interval)
-    }
-  }, [campaign.status])
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') { void refreshStats(); void fetchMessages() }
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [campaign.id, msgStatus, msgQuery, deliveryFilter])
 
   useEffect(() => {
     fetchMessages()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign.id])
-
-  useEffect(() => {
-    fetchMessages()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgStatus, msgQuery])
+  }, [campaign.id, msgStatus, msgQuery, deliveryFilter])
 
   const progressFromCounts =
     campaign.total_count && campaign.total_count > 0
@@ -180,6 +162,7 @@ export function CampaignDetails({
 
   return (
     <div>
+      {statsError && <p role="alert" className="mb-4 text-amber-700">{statsError}</p>}
       {quotaInfo.remaining === 0 && (stats.queued > 0 || stats.sending > 0) && (
         <div className="mb-6 glass-card rounded-2xl p-4 border-2 border-red-500/20 bg-red-500/5">
           <div className="flex items-start justify-between gap-4">
@@ -299,6 +282,17 @@ export function CampaignDetails({
         </div>
       </div>
 
+      <section className="mb-8 rounded-xl border border-border bg-card p-5" aria-label="Accusés de réception">
+        <h2 className="font-semibold text-lg mb-4">Accusés de réception</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div><p className="text-sm text-muted-foreground">Livrés aux téléphones</p><p className="text-2xl font-bold text-green-600">{stats.delivered} / {stats.sent}</p></div>
+          <div><p className="text-sm text-muted-foreground">Taux de réception</p><p className="text-2xl font-bold">{stats.sent ? `${Math.round(stats.delivered / stats.sent * 100)} %` : '—'}</p></div>
+          <div><p className="text-sm text-muted-foreground">Accusés en attente</p><p className="text-2xl font-bold">{stats.delivery_pending}</p></div>
+          <div><p className="text-sm text-muted-foreground">Non livrés confirmés</p><p className="text-2xl font-bold">{stats.delivery_failed}</p></div>
+        </div>
+        <p className="text-sm text-muted-foreground mt-4">{stats.delivery_unknown} SMS envoyés sans suivi. Les accusés sont demandés automatiquement avec la nouvelle application Android. Ils dépendent de l’opérateur et peuvent arriver plus tard. Sans accusé, la réception reste inconnue. « Livré » ne signifie pas « lu ».</p>
+      </section>
+
       {/* Actions */}
       <div className="flex gap-4 mb-8">
         {campaign.status === 'running' && (
@@ -349,7 +343,7 @@ export function CampaignDetails({
       <div className="mb-8">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
           <h3 className="font-semibold">Messages (50 derniers)</h3>
-          <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-center">
             <input
               value={msgQuery}
               onChange={(e) => setMsgQuery(e.target.value)}
@@ -368,6 +362,13 @@ export function CampaignDetails({
               <option value="failed">failed</option>
               <option value="skipped_optout">skipped_optout</option>
             </select>
+            <select aria-label="Filtrer les accusés de réception" value={deliveryFilter} onChange={e => setDeliveryFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-border bg-background">
+              <option value="all">Tous les accusés</option>
+              <option value="delivered">Livrés</option>
+              <option value="pending">Accusés en attente</option>
+              <option value="failed">Non livrés confirmés</option>
+              <option value="unknown">Sans suivi</option>
+            </select>
             <button
               onClick={fetchMessages}
               className="px-4 py-2.5 rounded-xl border-2 border-black/10 dark:border-white/10 hover:bg-accent"
@@ -385,6 +386,7 @@ export function CampaignDetails({
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold">Destinataire</th>
                   <th className="text-left px-4 py-3 font-semibold">Statut</th>
+                  <th className="text-left px-4 py-3 font-semibold">Réception</th>
                   <th className="text-left px-4 py-3 font-semibold">Tentatives</th>
                   <th className="text-left px-4 py-3 font-semibold">SIM</th>
                   <th className="text-left px-4 py-3 font-semibold">Erreur</th>
@@ -394,7 +396,7 @@ export function CampaignDetails({
               <tbody>
                 {messages.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-6 text-muted-foreground" colSpan={6}>
+                    <td className="px-4 py-6 text-muted-foreground" colSpan={7}>
                       {messagesLoading ? 'Chargement…' : 'Aucun message (ou filtres trop stricts).'}
                     </td>
                   </tr>
@@ -403,6 +405,10 @@ export function CampaignDetails({
                     <tr key={m.id} className="border-t border-black/5 dark:border-white/5">
                       <td className="px-4 py-3 font-semibold">{m.to_phone_e164}</td>
                       <td className="px-4 py-3">{m.status}</td>
+                      <td className="px-4 py-3">
+                        {deliveryLabel(m.delivery_status, m.status)}
+                        {m.delivered_at && <span className="block text-xs text-muted-foreground">Confirmé le {new Date(m.delivered_at).toLocaleString('fr-FR')}</span>}
+                      </td>
                       <td className="px-4 py-3">{m.try_count ?? 0}</td>
                       <td className="px-4 py-3">{m.sim_subscription_id ?? '—'}</td>
                       <td className="px-4 py-3 text-muted-foreground">{m.last_error ?? '—'}</td>

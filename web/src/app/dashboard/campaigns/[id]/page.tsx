@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { CampaignDetails } from './campaign-details'
 import { CampaignImportFileCard } from './campaign-import-file'
+import { campaignStats } from '@/lib/campaign-stats'
 
 export default async function CampaignPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -49,10 +50,8 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
   const smsRemaining = smsQuotaMonth === null ? null : Math.max(smsQuotaMonth - smsUsedThisMonth, 0)
 
   // Get messages stats
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('status')
-    .eq('campaign_id', id)
+  const [stats] = await campaignStats(supabase, [id])
+  if (!stats) redirect('/dashboard/campaigns')
 
   // Fichier de contacts archivé lors de la création. L'erreur éventuelle est
   // ignorée : tant que la migration campaign_import_files n'est pas appliquée,
@@ -65,15 +64,6 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
     .eq('campaign_id', id)
     .order('created_at', { ascending: false })
     .limit(100)
-
-  const stats = {
-    total: messages?.length || 0,
-    queued: messages?.filter((m) => m.status === 'queued').length || 0,
-    sending: messages?.filter((m) => m.status === 'sending').length || 0,
-    sent: messages?.filter((m) => m.status === 'sent').length || 0,
-    failed: messages?.filter((m) => m.status === 'failed').length || 0,
-    skipped_optout: messages?.filter((m) => m.status === 'skipped_optout').length || 0,
-  }
 
   return (
     <div className="min-h-screen bg-background">

@@ -15,6 +15,7 @@ import 'package:smsgateway_flutter/services/app_settings.dart';
 import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/pending_message_reports.dart';
+import 'package:smsgateway_flutter/services/delivery_reports.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
@@ -277,6 +278,25 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   bool _updateAvailable = false;
   Timer? _watchdog;
   Timer? _heartbeatTimer;
+  Timer? _deliveryTimer;
+  final _deliveryReports = DeliveryReports();
+
+  Future<void> _syncDeliveryReports() async {
+    if (_destroyed) return;
+    final token = await _loadDeviceToken();
+    if (token == null) return;
+    try {
+      await _deliveryReports.flush(deviceToken: token, post: (body) async {
+        final response = await _http.post(_proxyUri('/api/mobile/delivery-reports'),
+          headers: const {'Content-Type': 'application/json'}, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 8));
+        if (response.statusCode != 200) throw StateError('Accusés non synchronisés');
+        return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+      });
+    } catch (_) {
+      // Keep receipts in native SQLite and retry independently of sending.
+    }
+  }
   bool _heartbeatBusy = false;
   bool _destroyed = false;
   int _networkFailures = 0;
@@ -505,6 +525,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       notificationButtons: _activeButtons(),
     );
     _heartbeatTimer = Timer.periodic(const Duration(minutes: 1), (_) => unawaited(_heartbeat()));
+    _deliveryTimer = Timer.periodic(const Duration(seconds: 10), (_) => unawaited(_syncDeliveryReports()));
+    unawaited(_syncDeliveryReports());
     unawaited(_heartbeat());
     _watchdog?.cancel();
     _watchdog = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -812,6 +834,8 @@ class _SmsGatewayTaskHandler extends TaskHandler {
             campaignSlotFallback: slotFallbackFor(msg),
           );
           final nativeResult = await _channel.invokeMethod('sendSms', {
+            'messageId': msg.id,
+            'deviceToken': token,
             'to': msg.to,
             'body': AutoVary.apply(msg.content, enabled: autoVaryEnabled, rng: _rng),
             'subscriptionId': routing.subscriptionId,
@@ -1070,6 +1094,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     _destroyed = true;
     _heartbeatTimer?.cancel();
+    _deliveryTimer?.cancel();
     _watchdog?.cancel();
     _http.close();
   }

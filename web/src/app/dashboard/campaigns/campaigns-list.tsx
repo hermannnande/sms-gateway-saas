@@ -12,6 +12,7 @@ type Campaign = {
   created_at: string
   total_count?: number
   sent_count?: number
+  delivered_count?: number
   sim_slot_index?: number | null
   device_id?: string | null
   devices?: { name: string } | null
@@ -214,6 +215,8 @@ export function CampaignsList({
                         <span>📊</span>
                         <span>
                           {campaign.sent_count ?? 0}/{campaign.total_count ?? '?'} envoyés
+                          {' • '}{campaign.delivered_count ?? 0} livrés
+                          {' • '}{campaign.sent_count ? `${Math.round((campaign.delivered_count ?? 0) / campaign.sent_count * 100)} % reçus` : 'réception —'}
                         </span>
                       </span>
                     )}

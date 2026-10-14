@@ -144,9 +144,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
       }
 
+      const { data: deliveryStats, error: deliveryError } = await service.rpc('campaign_message_stats', {
+        p_campaign_ids: (campaigns ?? []).map(c => c.id),
+      })
+      if (deliveryError) return NextResponse.json({ ok: false, error: 'Statistiques de réception indisponibles' }, { status: 503 })
+      const statsById = new Map((deliveryStats ?? []).map((s: { campaign_id: string; delivered: number }) => [s.campaign_id, s.delivered]))
       return NextResponse.json({
         ok: true,
-        campaigns: campaigns || [],
+        campaigns: (campaigns ?? []).map(c => ({ ...c, delivered_count: statsById.get(c.id) ?? 0 })),
         total: count || 0,
         page,
         limit,
@@ -171,19 +176,13 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: 'Campagne introuvable' }, { status: 404 })
       }
 
-      const { data: stats } = await service
-        .from('messages')
-        .select('status')
-        .eq('campaign_id', campaignId)
-
-      const statusCounts: Record<string, number> = {}
-      for (const m of stats || []) {
-        statusCounts[m.status] = (statusCounts[m.status] || 0) + 1
-      }
+      const { data: stats, error: statsError } = await service.rpc('campaign_message_stats', { p_campaign_ids: [campaignId] })
+      if (statsError || !stats?.[0]) return NextResponse.json({ ok: false, error: 'Statistiques de réception indisponibles' }, { status: 503 })
+      const statusCounts = stats[0]
 
       return NextResponse.json({
         ok: true,
-        campaign,
+        campaign: { ...campaign, total_count: statusCounts.total, sent_count: statusCounts.sent, delivered_count: statusCounts.delivered },
         message_stats: statusCounts,
       })
     }

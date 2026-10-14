@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { CampaignsList } from './campaigns-list'
 import { PageHeader } from '@/components/ui/page-header'
 import { StatCard } from '@/components/ui/stat-card'
+import { campaignStats } from '@/lib/campaign-stats'
 
 export default async function CampaignsPage({
   searchParams,
@@ -46,7 +47,7 @@ export default async function CampaignsPage({
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  let smsQuotaMonth: number | null = activeSub?.plans?.sms_quota_month ?? 100
+  let smsQuotaMonth: number | null = (activeSub?.plans as unknown as { sms_quota_month?: number } | null)?.sms_quota_month ?? 100
   if (smsQuotaMonth === 0) smsQuotaMonth = null
   const { count: usedCount } = await supabase
     .from('messages')
@@ -93,6 +94,15 @@ export default async function CampaignsPage({
   }
 
   const { data: campaigns } = await campaignsQuery
+  const deliveryStats = await campaignStats(supabase, (campaigns ?? []).map(c => c.id))
+  const statsById = new Map(deliveryStats.map(s => [s.campaign_id, s]))
+  const campaignsWithDelivery = (campaigns ?? []).map(c => ({ ...c,
+    devices: (c.devices as unknown as { name: string } | null),
+    templates: (c.templates as unknown as { name: string } | null),
+    sent_count: statsById.get(c.id)?.sent ?? c.sent_count,
+    total_count: statsById.get(c.id)?.total ?? c.total_count,
+    delivered_count: statsById.get(c.id)?.delivered ?? 0,
+  }))
 
   // Calculer les statistiques globales
   const stats = {
@@ -112,22 +122,16 @@ export default async function CampaignsPage({
       .eq('org_id', orgMember.org_id)
     stats.totalCampaigns = count || 0
 
-    // Récupérer les messages de toutes les campagnes
-    const { data: allMessages } = await supabase
-      .from('messages')
-      .select('status')
-      .eq('org_id', orgMember.org_id)
-
-    if (allMessages) {
-      stats.totalMessages = allMessages.length
-      stats.totalSent = allMessages.filter((m) => m.status === 'sent').length
-      stats.totalDelivered = allMessages.filter((m) => m.status === 'delivered').length
-      stats.totalFailed = allMessages.filter((m) => m.status === 'failed').length
-      stats.successRate =
-        stats.totalMessages > 0
-          ? Math.round((stats.totalDelivered / stats.totalMessages) * 100)
-          : 0
-    }
+    const [sent, delivered, failed] = await Promise.all([
+      supabase.from('messages').select('id', { count: 'exact', head: true }).eq('org_id', orgMember.org_id).eq('status', 'sent'),
+      supabase.from('messages').select('id', { count: 'exact', head: true }).eq('org_id', orgMember.org_id).eq('status', 'sent').eq('delivery_status', 'delivered'),
+      supabase.from('messages').select('id', { count: 'exact', head: true }).eq('org_id', orgMember.org_id).eq('status', 'failed'),
+    ])
+    if (sent.error || delivered.error || failed.error) throw new Error('Statistiques indisponibles')
+    stats.totalSent = sent.count ?? 0
+    stats.totalDelivered = delivered.count ?? 0
+    stats.totalFailed = failed.count ?? 0
+    stats.successRate = stats.totalSent ? Math.round(stats.totalDelivered / stats.totalSent * 100) : 0
   }
 
   const totalPages = Math.ceil((totalCount || 0) / itemsPerPage)
@@ -183,11 +187,11 @@ export default async function CampaignsPage({
         />
         <StatCard
           title="Messages envoyés"
-          value={stats.totalMessages}
+          value={stats.totalSent}
           icon={<>📨</>}
         />
         <StatCard
-          title="Taux de succès"
+          title="Taux de réception"
           value={`${stats.successRate}%`}
           icon={<>✅</>}
         />
@@ -196,7 +200,7 @@ export default async function CampaignsPage({
 
       {/* Campaigns list */}
       <CampaignsList
-        campaigns={campaigns || []}
+        campaigns={campaignsWithDelivery}
         currentPage={currentPage}
         totalPages={totalPages}
         totalItems={totalCount || 0}
