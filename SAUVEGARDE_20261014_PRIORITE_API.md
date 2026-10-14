@@ -55,6 +55,11 @@
 
 La migration a été appliquée en production le 14 octobre avec l’accès Supabase
 local, avant la publication coordonnée du web et de l’APK.
+Le commit applicatif `1cef24b` a été publié sur main ; Vercel confirme son succès.
+Contrôles publics réussis : manifeste 1.3.32+79, redirection versionnée,
+empreinte exacte de l’APK téléchargée, API de priorité refusant un appareil
+inconnu (401), accusés toujours disponibles. Les RPC de priorité sont accessibles
+au service et refusent correctement un message/appareil inexistant.
 
 Appliquer uniquement le manifeste `supabase/releases/api-priority-20261014.json`
 avec `node scripts/deploy-reliability.mjs api-priority-20261014.json`, puis publier
