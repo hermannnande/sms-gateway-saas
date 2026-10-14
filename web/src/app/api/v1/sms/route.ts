@@ -33,7 +33,8 @@ const RATE_MAX_SMS_PER_HOUR = 1000
  *   name      string             (optionnel) nom de la campagne (defaut: "API - <date>")
  *   device_id string             (optionnel) forcer un appareil precis
  *   sim_slot  number             (optionnel) slot SIM (0, 1, ...)
- *   priority  number             (optionnel) 0=normale, 1=haute, 2=urgente
+ *   priority  number             (optionnel) priorité entre envois API : 0=normale, 1=haute, 2=urgente
+ * Tous les envois API passent avant les campagnes manuelles du même appareil.
  *
  * Reponse: { ok, campaign_id, total, skipped_optout, invalid }
  * Limites: 429 rate_limited (> 10 req/min) | 429 api_hourly_limit (> 1000 SMS/h)

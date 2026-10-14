@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.3.31+78",
+  "latestVersion": "1.3.32+79",
   "apkUrl": "https://smsenvoie.com/app/sms-gateway.apk",
-  "notes": "• Accusés de réception demandés automatiquement pour les nouveaux SMS.\n• Nombre de SMS livrés et taux de réception par campagne, sur le web et dans l’application.\n• Suivi des accusés en attente et des non-livraisons confirmées.\n• Conservation des accusés hors ligne et synchronisation à la reprise du réseau.\n• Les accusés dépendent de l’opérateur et confirment la livraison, pas la lecture."
+  "notes": "• Les SMS API passent automatiquement avant les campagnes sur le téléphone concerné.\n• Une campagne en cours attend la fin des envois API, puis reprend automatiquement.\n• Les pauses manuelles et les délais d’envoi restent respectés.\n• Les accusés de réception et le suivi des SMS livrés restent disponibles."
 }

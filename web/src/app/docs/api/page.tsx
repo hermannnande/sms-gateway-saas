@@ -205,6 +205,13 @@ export default function ApiDocsPage() {
               les numeros locaux ivoiriens a 8-10 chiffres sont prefixes de <code className="font-mono text-xs bg-muted px-1 rounded">+225</code>.
               Les numeros de votre liste noire (STOP) sont exclus automatiquement.
             </p>
+            <p className="text-muted-foreground text-sm leading-relaxed mt-3">
+              Les SMS API sont prioritaires sur les campagnes du téléphone concerné.
+              Avec l’application Android 1.3.32 ou ultérieure, la campagne laisse passer
+              les envois API entre deux SMS, puis reprend automatiquement. Le SMS déjà
+              en cours se termine et les délais d’envoi configurés restent respectés.
+              Une campagne mise en pause manuellement reste en pause.
+            </p>
 
             <h3 className="text-base font-semibold text-foreground mt-6">Parametres du body (JSON)</h3>
             <ParamTable
@@ -215,7 +222,7 @@ export default function ApiDocsPage() {
                 ['name', 'string', 'non', 'Nom de la campagne creee (defaut: "API - date")'],
                 ['device_id', 'string', 'non', "Forcer l'envoi via un appareil precis (voir GET /devices)"],
                 ['sim_slot', 'number', 'non', 'Slot SIM a utiliser (0 ou 1) sur un appareil double SIM'],
-                ['priority', 'number', 'non', 'Priorite : 0 = normale (defaut), 1 = haute, 2 = urgente'],
+                ['priority', 'number', 'non', 'Priorité entre envois API : 0 = normale (défaut), 1 = haute, 2 = urgente. Tous passent avant les campagnes.'],
               ]}
             />
 

@@ -16,6 +16,7 @@ import 'package:smsgateway_flutter/services/token_storage.dart';
 import 'package:smsgateway_flutter/services/sms_sender.dart';
 import 'package:smsgateway_flutter/services/pending_message_reports.dart';
 import 'package:smsgateway_flutter/services/delivery_reports.dart';
+import 'package:smsgateway_flutter/services/dispatch_permission.dart';
 import 'package:smsgateway_flutter/utils/sim_resolver.dart';
 import 'package:smsgateway_flutter/utils/auto_vary.dart';
 
@@ -739,6 +740,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
       var attempted = 0;
       var failed = 0;
       var sentInBatch = 0;
+      var reclaimRequired = false;
       String? lastErr;
       // Source de vérité : /dashboard/profile. Ce premier chargement est
       // complété par un rafraîchissement toutes les 2 secondes pendant les
@@ -799,6 +801,26 @@ class _SmsGatewayTaskHandler extends TaskHandler {
           pacing = await _refreshPacingFromDashboard(token);
         }
         if (!await _canSendMessage(token)) break;
+
+        // A newly queued API SMS preempts even a batch already held locally.
+        // This check stays OUTSIDE the native send/error reporting block: a
+        // deferral or network failure has not attempted an SMS.
+        final dispatchAllowed = await DispatchPermission.check(
+          deviceToken: token,
+          messageId: msg.id,
+          post: (body) => _postJson(_proxyUri('/api/mobile/dispatch-check'), body),
+          onDeferred: (reason) async {
+            reclaimRequired = true;
+            if (reason == 'api_priority') {
+              await FlutterForegroundTask.updateService(
+                notificationTitle: 'SMSenvoie',
+                notificationText: '⏸️ $campaignLabel • SMS API prioritaire • reprise automatique',
+                notificationButtons: _activeButtons(),
+              );
+            }
+          },
+        );
+        if (!dispatchAllowed || !await _canSendMessage(token)) break;
 
         // Compromis turbo : la notification AVANT l'envoi est supprimée.
         // Chaque updateService est un aller-retour natif attendu qui grignote
@@ -980,6 +1002,12 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         }
       }
 
+      // No SMS is in flight here, and every attempted SMS has been reported.
+      // The claim endpoint safely requeues unstarted rows for this device,
+      // then the database selects the API queue first. Never change the
+      // campaign's persisted status: a manual pause must not be auto-resumed.
+      if (reclaimRequired) continue;
+
       // Check if we broke out because user pressed Pause
       final pausedAfterLoop = await _isPaused();
       final rejectionReport = networkRejectionCount > 0
@@ -1044,7 +1072,7 @@ class _SmsGatewayTaskHandler extends TaskHandler {
         if (failed > 0) break;
 
         // Lot complet → enchaîner immédiatement le lot suivant (sans attendre 3 s).
-        if (messages.length >= AppConfig.claimBatchSize) {
+        if (messages.isNotEmpty) {
           continue;
         }
         break;
