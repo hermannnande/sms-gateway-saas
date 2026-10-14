@@ -81,7 +81,11 @@ Déploiement demandé par l’utilisateur le 14 octobre. Le commit de préparati
 `559dc7c` est publié ; le workflow 38617930642 a été refusé par Supabase avec
 HTTP 401 « Invalid access token ». Aucune migration n’a été appliquée par cette
 exécution. Le site existant est toujours déployé avec succès sur Vercel.
-La publication du nouveau web et de l’APK attend un accès Supabase valide.
+Blocage résolu : l’accès Supabase conservé par le CLI dans le gestionnaire
+d’identifiants Windows est valide. La migration a été appliquée directement
+avec cet accès, sans exposer le jeton, puis les colonnes et le RPC de statistiques
+ont été vérifiés en production. Le secret GitHub invalide n’a pas été modifié.
+Le commit applicatif `be11ab6` est prêt à être publié après cette vérification.
 
 1. Appliquer uniquement `supabase/migrations/20261014000000_sms_delivery_receipts.sql`.
    Le manifeste `supabase/releases/delivery-receipts-20261014.json` et le workflow
